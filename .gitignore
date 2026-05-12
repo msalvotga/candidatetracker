@@ -1,0 +1,22 @@
+node_modules
+dist
+.DS_Store
+*.local
+
+# Environment and secrets (use .env.example on each machine)
+.env
+.env.*
+!.env.example
+
+# SQLite (manual elections + future snapshots)
+server/data/*.db
+server/data/*.db-wal
+server/data/*.db-shm
+server/data/*.db-journal
+
+# Logs and local scratch
+debug.log
+tmp/
+
+# TypeScript incremental
+*.tsbuildinfo

@@ -1,0 +1,1462 @@
+{
+    "Version":  "zz??|???",
+    "Districted":  {
+                       "OffType":  "DISTRICT OFFICES",
+                       "OffTypeID":  1442,
+                       "Races":  [
+                                     {
+                                         "id":  5031,
+                                         "N":  "STATE SENATOR, DISTRICT 4 - UNEXPIRED TERM",
+                                         "O":  50,
+                                         "SO":  4,
+                                         "Candidates":  [
+                                                            {
+                                                                "ID":  36422,
+                                                                "N":  "RON C. ANGELETTI",
+                                                                "P":  "DEM",
+                                                                "V":  0,
+                                                                "EV":  0,
+                                                                "PE":  0,
+                                                                "C":  "#007BBD",
+                                                                "O":  1,
+                                                                "LN":  "ANGELETTI",
+                                                                "FN":  "RON C."
+                                                            },
+                                                            {
+                                                                "ID":  36388,
+                                                                "N":  "BRETT W. LIGON",
+                                                                "P":  "REP",
+                                                                "V":  0,
+                                                                "EV":  0,
+                                                                "PE":  0,
+                                                                "C":  "#E30202",
+                                                                "O":  2,
+                                                                "LN":  "LIGON",
+                                                                "FN":  "BRETT W."
+                                                            }
+                                                        ],
+                                         "T":  0
+                                     }
+                                 ]
+                   },
+    "Federal":  null,
+    "Home":  {
+                 "ElecDate":  "05022026",
+                 "CountiesReporting":  {
+                                           "CR":  0,
+                                           "CT":  5
+                                       },
+                 "LastUpdatedTime":  "Apr 24, 2026 17:41:34",
+                 "Report":  null,
+                 "Search":  null,
+                 "Rss":  null,
+                 "RefreshTime":  5,
+                 "PrecinctsReporting":  {
+                                            "PR":  0,
+                                            "PT":  19
+                                        },
+                 "PollingReporting":  {
+                                          "PLR":  0,
+                                          "PLT":  112
+                                      }
+             },
+    "Lookups":  {
+                    "Candidates":  [
+                                       {
+                                           "ID":  36388,
+                                           "BN":  "BRETT W. LIGON"
+                                       },
+                                       {
+                                           "ID":  36422,
+                                           "BN":  "RON C. ANGELETTI"
+                                       }
+                                   ],
+                    "OfficeType":  [
+                                       {
+                                           "ID":  510,
+                                           "OT":  "FEDERAL OFFICES"
+                                       },
+                                       {
+                                           "ID":  511,
+                                           "OT":  "STATEWIDE OFFICES"
+                                       },
+                                       {
+                                           "ID":  1442,
+                                           "OT":  "DISTRICT OFFICES"
+                                       },
+                                       {
+                                           "ID":  2077,
+                                           "OT":  "STATEWIDE PROPOSITIONS"
+                                       }
+                                   ],
+                    "Office":  [
+                                   {
+                                       "ID":  5031,
+                                       "ON":  "STATE SENATOR, DISTRICT 4 - UNEXPIRED TERM",
+                                       "OT":  1442,
+                                       "SO":  50,
+                                       "SSO":  4
+                                   }
+                               ],
+                    "County":  [
+                                   {
+                                       "ID":  1,
+                                       "CN":  "ANDERSON",
+                                       "MID":  48001
+                                   },
+                                   {
+                                       "ID":  2,
+                                       "CN":  "ANDREWS",
+                                       "MID":  48002
+                                   },
+                                   {
+                                       "ID":  3,
+                                       "CN":  "ANGELINA",
+                                       "MID":  48003
+                                   },
+                                   {
+                                       "ID":  4,
+                                       "CN":  "ARANSAS",
+                                       "MID":  48004
+                                   },
+                                   {
+                                       "ID":  5,
+                                       "CN":  "ARCHER",
+                                       "MID":  48005
+                                   },
+                                   {
+                                       "ID":  6,
+                                       "CN":  "ARMSTRONG",
+                                       "MID":  48006
+                                   },
+                                   {
+                                       "ID":  7,
+                                       "CN":  "ATASCOSA",
+                                       "MID":  48007
+                                   },
+                                   {
+                                       "ID":  8,
+                                       "CN":  "AUSTIN",
+                                       "MID":  48008
+                                   },
+                                   {
+                                       "ID":  9,
+                                       "CN":  "BAILEY",
+                                       "MID":  48009
+                                   },
+                                   {
+                                       "ID":  10,
+                                       "CN":  "BANDERA",
+                                       "MID":  48010
+                                   },
+                                   {
+                                       "ID":  11,
+                                       "CN":  "BASTROP",
+                                       "MID":  48011
+                                   },
+                                   {
+                                       "ID":  12,
+                                       "CN":  "BAYLOR",
+                                       "MID":  48012
+                                   },
+                                   {
+                                       "ID":  13,
+                                       "CN":  "BEE",
+                                       "MID":  48013
+                                   },
+                                   {
+                                       "ID":  14,
+                                       "CN":  "BELL",
+                                       "MID":  48014
+                                   },
+                                   {
+                                       "ID":  15,
+                                       "CN":  "BEXAR",
+                                       "MID":  48015
+                                   },
+                                   {
+                                       "ID":  16,
+                                       "CN":  "BLANCO",
+                                       "MID":  48016
+                                   },
+                                   {
+                                       "ID":  17,
+                                       "CN":  "BORDEN",
+                                       "MID":  48017
+                                   },
+                                   {
+                                       "ID":  18,
+                                       "CN":  "BOSQUE",
+                                       "MID":  48018
+                                   },
+                                   {
+                                       "ID":  19,
+                                       "CN":  "BOWIE",
+                                       "MID":  48019
+                                   },
+                                   {
+                                       "ID":  20,
+                                       "CN":  "BRAZORIA",
+                                       "MID":  48020
+                                   },
+                                   {
+                                       "ID":  21,
+                                       "CN":  "BRAZOS",
+                                       "MID":  48021
+                                   },
+                                   {
+                                       "ID":  22,
+                                       "CN":  "BREWSTER",
+                                       "MID":  48022
+                                   },
+                                   {
+                                       "ID":  23,
+                                       "CN":  "BRISCOE",
+                                       "MID":  48023
+                                   },
+                                   {
+                                       "ID":  24,
+                                       "CN":  "BROOKS",
+                                       "MID":  48024
+                                   },
+                                   {
+                                       "ID":  25,
+                                       "CN":  "BROWN",
+                                       "MID":  48025
+                                   },
+                                   {
+                                       "ID":  26,
+                                       "CN":  "BURLESON",
+                                       "MID":  48026
+                                   },
+                                   {
+                                       "ID":  27,
+                                       "CN":  "BURNET",
+                                       "MID":  48027
+                                   },
+                                   {
+                                       "ID":  28,
+                                       "CN":  "CALDWELL",
+                                       "MID":  48028
+                                   },
+                                   {
+                                       "ID":  29,
+                                       "CN":  "CALHOUN",
+                                       "MID":  48029
+                                   },
+                                   {
+                                       "ID":  30,
+                                       "CN":  "CALLAHAN",
+                                       "MID":  48030
+                                   },
+                                   {
+                                       "ID":  31,
+                                       "CN":  "CAMERON",
+                                       "MID":  48031
+                                   },
+                                   {
+                                       "ID":  32,
+                                       "CN":  "CAMP",
+                                       "MID":  48032
+                                   },
+                                   {
+                                       "ID":  33,
+                                       "CN":  "CARSON",
+                                       "MID":  48033
+                                   },
+                                   {
+                                       "ID":  34,
+                                       "CN":  "CASS",
+                                       "MID":  48034
+                                   },
+                                   {
+                                       "ID":  35,
+                                       "CN":  "CASTRO",
+                                       "MID":  48035
+                                   },
+                                   {
+                                       "ID":  36,
+                                       "CN":  "CHAMBERS",
+                                       "MID":  48036
+                                   },
+                                   {
+                                       "ID":  37,
+                                       "CN":  "CHEROKEE",
+                                       "MID":  48037
+                                   },
+                                   {
+                                       "ID":  38,
+                                       "CN":  "CHILDRESS",
+                                       "MID":  48038
+                                   },
+                                   {
+                                       "ID":  39,
+                                       "CN":  "CLAY",
+                                       "MID":  48039
+                                   },
+                                   {
+                                       "ID":  40,
+                                       "CN":  "COCHRAN",
+                                       "MID":  48040
+                                   },
+                                   {
+                                       "ID":  41,
+                                       "CN":  "COKE",
+                                       "MID":  48041
+                                   },
+                                   {
+                                       "ID":  42,
+                                       "CN":  "COLEMAN",
+                                       "MID":  48042
+                                   },
+                                   {
+                                       "ID":  43,
+                                       "CN":  "COLLIN",
+                                       "MID":  48043
+                                   },
+                                   {
+                                       "ID":  44,
+                                       "CN":  "COLLINGSWORTH",
+                                       "MID":  48044
+                                   },
+                                   {
+                                       "ID":  45,
+                                       "CN":  "COLORADO",
+                                       "MID":  48045
+                                   },
+                                   {
+                                       "ID":  46,
+                                       "CN":  "COMAL",
+                                       "MID":  48046
+                                   },
+                                   {
+                                       "ID":  47,
+                                       "CN":  "COMANCHE",
+                                       "MID":  48047
+                                   },
+                                   {
+                                       "ID":  48,
+                                       "CN":  "CONCHO",
+                                       "MID":  48048
+                                   },
+                                   {
+                                       "ID":  49,
+                                       "CN":  "COOKE",
+                                       "MID":  48049
+                                   },
+                                   {
+                                       "ID":  50,
+                                       "CN":  "CORYELL",
+                                       "MID":  48050
+                                   },
+                                   {
+                                       "ID":  51,
+                                       "CN":  "COTTLE",
+                                       "MID":  48051
+                                   },
+                                   {
+                                       "ID":  52,
+                                       "CN":  "CRANE",
+                                       "MID":  48052
+                                   },
+                                   {
+                                       "ID":  53,
+                                       "CN":  "CROCKETT",
+                                       "MID":  48053
+                                   },
+                                   {
+                                       "ID":  54,
+                                       "CN":  "CROSBY",
+                                       "MID":  48054
+                                   },
+                                   {
+                                       "ID":  55,
+                                       "CN":  "CULBERSON",
+                                       "MID":  48055
+                                   },
+                                   {
+                                       "ID":  56,
+                                       "CN":  "DALLAM",
+                                       "MID":  48056
+                                   },
+                                   {
+                                       "ID":  57,
+                                       "CN":  "DALLAS",
+                                       "MID":  48057
+                                   },
+                                   {
+                                       "ID":  58,
+                                       "CN":  "DAWSON",
+                                       "MID":  48058
+                                   },
+                                   {
+                                       "ID":  59,
+                                       "CN":  "DEAF SMITH",
+                                       "MID":  48059
+                                   },
+                                   {
+                                       "ID":  60,
+                                       "CN":  "DELTA",
+                                       "MID":  48060
+                                   },
+                                   {
+                                       "ID":  61,
+                                       "CN":  "DENTON",
+                                       "MID":  48061
+                                   },
+                                   {
+                                       "ID":  62,
+                                       "CN":  "DEWITT",
+                                       "MID":  48062
+                                   },
+                                   {
+                                       "ID":  63,
+                                       "CN":  "DICKENS",
+                                       "MID":  48063
+                                   },
+                                   {
+                                       "ID":  64,
+                                       "CN":  "DIMMIT",
+                                       "MID":  48064
+                                   },
+                                   {
+                                       "ID":  65,
+                                       "CN":  "DONLEY",
+                                       "MID":  48065
+                                   },
+                                   {
+                                       "ID":  66,
+                                       "CN":  "DUVAL",
+                                       "MID":  48066
+                                   },
+                                   {
+                                       "ID":  67,
+                                       "CN":  "EASTLAND",
+                                       "MID":  48067
+                                   },
+                                   {
+                                       "ID":  68,
+                                       "CN":  "ECTOR",
+                                       "MID":  48068
+                                   },
+                                   {
+                                       "ID":  69,
+                                       "CN":  "EDWARDS",
+                                       "MID":  48069
+                                   },
+                                   {
+                                       "ID":  70,
+                                       "CN":  "ELLIS",
+                                       "MID":  48070
+                                   },
+                                   {
+                                       "ID":  71,
+                                       "CN":  "EL PASO",
+                                       "MID":  48071
+                                   },
+                                   {
+                                       "ID":  72,
+                                       "CN":  "ERATH",
+                                       "MID":  48072
+                                   },
+                                   {
+                                       "ID":  73,
+                                       "CN":  "FALLS",
+                                       "MID":  48073
+                                   },
+                                   {
+                                       "ID":  74,
+                                       "CN":  "FANNIN",
+                                       "MID":  48074
+                                   },
+                                   {
+                                       "ID":  75,
+                                       "CN":  "FAYETTE",
+                                       "MID":  48075
+                                   },
+                                   {
+                                       "ID":  76,
+                                       "CN":  "FISHER",
+                                       "MID":  48076
+                                   },
+                                   {
+                                       "ID":  77,
+                                       "CN":  "FLOYD",
+                                       "MID":  48077
+                                   },
+                                   {
+                                       "ID":  78,
+                                       "CN":  "FOARD",
+                                       "MID":  48078
+                                   },
+                                   {
+                                       "ID":  79,
+                                       "CN":  "FORT BEND",
+                                       "MID":  48079
+                                   },
+                                   {
+                                       "ID":  80,
+                                       "CN":  "FRANKLIN",
+                                       "MID":  48080
+                                   },
+                                   {
+                                       "ID":  81,
+                                       "CN":  "FREESTONE",
+                                       "MID":  48081
+                                   },
+                                   {
+                                       "ID":  82,
+                                       "CN":  "FRIO",
+                                       "MID":  48082
+                                   },
+                                   {
+                                       "ID":  83,
+                                       "CN":  "GAINES",
+                                       "MID":  48083
+                                   },
+                                   {
+                                       "ID":  84,
+                                       "CN":  "GALVESTON",
+                                       "MID":  48084
+                                   },
+                                   {
+                                       "ID":  85,
+                                       "CN":  "GARZA",
+                                       "MID":  48085
+                                   },
+                                   {
+                                       "ID":  86,
+                                       "CN":  "GILLESPIE",
+                                       "MID":  48086
+                                   },
+                                   {
+                                       "ID":  87,
+                                       "CN":  "GLASSCOCK",
+                                       "MID":  48087
+                                   },
+                                   {
+                                       "ID":  88,
+                                       "CN":  "GOLIAD",
+                                       "MID":  48088
+                                   },
+                                   {
+                                       "ID":  89,
+                                       "CN":  "GONZALES",
+                                       "MID":  48089
+                                   },
+                                   {
+                                       "ID":  90,
+                                       "CN":  "GRAY",
+                                       "MID":  48090
+                                   },
+                                   {
+                                       "ID":  91,
+                                       "CN":  "GRAYSON",
+                                       "MID":  48091
+                                   },
+                                   {
+                                       "ID":  92,
+                                       "CN":  "GREGG",
+                                       "MID":  48092
+                                   },
+                                   {
+                                       "ID":  93,
+                                       "CN":  "GRIMES",
+                                       "MID":  48093
+                                   },
+                                   {
+                                       "ID":  94,
+                                       "CN":  "GUADALUPE",
+                                       "MID":  48094
+                                   },
+                                   {
+                                       "ID":  95,
+                                       "CN":  "HALE",
+                                       "MID":  48095
+                                   },
+                                   {
+                                       "ID":  96,
+                                       "CN":  "HALL",
+                                       "MID":  48096
+                                   },
+                                   {
+                                       "ID":  97,
+                                       "CN":  "HAMILTON",
+                                       "MID":  48097
+                                   },
+                                   {
+                                       "ID":  98,
+                                       "CN":  "HANSFORD",
+                                       "MID":  48098
+                                   },
+                                   {
+                                       "ID":  99,
+                                       "CN":  "HARDEMAN",
+                                       "MID":  48099
+                                   },
+                                   {
+                                       "ID":  100,
+                                       "CN":  "HARDIN",
+                                       "MID":  48100
+                                   },
+                                   {
+                                       "ID":  101,
+                                       "CN":  "HARRIS",
+                                       "MID":  48101
+                                   },
+                                   {
+                                       "ID":  102,
+                                       "CN":  "HARRISON",
+                                       "MID":  48102
+                                   },
+                                   {
+                                       "ID":  103,
+                                       "CN":  "HARTLEY",
+                                       "MID":  48103
+                                   },
+                                   {
+                                       "ID":  104,
+                                       "CN":  "HASKELL",
+                                       "MID":  48104
+                                   },
+                                   {
+                                       "ID":  105,
+                                       "CN":  "HAYS",
+                                       "MID":  48105
+                                   },
+                                   {
+                                       "ID":  106,
+                                       "CN":  "HEMPHILL",
+                                       "MID":  48106
+                                   },
+                                   {
+                                       "ID":  107,
+                                       "CN":  "HENDERSON",
+                                       "MID":  48107
+                                   },
+                                   {
+                                       "ID":  108,
+                                       "CN":  "HIDALGO",
+                                       "MID":  48108
+                                   },
+                                   {
+                                       "ID":  109,
+                                       "CN":  "HILL",
+                                       "MID":  48109
+                                   },
+                                   {
+                                       "ID":  110,
+                                       "CN":  "HOCKLEY",
+                                       "MID":  48110
+                                   },
+                                   {
+                                       "ID":  111,
+                                       "CN":  "HOOD",
+                                       "MID":  48111
+                                   },
+                                   {
+                                       "ID":  112,
+                                       "CN":  "HOPKINS",
+                                       "MID":  48112
+                                   },
+                                   {
+                                       "ID":  113,
+                                       "CN":  "HOUSTON",
+                                       "MID":  48113
+                                   },
+                                   {
+                                       "ID":  114,
+                                       "CN":  "HOWARD",
+                                       "MID":  48114
+                                   },
+                                   {
+                                       "ID":  115,
+                                       "CN":  "HUDSPETH",
+                                       "MID":  48115
+                                   },
+                                   {
+                                       "ID":  116,
+                                       "CN":  "HUNT",
+                                       "MID":  48116
+                                   },
+                                   {
+                                       "ID":  117,
+                                       "CN":  "HUTCHINSON",
+                                       "MID":  48117
+                                   },
+                                   {
+                                       "ID":  118,
+                                       "CN":  "IRION",
+                                       "MID":  48118
+                                   },
+                                   {
+                                       "ID":  119,
+                                       "CN":  "JACK",
+                                       "MID":  48119
+                                   },
+                                   {
+                                       "ID":  120,
+                                       "CN":  "JACKSON",
+                                       "MID":  48120
+                                   },
+                                   {
+                                       "ID":  121,
+                                       "CN":  "JASPER",
+                                       "MID":  48121
+                                   },
+                                   {
+                                       "ID":  122,
+                                       "CN":  "JEFF DAVIS",
+                                       "MID":  48122
+                                   },
+                                   {
+                                       "ID":  123,
+                                       "CN":  "JEFFERSON",
+                                       "MID":  48123
+                                   },
+                                   {
+                                       "ID":  124,
+                                       "CN":  "JIM HOGG",
+                                       "MID":  48124
+                                   },
+                                   {
+                                       "ID":  125,
+                                       "CN":  "JIM WELLS",
+                                       "MID":  48125
+                                   },
+                                   {
+                                       "ID":  126,
+                                       "CN":  "JOHNSON",
+                                       "MID":  48126
+                                   },
+                                   {
+                                       "ID":  127,
+                                       "CN":  "JONES",
+                                       "MID":  48127
+                                   },
+                                   {
+                                       "ID":  128,
+                                       "CN":  "KARNES",
+                                       "MID":  48128
+                                   },
+                                   {
+                                       "ID":  129,
+                                       "CN":  "KAUFMAN",
+                                       "MID":  48129
+                                   },
+                                   {
+                                       "ID":  130,
+                                       "CN":  "KENDALL",
+                                       "MID":  48130
+                                   },
+                                   {
+                                       "ID":  131,
+                                       "CN":  "KENEDY",
+                                       "MID":  48131
+                                   },
+                                   {
+                                       "ID":  132,
+                                       "CN":  "KENT",
+                                       "MID":  48132
+                                   },
+                                   {
+                                       "ID":  133,
+                                       "CN":  "KERR",
+                                       "MID":  48133
+                                   },
+                                   {
+                                       "ID":  134,
+                                       "CN":  "KIMBLE",
+                                       "MID":  48134
+                                   },
+                                   {
+                                       "ID":  135,
+                                       "CN":  "KING",
+                                       "MID":  48135
+                                   },
+                                   {
+                                       "ID":  136,
+                                       "CN":  "KINNEY",
+                                       "MID":  48136
+                                   },
+                                   {
+                                       "ID":  137,
+                                       "CN":  "KLEBERG",
+                                       "MID":  48137
+                                   },
+                                   {
+                                       "ID":  138,
+                                       "CN":  "KNOX",
+                                       "MID":  48138
+                                   },
+                                   {
+                                       "ID":  139,
+                                       "CN":  "LAMAR",
+                                       "MID":  48139
+                                   },
+                                   {
+                                       "ID":  140,
+                                       "CN":  "LAMB",
+                                       "MID":  48140
+                                   },
+                                   {
+                                       "ID":  141,
+                                       "CN":  "LAMPASAS",
+                                       "MID":  48141
+                                   },
+                                   {
+                                       "ID":  142,
+                                       "CN":  "LASALLE",
+                                       "MID":  48142
+                                   },
+                                   {
+                                       "ID":  143,
+                                       "CN":  "LAVACA",
+                                       "MID":  48143
+                                   },
+                                   {
+                                       "ID":  144,
+                                       "CN":  "LEE",
+                                       "MID":  48144
+                                   },
+                                   {
+                                       "ID":  145,
+                                       "CN":  "LEON",
+                                       "MID":  48145
+                                   },
+                                   {
+                                       "ID":  146,
+                                       "CN":  "LIBERTY",
+                                       "MID":  48146
+                                   },
+                                   {
+                                       "ID":  147,
+                                       "CN":  "LIMESTONE",
+                                       "MID":  48147
+                                   },
+                                   {
+                                       "ID":  148,
+                                       "CN":  "LIPSCOMB",
+                                       "MID":  48148
+                                   },
+                                   {
+                                       "ID":  149,
+                                       "CN":  "LIVE OAK",
+                                       "MID":  48149
+                                   },
+                                   {
+                                       "ID":  150,
+                                       "CN":  "LLANO",
+                                       "MID":  48150
+                                   },
+                                   {
+                                       "ID":  151,
+                                       "CN":  "LOVING",
+                                       "MID":  48151
+                                   },
+                                   {
+                                       "ID":  152,
+                                       "CN":  "LUBBOCK",
+                                       "MID":  48152
+                                   },
+                                   {
+                                       "ID":  153,
+                                       "CN":  "LYNN",
+                                       "MID":  48153
+                                   },
+                                   {
+                                       "ID":  154,
+                                       "CN":  "MADISON",
+                                       "MID":  48154
+                                   },
+                                   {
+                                       "ID":  155,
+                                       "CN":  "MARION",
+                                       "MID":  48155
+                                   },
+                                   {
+                                       "ID":  156,
+                                       "CN":  "MARTIN",
+                                       "MID":  48156
+                                   },
+                                   {
+                                       "ID":  157,
+                                       "CN":  "MASON",
+                                       "MID":  48157
+                                   },
+                                   {
+                                       "ID":  158,
+                                       "CN":  "MATAGORDA",
+                                       "MID":  48158
+                                   },
+                                   {
+                                       "ID":  159,
+                                       "CN":  "MAVERICK",
+                                       "MID":  48159
+                                   },
+                                   {
+                                       "ID":  160,
+                                       "CN":  "MCCULLOCH",
+                                       "MID":  48160
+                                   },
+                                   {
+                                       "ID":  161,
+                                       "CN":  "MCLENNAN",
+                                       "MID":  48161
+                                   },
+                                   {
+                                       "ID":  162,
+                                       "CN":  "MCMULLEN",
+                                       "MID":  48162
+                                   },
+                                   {
+                                       "ID":  163,
+                                       "CN":  "MEDINA",
+                                       "MID":  48163
+                                   },
+                                   {
+                                       "ID":  164,
+                                       "CN":  "MENARD",
+                                       "MID":  48164
+                                   },
+                                   {
+                                       "ID":  165,
+                                       "CN":  "MIDLAND",
+                                       "MID":  48165
+                                   },
+                                   {
+                                       "ID":  166,
+                                       "CN":  "MILAM",
+                                       "MID":  48166
+                                   },
+                                   {
+                                       "ID":  167,
+                                       "CN":  "MILLS",
+                                       "MID":  48167
+                                   },
+                                   {
+                                       "ID":  168,
+                                       "CN":  "MITCHELL",
+                                       "MID":  48168
+                                   },
+                                   {
+                                       "ID":  169,
+                                       "CN":  "MONTAGUE",
+                                       "MID":  48169
+                                   },
+                                   {
+                                       "ID":  170,
+                                       "CN":  "MONTGOMERY",
+                                       "MID":  48170
+                                   },
+                                   {
+                                       "ID":  171,
+                                       "CN":  "MOORE",
+                                       "MID":  48171
+                                   },
+                                   {
+                                       "ID":  172,
+                                       "CN":  "MORRIS",
+                                       "MID":  48172
+                                   },
+                                   {
+                                       "ID":  173,
+                                       "CN":  "MOTLEY",
+                                       "MID":  48173
+                                   },
+                                   {
+                                       "ID":  174,
+                                       "CN":  "NACOGDOCHES",
+                                       "MID":  48174
+                                   },
+                                   {
+                                       "ID":  175,
+                                       "CN":  "NAVARRO",
+                                       "MID":  48175
+                                   },
+                                   {
+                                       "ID":  176,
+                                       "CN":  "NEWTON",
+                                       "MID":  48176
+                                   },
+                                   {
+                                       "ID":  177,
+                                       "CN":  "NOLAN",
+                                       "MID":  48177
+                                   },
+                                   {
+                                       "ID":  178,
+                                       "CN":  "NUECES",
+                                       "MID":  48178
+                                   },
+                                   {
+                                       "ID":  179,
+                                       "CN":  "OCHILTREE",
+                                       "MID":  48179
+                                   },
+                                   {
+                                       "ID":  180,
+                                       "CN":  "OLDHAM",
+                                       "MID":  48180
+                                   },
+                                   {
+                                       "ID":  181,
+                                       "CN":  "ORANGE",
+                                       "MID":  48181
+                                   },
+                                   {
+                                       "ID":  182,
+                                       "CN":  "PALO PINTO",
+                                       "MID":  48182
+                                   },
+                                   {
+                                       "ID":  183,
+                                       "CN":  "PANOLA",
+                                       "MID":  48183
+                                   },
+                                   {
+                                       "ID":  184,
+                                       "CN":  "PARKER",
+                                       "MID":  48184
+                                   },
+                                   {
+                                       "ID":  185,
+                                       "CN":  "PARMER",
+                                       "MID":  48185
+                                   },
+                                   {
+                                       "ID":  186,
+                                       "CN":  "PECOS",
+                                       "MID":  48186
+                                   },
+                                   {
+                                       "ID":  187,
+                                       "CN":  "POLK",
+                                       "MID":  48187
+                                   },
+                                   {
+                                       "ID":  188,
+                                       "CN":  "POTTER",
+                                       "MID":  48188
+                                   },
+                                   {
+                                       "ID":  189,
+                                       "CN":  "PRESIDIO",
+                                       "MID":  48189
+                                   },
+                                   {
+                                       "ID":  190,
+                                       "CN":  "RAINS",
+                                       "MID":  48190
+                                   },
+                                   {
+                                       "ID":  191,
+                                       "CN":  "RANDALL",
+                                       "MID":  48191
+                                   },
+                                   {
+                                       "ID":  192,
+                                       "CN":  "REAGAN",
+                                       "MID":  48192
+                                   },
+                                   {
+                                       "ID":  193,
+                                       "CN":  "REAL",
+                                       "MID":  48193
+                                   },
+                                   {
+                                       "ID":  194,
+                                       "CN":  "RED RIVER",
+                                       "MID":  48194
+                                   },
+                                   {
+                                       "ID":  195,
+                                       "CN":  "REEVES",
+                                       "MID":  48195
+                                   },
+                                   {
+                                       "ID":  196,
+                                       "CN":  "REFUGIO",
+                                       "MID":  48196
+                                   },
+                                   {
+                                       "ID":  197,
+                                       "CN":  "ROBERTS",
+                                       "MID":  48197
+                                   },
+                                   {
+                                       "ID":  198,
+                                       "CN":  "ROBERTSON",
+                                       "MID":  48198
+                                   },
+                                   {
+                                       "ID":  199,
+                                       "CN":  "ROCKWALL",
+                                       "MID":  48199
+                                   },
+                                   {
+                                       "ID":  200,
+                                       "CN":  "RUNNELS",
+                                       "MID":  48200
+                                   },
+                                   {
+                                       "ID":  201,
+                                       "CN":  "RUSK",
+                                       "MID":  48201
+                                   },
+                                   {
+                                       "ID":  202,
+                                       "CN":  "SABINE",
+                                       "MID":  48202
+                                   },
+                                   {
+                                       "ID":  203,
+                                       "CN":  "SAN AUGUSTINE",
+                                       "MID":  48203
+                                   },
+                                   {
+                                       "ID":  204,
+                                       "CN":  "SAN JACINTO",
+                                       "MID":  48204
+                                   },
+                                   {
+                                       "ID":  205,
+                                       "CN":  "SAN PATRICIO",
+                                       "MID":  48205
+                                   },
+                                   {
+                                       "ID":  206,
+                                       "CN":  "SAN SABA",
+                                       "MID":  48206
+                                   },
+                                   {
+                                       "ID":  207,
+                                       "CN":  "SCHLEICHER",
+                                       "MID":  48207
+                                   },
+                                   {
+                                       "ID":  208,
+                                       "CN":  "SCURRY",
+                                       "MID":  48208
+                                   },
+                                   {
+                                       "ID":  209,
+                                       "CN":  "SHACKELFORD",
+                                       "MID":  48209
+                                   },
+                                   {
+                                       "ID":  210,
+                                       "CN":  "SHELBY",
+                                       "MID":  48210
+                                   },
+                                   {
+                                       "ID":  211,
+                                       "CN":  "SHERMAN",
+                                       "MID":  48211
+                                   },
+                                   {
+                                       "ID":  212,
+                                       "CN":  "SMITH",
+                                       "MID":  48212
+                                   },
+                                   {
+                                       "ID":  213,
+                                       "CN":  "SOMERVELL",
+                                       "MID":  48213
+                                   },
+                                   {
+                                       "ID":  214,
+                                       "CN":  "STARR",
+                                       "MID":  48214
+                                   },
+                                   {
+                                       "ID":  215,
+                                       "CN":  "STEPHENS",
+                                       "MID":  48215
+                                   },
+                                   {
+                                       "ID":  216,
+                                       "CN":  "STERLING",
+                                       "MID":  48216
+                                   },
+                                   {
+                                       "ID":  217,
+                                       "CN":  "STONEWALL",
+                                       "MID":  48217
+                                   },
+                                   {
+                                       "ID":  218,
+                                       "CN":  "SUTTON",
+                                       "MID":  48218
+                                   },
+                                   {
+                                       "ID":  219,
+                                       "CN":  "SWISHER",
+                                       "MID":  48219
+                                   },
+                                   {
+                                       "ID":  220,
+                                       "CN":  "TARRANT",
+                                       "MID":  48220
+                                   },
+                                   {
+                                       "ID":  221,
+                                       "CN":  "TAYLOR",
+                                       "MID":  48221
+                                   },
+                                   {
+                                       "ID":  222,
+                                       "CN":  "TERRELL",
+                                       "MID":  48222
+                                   },
+                                   {
+                                       "ID":  223,
+                                       "CN":  "TERRY",
+                                       "MID":  48223
+                                   },
+                                   {
+                                       "ID":  224,
+                                       "CN":  "THROCKMORTON",
+                                       "MID":  48224
+                                   },
+                                   {
+                                       "ID":  225,
+                                       "CN":  "TITUS",
+                                       "MID":  48225
+                                   },
+                                   {
+                                       "ID":  226,
+                                       "CN":  "TOM GREEN",
+                                       "MID":  48226
+                                   },
+                                   {
+                                       "ID":  227,
+                                       "CN":  "TRAVIS",
+                                       "MID":  48227
+                                   },
+                                   {
+                                       "ID":  228,
+                                       "CN":  "TRINITY",
+                                       "MID":  48228
+                                   },
+                                   {
+                                       "ID":  229,
+                                       "CN":  "TYLER",
+                                       "MID":  48229
+                                   },
+                                   {
+                                       "ID":  230,
+                                       "CN":  "UPSHUR",
+                                       "MID":  48230
+                                   },
+                                   {
+                                       "ID":  231,
+                                       "CN":  "UPTON",
+                                       "MID":  48231
+                                   },
+                                   {
+                                       "ID":  232,
+                                       "CN":  "UVALDE",
+                                       "MID":  48232
+                                   },
+                                   {
+                                       "ID":  233,
+                                       "CN":  "VAL VERDE",
+                                       "MID":  48233
+                                   },
+                                   {
+                                       "ID":  234,
+                                       "CN":  "VAN ZANDT",
+                                       "MID":  48234
+                                   },
+                                   {
+                                       "ID":  235,
+                                       "CN":  "VICTORIA",
+                                       "MID":  48235
+                                   },
+                                   {
+                                       "ID":  236,
+                                       "CN":  "WALKER",
+                                       "MID":  48236
+                                   },
+                                   {
+                                       "ID":  237,
+                                       "CN":  "WALLER",
+                                       "MID":  48237
+                                   },
+                                   {
+                                       "ID":  238,
+                                       "CN":  "WARD",
+                                       "MID":  48238
+                                   },
+                                   {
+                                       "ID":  239,
+                                       "CN":  "WASHINGTON",
+                                       "MID":  48239
+                                   },
+                                   {
+                                       "ID":  240,
+                                       "CN":  "WEBB",
+                                       "MID":  48240
+                                   },
+                                   {
+                                       "ID":  241,
+                                       "CN":  "WHARTON",
+                                       "MID":  48241
+                                   },
+                                   {
+                                       "ID":  242,
+                                       "CN":  "WHEELER",
+                                       "MID":  48242
+                                   },
+                                   {
+                                       "ID":  243,
+                                       "CN":  "WICHITA",
+                                       "MID":  48243
+                                   },
+                                   {
+                                       "ID":  244,
+                                       "CN":  "WILBARGER",
+                                       "MID":  48244
+                                   },
+                                   {
+                                       "ID":  245,
+                                       "CN":  "WILLACY",
+                                       "MID":  48245
+                                   },
+                                   {
+                                       "ID":  246,
+                                       "CN":  "WILLIAMSON",
+                                       "MID":  48246
+                                   },
+                                   {
+                                       "ID":  247,
+                                       "CN":  "WILSON",
+                                       "MID":  48247
+                                   },
+                                   {
+                                       "ID":  248,
+                                       "CN":  "WINKLER",
+                                       "MID":  48248
+                                   },
+                                   {
+                                       "ID":  249,
+                                       "CN":  "WISE",
+                                       "MID":  48249
+                                   },
+                                   {
+                                       "ID":  250,
+                                       "CN":  "WOOD",
+                                       "MID":  48250
+                                   },
+                                   {
+                                       "ID":  251,
+                                       "CN":  "YOAKUM",
+                                       "MID":  48251
+                                   },
+                                   {
+                                       "ID":  252,
+                                       "CN":  "YOUNG",
+                                       "MID":  48252
+                                   },
+                                   {
+                                       "ID":  253,
+                                       "CN":  "ZAPATA",
+                                       "MID":  48253
+                                   },
+                                   {
+                                       "ID":  254,
+                                       "CN":  "ZAVALA",
+                                       "MID":  48254
+                                   }
+                               ]
+                },
+    "OfficeSummary":  {
+                          "OS":  [
+                                     {
+                                         "OID":  5031,
+                                         "ON":  "STATE SENATOR, DISTRICT 4 - UNEXPIRED TERM",
+                                         "C":  [
+                                                   {
+                                                       "N":  "RON C. ANGELETTI",
+                                                       "P":  "D",
+                                                       "C":  "#007BBD",
+                                                       "T":  0,
+                                                       "O":  1,
+                                                       "LN":  "ANGELETTI",
+                                                       "FN":  "RON C."
+                                                   },
+                                                   {
+                                                       "N":  "BRETT W. LIGON",
+                                                       "P":  "R",
+                                                       "C":  "#E30202",
+                                                       "T":  0,
+                                                       "O":  1,
+                                                       "LN":  "LIGON",
+                                                       "FN":  "BRETT W."
+                                                   }
+                                               ]
+                                     }
+                                 ]
+                      },
+    "Race":  {
+                 "OfficeTypes":  [
+                                     {
+                                         "OfficeType":  "DISTRICT OFFICES",
+                                         "OfficeTypeID":  1442,
+                                         "Races":  [
+                                                       {
+                                                           "id":  5031,
+                                                           "N":  "STATE SENATOR, DISTRICT 4 - UNEXPIRED TERM"
+                                                       }
+                                                   ]
+                                     }
+                                 ]
+             },
+    "StateWide":  null,
+    "StateWideQ":  {
+                       "OffType":  null,
+                       "OffTypeID":  null,
+                       "Races":  [
+
+                                 ]
+                   },
+    "ReportList":  {
+                       "CountyByCountyCanvassReport":  {
+                                                           "view":  false,
+                                                           "fileTypes":  [
+
+                                                                         ]
+                                                       },
+                       "WinnerListingReport":  {
+                                                   "view":  false,
+                                                   "fileTypes":  [
+
+                                                                 ]
+                                               },
+                       "OfficialCanvassReport":  {
+                                                     "view":  false,
+                                                     "fileTypes":  [
+
+                                                                   ]
+                                                 },
+                       "UnofficialReport":  {
+                                                "view":  false,
+                                                "fileTypes":  [
+
+                                                              ]
+                                            },
+                       "UnofficialVoteReport":  {
+                                                    "view":  false,
+                                                    "fileTypes":  [
+
+                                                                  ]
+                                                },
+                       "VoterTurnoutReport":  {
+                                                  "view":  false,
+                                                  "fileTypes":  [
+
+                                                                ]
+                                              }
+                   }
+}
