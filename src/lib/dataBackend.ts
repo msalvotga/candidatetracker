@@ -1,6 +1,7 @@
 import type { CivixElectionListItem } from "./civix/api";
 import type { ElectionFile, LoadedElection } from "../types/election";
 import { mapCivixPayloadToElectionFile } from "./civix/mapCivixElection";
+import { encodeCatalogIdForPath } from "./catalogIdPath";
 
 /** One row in the election dropdown (Civix or manual). */
 export interface ElectionOption {
@@ -86,7 +87,7 @@ export function civixListToOptions(items: CivixElectionListItem[]): ElectionOpti
 }
 
 export async function loadElectionFromBackend(catalogId: string, catalogLabel: string): Promise<LoadedElection> {
-  const r = await fetch(`/api/election/${encodeURIComponent(catalogId)}`, { cache: "no-store" });
+  const r = await fetch(`/api/election-data/${encodeCatalogIdForPath(catalogId)}`, { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status} loading ${catalogId}`);
   const body = (await r.json()) as
     | { provider: "manual"; electionFile: ElectionFile }

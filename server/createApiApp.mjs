@@ -87,6 +87,7 @@ import { collectCivixSosRaces } from "./lib/civixSosRaces.mjs";
 import { inferElectionPartyFromConfig } from "./lib/countySosRaceMatch.mjs";
 import { mergeLinkedCountyOverridesIntoCivix } from "./lib/mergeLinkedCountyIntoCivix.mjs";
 import { civixProxyHandler } from "./lib/civixProxy.mjs";
+import { decodeCatalogIdFromPath } from "./lib/catalogIdPath.mjs";
 
 /** Only civix election wired for full ingest + live merge in this deployment. */
 const TRACKED_CIVIX_ELECTION_ID = 56181;
@@ -1541,7 +1542,17 @@ export function createApiApp() {
     }
   }
 
-  /** Path form survives Render static rewrites that drop query strings. */
+  /** Base64url token — no colons in path (Render/proxies break election:56181). */
+  app.get("/api/election-data/:token", async (req, res) => {
+    try {
+      const id = decodeCatalogIdFromPath(String(req.params.token ?? ""));
+      return respondElectionByCatalogId(id, res);
+    } catch {
+      return res.status(400).json({ error: "Invalid election-data token" });
+    }
+  });
+
+  /** @deprecated Prefer /api/election-data/:token */
   app.get("/api/election/:catalogIdEncoded", async (req, res) => {
     const id = decodeURIComponent(String(req.params.catalogIdEncoded ?? ""));
     return respondElectionByCatalogId(id, res);
@@ -2076,8 +2087,8 @@ export function createApiApp() {
       const hint =
         path === "/api/$1"
           ? "Render rewrite used $1 — use Destination https://YOUR-API.onrender.com/api/* (asterisk, not $1)."
-          : path === "/api/election"
-            ? "Missing catalog id — use /api/election/civix:56181 or /api/election?id=civix:56181"
+          : path === "/api/election" || path.startsWith("/api/election/")
+            ? "Use /api/election-data/{token} — catalog ids must not include raw colons in the path"
             : undefined;
       res.status(404).json({ error: `No API route for ${path}`, hint });
       return;
