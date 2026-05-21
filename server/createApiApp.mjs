@@ -1542,10 +1542,32 @@ export function createApiApp() {
     }
   }
 
-  /** Base64url token — no colons in path (Render/proxies break election:56181). */
+  /** POST avoids Render static rewrites truncating long path tokens. */
+  app.post("/api/election-data", async (req, res) => {
+    const id = req.body?.catalogId;
+    if (typeof id !== "string" || !id.includes(":")) {
+      return res.status(400).json({ error: "Body catalogId must be like civix:…, manual:…, or election:…" });
+    }
+    return respondElectionByCatalogId(id, res);
+  });
+
+  /** GET + token for direct API access (optional). */
   app.get("/api/election-data/:token", async (req, res) => {
     try {
       const id = decodeCatalogIdFromPath(String(req.params.token ?? ""));
+      return respondElectionByCatalogId(id, res);
+    } catch {
+      return res.status(400).json({ error: "Invalid election-data token" });
+    }
+  });
+
+  app.get("/api/election-data", async (req, res) => {
+    const token = req.query.token;
+    if (typeof token !== "string") {
+      return res.status(400).json({ error: "Query token required, or POST { catalogId }" });
+    }
+    try {
+      const id = decodeCatalogIdFromPath(token);
       return respondElectionByCatalogId(id, res);
     } catch {
       return res.status(400).json({ error: "Invalid election-data token" });
