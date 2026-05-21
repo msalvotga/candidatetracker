@@ -14,7 +14,6 @@ import {
   isoToCivixDate,
   runEvRosterPull,
   confirmEvRosterCountyPull,
-  fetchEvRosterPullProgress,
   fetchEvRosterVoters,
   formatEvRosterDateYyyymmdd,
   saveEvRosterCountySource,
@@ -664,7 +663,7 @@ export function EvRosterScreen({ onBack }: { onBack: () => void }) {
     try {
       await confirmEvRosterCountyPull(evrId, confirmDate, countyName);
       setStatus(`${countyName} confirmed — data locked for ${confirmDate}.`);
-      await refreshMeta(selectedId, { from: summaryDateFrom, to: summaryDateTo });
+      await refreshMeta(evrId, { from: summaryDateFrom, to: summaryDateTo });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Confirm failed");
     } finally {
