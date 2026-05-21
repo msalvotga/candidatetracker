@@ -1490,10 +1490,9 @@ export function createApiApp() {
     };
   }
 
-  app.get("/api/election", async (req, res) => {
-    const id = req.query.id;
+  async function respondElectionByCatalogId(id, res) {
     if (typeof id !== "string" || !id.includes(":")) {
-      return res.status(400).json({ error: "Query `id` must be like civix:…, manual:…, or election:…" });
+      return res.status(400).json({ error: "Catalog id must be like civix:…, manual:…, or election:…" });
     }
 
     let provider;
@@ -1538,8 +1537,24 @@ export function createApiApp() {
       return res.status(400).json({ error: "Unknown provider" });
     } catch (e) {
       console.error(e);
-      res.status(502).json({ error: String(e.message || e) });
+      return res.status(502).json({ error: String(e.message || e) });
     }
+  }
+
+  /** Path form survives Render static rewrites that drop query strings. */
+  app.get("/api/election/:catalogIdEncoded", async (req, res) => {
+    const id = decodeURIComponent(String(req.params.catalogIdEncoded ?? ""));
+    return respondElectionByCatalogId(id, res);
+  });
+
+  app.get("/api/election", async (req, res) => {
+    const id = req.query.id;
+    if (typeof id !== "string" || !id.includes(":")) {
+      return res.status(400).json({
+        error: "Query `id` must be like civix:…, manual:…, or election:… (or use /api/election/:id)",
+      });
+    }
+    return respondElectionByCatalogId(id, res);
   });
 
   app.post("/api/manual-elections", async (req, res) => {
@@ -2058,7 +2073,13 @@ export function createApiApp() {
   app.use((req, res) => {
     const path = String(req.path ?? req.url ?? "").split("?")[0];
     if (path === "/api" || path.startsWith("/api/")) {
-      res.status(404).json({ error: `No API route for ${path}` });
+      const hint =
+        path === "/api/$1"
+          ? "Render rewrite used $1 — use Destination https://YOUR-API.onrender.com/api/* (asterisk, not $1)."
+          : path === "/api/election"
+            ? "Missing catalog id — use /api/election/civix:56181 or /api/election?id=civix:56181"
+            : undefined;
+      res.status(404).json({ error: `No API route for ${path}`, hint });
       return;
     }
     res.status(404).send("Not found");
