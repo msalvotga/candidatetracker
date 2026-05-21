@@ -9,6 +9,18 @@ import {
   type CountyVoteSource,
 } from "../lib/dataBackend";
 
+const CIVIX_SECTION_LABELS: Record<string, string> = {
+  Federal: "Federal",
+  StateWide: "Statewide",
+  Districted: "District",
+  StateWideQ: "Statewide props",
+};
+
+function sosRaceOptionLabel(r: { name: string; section?: string }) {
+  const sec = r.section ? (CIVIX_SECTION_LABELS[r.section] ?? r.section) : "";
+  return sec ? `[${sec}] ${r.name}` : r.name;
+}
+
 export function CountyRaceMappingSection({
   electionId,
   usesCivixSos,
@@ -54,6 +66,16 @@ export function CountyRaceMappingSection({
     const hit = data?.voteSources?.find((s) => s.countyKey === countyKey && s.sosRaceId === sosRaceId);
     return (hit?.voteSource as CountyVoteSource) ?? "county_feed";
   };
+
+  const sosRacesSorted = useMemo(() => {
+    const order = ["Federal", "StateWide", "Districted", "StateWideQ", ""];
+    return [...(data?.sosRaces ?? [])].sort((a, b) => {
+      const oa = order.indexOf(a.section ?? "");
+      const ob = order.indexOf(b.section ?? "");
+      if (oa !== ob) return oa - ob;
+      return a.name.localeCompare(b.name, "en");
+    });
+  }, [data?.sosRaces]);
 
   if (!usesCivixSos) return null;
   if (!/^\d+$/.test(String(electionId))) {
@@ -106,13 +128,23 @@ export function CountyRaceMappingSection({
       <p className="enr-muted">
         County PDF feeds import <strong>all</strong> contests in the file. Only contests you link below are merged into
         Texas SOS races on the main dashboard. Contests that exist only in a county (not on the SOS ballot) stay in the
-        unlinked list — they are stored but not applied until you map them to an SOS race. For each linked race, choose
-        whether that county uses <strong>SOS</strong>, <strong>county feed</strong>, or <strong>manual</strong> votes.
+        unlinked list — they are stored but not applied until you map them to an SOS race and click{" "}
+        <strong>Link & use county feed</strong>. The dropdown lists <strong>federal, statewide, district, and proposition</strong>{" "}
+        SOS races (same sections as the main Civix tabs). Suggestions treat <strong>REP</strong> / <strong>DEM</strong> in county
+        contest names (and <em>- Republican Party</em> / <em>- Democratic Party</em> suffixes) as the ballot party, aligned with
+        this election’s party when configured (e.g. Republican Primary Runoff). Click <strong>Link & use county feed</strong> to
+        apply. For each linked race, choose whether that county uses <strong>SOS</strong>, <strong>county feed</strong>, or{" "}
+        <strong>manual</strong> votes.
       </p>
       <button type="button" className="enr-secondaryBtn" disabled={busy || loading} onClick={() => void reload()}>
         {loading ? "Loading…" : "Reload mapping"}
       </button>
 
+      {data?.electionParty ? (
+        <p className="enr-muted" style={{ marginTop: 10, fontSize: 13 }}>
+          Ballot party for this election: <strong>{data.electionParty}</strong> (from election settings / Civix id).
+        </p>
+      ) : null}
       {data?.note ? (
         <p className="enr-muted" style={{ marginTop: 10, fontSize: 13 }}>
           {data.note}
@@ -162,9 +194,9 @@ export function CountyRaceMappingSection({
                         disabled={busy}
                       >
                         <option value="">Select SOS race…</option>
-                        {(data?.sosRaces ?? []).map((sr) => (
+                        {sosRacesSorted.map((sr) => (
                           <option key={sr.id} value={sr.id}>
-                            {sr.name}
+                            {sosRaceOptionLabel(sr)}
                           </option>
                         ))}
                       </select>

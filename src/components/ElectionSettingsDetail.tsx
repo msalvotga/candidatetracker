@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   discoverCountyFeedUrl,
+  discoverCountyFeedUrlsBulk,
   fetchElectionFeedSources,
+  fetchHubDiscoveryCountyKeys,
   forceRefreshAllSources,
   startIngestStatusPoll,
   saveElectionFeedSources,
@@ -13,6 +15,7 @@ import {
   type IngestProgress,
   type SourceImportLatest,
 } from "../lib/dataBackend";
+import { parseBulkCountyFeedLines } from "../lib/countyFeedBulkParse";
 import { IngestProgressStatus, IngestSpinner } from "./IngestProgressStatus";
 import { CountyRaceMappingSection } from "./CountyRaceMappingSection";
 import { TX_CIVIX_DEFAULT_COUNTYINFO_PREFIX, civixDefaultCountyInfoUrl } from "../lib/civix/urls";
@@ -121,6 +124,8 @@ export function ElectionSettingsDetail({
   /** Optional pasted page HTML when the hub cannot be fetched (e.g. WAF); not persisted. */
   const [hubHtmlDrafts, setHubHtmlDrafts] = useState<string[]>([]);
   const [bulkText, setBulkText] = useState("");
+  const [bulkHubText, setBulkHubText] = useState("");
+  const [hubDiscoveryCountyKeys, setHubDiscoveryCountyKeys] = useState<string[]>([]);
   const [copyFromElectionId, setCopyFromElectionId] = useState("");
   const [copyFeedsMode, setCopyFeedsMode] = useState<"replace" | "merge">("replace");
   const [hideNoFeedUrl, setHideNoFeedUrl] = useState(true);
@@ -194,6 +199,111 @@ export function ElectionSettingsDetail({
       return next;
     });
   }, [feeds.length]);
+
+  useEffect(() => {
+    void fetchHubDiscoveryCountyKeys()
+      .then((p) => setHubDiscoveryCountyKeys(p.countyKeys))
+      .catch(() => setHubDiscoveryCountyKeys([]));
+  }, []);
+
+  function mergeBulkHubLines(lines: ReturnType<typeof parseBulkCountyFeedLines>) {
+    if (!lines.length) return 0;
+    setFeeds((prev) => {
+      const byKey = new Map(prev.map((r, i) => [feedRowKey(r), i]));
+      const next = [...prev];
+      for (const line of lines) {
+        const key = `${line.countyKey}|${line.vendorId}`;
+        const idx = byKey.get(key);
+        if (idx != null) {
+          next[idx] = { ...next[idx], hubPageUrl: line.url };
+        } else {
+          const row: FeedDraft = {
+            countyKey: line.countyKey,
+            vendorId: line.vendorId,
+            sourceUrl: "",
+            hubPageUrl: line.url,
+            isEnabled: false,
+            civixCountyName: "",
+            preferOverSos: false,
+          };
+          byKey.set(key, next.length);
+          next.push(row);
+        }
+      }
+      return next;
+    });
+    return lines.length;
+  }
+
+  function applyBulkHubs() {
+    const lines = parseBulkCountyFeedLines(bulkHubText);
+    if (!lines.length) {
+      setMsg(
+        "No valid hub lines. Each line: county_key,process_id,https://hub-page-url (election results listing page, not the PDF).",
+      );
+      return;
+    }
+    mergeBulkHubLines(lines);
+    setBulkHubText("");
+    setMsg(`Set hub page URL on ${lines.length} row(s) — click “Discover feed URLs from hubs” then Save county feeds.`);
+  }
+
+  async function discoverFeedUrlsFromAllHubs() {
+    const items = feeds
+      .map((r, idx) => ({
+        countyKey: r.countyKey.toLowerCase().trim(),
+        vendorId: r.vendorId,
+        hubUrl: r.hubPageUrl.trim(),
+        html: (hubHtmlDrafts[idx] ?? "").trim() || undefined,
+        rowIdx: idx,
+      }))
+      .filter((x) => x.countyKey && x.hubUrl);
+    if (!items.length) {
+      setMsg("No rows with both a county and a hub page URL. Bulk-add hubs or enter them in the table first.");
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      const { results, okCount, total } = await discoverCountyFeedUrlsBulk({
+        items: items.map(({ countyKey, vendorId, hubUrl, html }) => ({ countyKey, vendorId, hubUrl, html })),
+      });
+      const failures: string[] = [];
+      setFeeds((prev) => {
+        const next = [...prev];
+        for (let i = 0; i < items.length; i++) {
+          const hit = results[i];
+          const { rowIdx, countyKey } = items[i];
+          if (!hit) continue;
+          if (hit.url) {
+            next[rowIdx] = patchFeedRow(next[rowIdx], { sourceUrl: hit.url });
+          } else {
+            failures.push(`${countyKey}: ${hit.error ?? hit.message ?? "no match"}`);
+          }
+        }
+        return next;
+      });
+      const skipNote =
+        hubDiscoveryCountyKeys.length && items.some((it) => !hubDiscoveryCountyKeys.includes(it.countyKey))
+          ? ` Auto-discovery profiles: ${hubDiscoveryCountyKeys.join(", ")} — other counties need a feed URL set manually.`
+          : "";
+      if (okCount > 0) {
+        setMsg(
+          `Discovered feed URL for ${okCount} of ${total} hub row(s).${failures.length ? ` Failed: ${failures.slice(0, 4).join("; ")}${failures.length > 4 ? "…" : ""}` : ""} Click Save county feeds to persist.${skipNote}`,
+        );
+      } else {
+        setMsg(
+          failures.length
+            ? `No feed URLs discovered. ${failures.slice(0, 5).join("; ")}${failures.length > 5 ? "…" : ""}${skipNote}`
+            : `No feed URLs discovered.${skipNote}`,
+        );
+      }
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Bulk discover failed");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function onCopyCountyFeeds(saveAfterCopy: boolean) {
     const fromId = copyFromElectionId.trim();
@@ -305,27 +415,19 @@ export function ElectionSettingsDetail({
   }
 
   function applyBulk() {
-    const lines = bulkText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    const added: FeedDraft[] = [];
-    for (const line of lines) {
-      const parts = line.split(",").map((p) => p.trim());
-      if (parts.length < 3) continue;
-      const [countyKey, vendorId, ...rest] = parts;
-      const sourceUrl = rest.join(",").trim();
-      if (!countyKey || !vendorId || !sourceUrl) continue;
-      added.push({
-        countyKey: countyKey.toLowerCase(),
-        vendorId,
-        sourceUrl,
-        hubPageUrl: "",
-        isEnabled: hasFeedUrl({ sourceUrl }),
-        civixCountyName: "",
-        preferOverSos: false,
-      });
-    }
+    const parsed = parseBulkCountyFeedLines(bulkText);
+    const added: FeedDraft[] = parsed.map((line) => ({
+      countyKey: line.countyKey,
+      vendorId: line.vendorId,
+      sourceUrl: line.url,
+      hubPageUrl: "",
+      isEnabled: hasFeedUrl({ sourceUrl: line.url }),
+      civixCountyName: "",
+      preferOverSos: false,
+    }));
     if (!added.length) {
       setMsg(
-        "No valid bulk lines. Each line needs three parts: county_key,process_id,https://feed-url (see Bulk add help). Hub page URLs are not set via bulk — add those in the table.",
+        "No valid bulk lines. Each line needs three parts: county_key,process_id,https://feed-url (see Bulk add help). Use bulk hub pages below for listing URLs.",
       );
       return;
     }
@@ -562,10 +664,11 @@ export function ElectionSettingsDetail({
               <strong>not</strong> Civix endpoints — the only Civix-related path in this app is statewide <strong>SOS</strong>{" "}
               above. Choose the county from the dropdown (stored as the ingest <code>county_key</code> slug).{" "}
               <strong>Match name</strong> is optional — leave blank to align county rows to Civix using the slug (e.g.{" "}
-              <code>travis</code> → TRAVIS) when you also use SOS data. For counties with hub discovery (e.g. Dallas timed reports;
-              Harris Live Results → Election Cumulative Report), save a{" "}
-              <strong>hub page</strong> URL — each refresh resolves the feed link from that page before pulling data, then stores the
-              resolved URL in <strong>Feed URL</strong>.
+              <code>travis</code> → TRAVIS) when you also use SOS data. For counties with hub discovery (
+              {hubDiscoveryCountyKeys.length ? hubDiscoveryCountyKeys.join(", ") : "e.g. dallas, harris"}), paste election{" "}
+              <strong>hub page</strong> URLs (bulk or per row), run <strong>Discover feed URLs from hubs</strong>, then{" "}
+              <strong>Save county feeds</strong>. Ingest uses the saved <strong>Feed URL</strong> only — it does not re-fetch hubs on
+              refresh.
             </p>
             <p className="enr-muted" style={{ marginTop: 8 }}>
               Counties are listed <strong>A–Z</strong> by name (not by map/FIPS order).{" "}
@@ -937,10 +1040,74 @@ export function ElectionSettingsDetail({
               <button type="button" className="enr-primaryBtn" disabled={busy} onClick={() => void onSaveFeeds()}>
                 Save county feeds
               </button>
+              <button
+                type="button"
+                className="enr-secondaryBtn"
+                disabled={busy}
+                title="Fetch each hub page and fill Feed URL for rows that have a hub (Dallas/Harris profiles today)"
+                onClick={() => void discoverFeedUrlsFromAllHubs()}
+              >
+                Discover feed URLs from hubs
+              </button>
               <span className="enr-muted" style={{ fontSize: 13, alignSelf: "center" }}>
                 Required for feeds to survive restart — also written to <code>election-feed-configs.json</code> when the
                 main database is too large to flush immediately.
               </span>
+            </div>
+            <div className="enr-bulkAdd">
+              <h3 className="enr-bulkAdd__title">Bulk add hub pages</h3>
+              <p className="enr-muted">
+                Paste <strong>one hub per line</strong> — the election results <em>listing</em> page where file links appear (not the
+                PDF). Same format as bulk feeds, but column 3 is the <strong>Hub page</strong> URL. Updates existing rows or adds new
+                ones (feed URL can stay empty until you discover).
+              </p>
+              <p className="enr-bulkAdd__format">
+                <code>county_key</code>,<code>process_id</code>,<code>https://…hub…</code>
+              </p>
+              <pre className="enr-bulkAdd__examples" aria-hidden="true">
+                {`dallas,dallas-pdf,https://www.dallascountyvotes.org/election-results/
+harris,harris-pdf,https://www.harrisvotes.com/election-results/`}
+              </pre>
+              <label className="enr-field">
+                Hub lines
+                <textarea
+                  className="enr-textarea"
+                  rows={4}
+                  value={bulkHubText}
+                  onChange={(e) => setBulkHubText(e.target.value)}
+                  disabled={busy}
+                  placeholder={
+                    "dallas,dallas-pdf,https://www.dallascountyvotes.org/election-results/\n" +
+                    "harris,harris-pdf,https://www.harrisvotes.com/election-results/"
+                  }
+                />
+              </label>
+              <div className="enr-settings__actions" style={{ marginTop: 8 }}>
+                <button type="button" className="enr-primaryBtn" disabled={busy} onClick={applyBulkHubs}>
+                  Apply hubs to table
+                </button>
+                <button
+                  type="button"
+                  className="enr-secondaryBtn"
+                  disabled={busy}
+                  onClick={() => {
+                    const lines = parseBulkCountyFeedLines(bulkHubText);
+                    if (!lines.length) {
+                      setMsg("Paste hub lines first, or use Apply hubs to table.");
+                      return;
+                    }
+                    mergeBulkHubLines(lines);
+                    setBulkHubText("");
+                    void discoverFeedUrlsFromAllHubs();
+                  }}
+                >
+                  Apply hubs &amp; discover feed URLs
+                </button>
+              </div>
+              <p className="enr-muted" style={{ marginTop: 8, fontSize: 13 }}>
+                After discovery, click <strong>Save county feeds</strong>. Use per-row <strong>Fill URL</strong> or pasted HTML when a
+                hub fetch is blocked (WAF).
+              </p>
             </div>
             <div className="enr-bulkAdd">
               <h3 className="enr-bulkAdd__title">Bulk add county feeds</h3>
@@ -975,9 +1142,9 @@ export function ElectionSettingsDetail({
                   <dt>Feed URL</dt>
                   <dd>
                     Full <code>https://</code> link to the file or live results page the ingest pulls from — PDF, HTML
-                    page URL, or Clarity <code>summary.zip</code>. This is <strong>Feed URL</strong> in the table, not{" "}
-                    <strong>Hub page</strong> (hub URLs must be added per row after bulk). Rows turn <strong>On</strong>{" "}
-                    automatically when a URL is present.
+                    page URL, or Clarity <code>summary.zip</code>. This is <strong>Feed URL</strong> in the table — use{" "}
+                    <strong>Bulk add hub pages</strong> above for listing pages. Rows turn <strong>On</strong> automatically when a
+                    feed URL is present.
                   </dd>
                 </div>
               </dl>
@@ -1017,7 +1184,7 @@ montgomery,montgomery-eresults-html,https://elections.mctx.org/...`}
                 />
               </label>
               <button type="button" className="enr-primaryBtn" disabled={busy} onClick={applyBulk}>
-                Apply bulk to table
+                Apply feed URLs to table
               </button>
               <p className="enr-muted" style={{ marginTop: 8, fontSize: 13 }}>
                 After applying, click <strong>Save county feeds</strong> so URLs survive a server restart.

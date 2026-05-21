@@ -1,4 +1,9 @@
-import { decodeBase64Json, decodeUploadPayload, encodeBase64Json } from "./b64.mjs";
+import { decodeUploadPayload, encodeBase64Json } from "./b64.mjs";
+import {
+  CIVIX_RACE_SECTION_KEYS,
+  decodeCivixRaceSections,
+  encodeCivixRaceSections,
+} from "./civixSosRaces.mjs";
 import {
   buildCivixNameToCountyKeyMap,
   getLatestCountyRows,
@@ -79,7 +84,8 @@ function applyVoteRowToCell(cell, row, forceCounty) {
  * SD4 continues to use mergeSd4CountyOverridesIntoCivix in createApiApp.mjs.
  */
 export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPayload, countyDoc) {
-  if (!electionPayload?.Districted || !countyDoc?.upload) return { electionPayload, countyDoc };
+  const hasRaceSection = CIVIX_RACE_SECTION_KEYS.some((k) => electionPayload?.[k]);
+  if (!hasRaceSection || !countyDoc?.upload) return { electionPayload, countyDoc };
 
   const links = await listCountySosRaceLinks(String(electionId));
   if (!links.length) return { electionPayload, countyDoc };
@@ -109,11 +115,17 @@ export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPa
     linksBySosRace.set(l.sosRaceId, list);
   }
 
-  const districted = decodeBase64Json(electionPayload.Districted);
+  const decodedSections = decodeCivixRaceSections(electionPayload);
   const countyRoot = decodeUploadPayload(countyDoc);
-  const races = districted?.Races ?? [];
+  const races = [];
+  for (const sectionKey of CIVIX_RACE_SECTION_KEYS) {
+    const section = decodedSections[sectionKey];
+    for (const race of section?.Races ?? []) {
+      races.push({ sectionKey, race });
+    }
+  }
 
-  for (const race of races) {
+  for (const { race } of races) {
     const raceId = String(race.id ?? "");
     const raceName = String(race.N ?? "");
     if (!raceId || !Array.isArray(race.Candidates) || !race.Candidates.length) continue;
@@ -214,7 +226,7 @@ export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPa
   }
 
   return {
-    electionPayload: { ...electionPayload, Districted: encodeBase64Json(districted) },
+    electionPayload: encodeCivixRaceSections(electionPayload, decodedSections),
     countyDoc: { ...countyDoc, upload: encodeBase64Json(countyRoot) },
   };
 }

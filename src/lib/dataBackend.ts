@@ -338,14 +338,53 @@ export interface DiscoverCountyFeedUrlResult {
   message?: string;
 }
 
+export interface DiscoverCountyFeedUrlBulkItemResult extends DiscoverCountyFeedUrlResult {
+  countyKey: string;
+  vendorId?: string;
+  ok: boolean;
+  error?: string;
+}
+
+export async function fetchHubDiscoveryCountyKeys(): Promise<{ countyKeys: string[] }> {
+  const r = await fetch("/api/county-feed/hub-discovery-counties", { cache: "no-store" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json() as Promise<{ countyKeys: string[] }>;
+}
+
+export async function discoverCountyFeedUrlsBulk(body: {
+  items: Array<{ hubUrl: string; countyKey: string; vendorId?: string; html?: string }>;
+}): Promise<{ results: DiscoverCountyFeedUrlBulkItemResult[]; okCount: number; total: number }> {
+  const r = await fetch("/api/county-feed/discover-urls-bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const j = (await r.json().catch(() => ({}))) as {
+    results?: DiscoverCountyFeedUrlBulkItemResult[];
+    okCount?: number;
+    total?: number;
+    error?: string;
+  };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return {
+    results: j.results ?? [],
+    okCount: j.okCount ?? 0,
+    total: j.total ?? j.results?.length ?? 0,
+  };
+}
+
 /** Match preferred results links on a county election hub page (server fetch or optional pasted HTML for WAF-blocked sites). */
 export type CountyVoteSource = "sos" | "county_feed" | "manual";
 
 export interface CountyRaceMappingPayload {
   electionId?: string;
+  /** REP/DEM when inferred from election label/id (e.g. 58315 Republican runoff). */
+  electionParty?: string | null;
   sosRaces: Array<{
     id: string;
     name: string;
+    /** Civix section: Federal, StateWide, Districted, StateWideQ */
+    section?: string;
     candidateCount: number;
     candidates: Array<{ id: string; name: string; party: string }>;
   }>;

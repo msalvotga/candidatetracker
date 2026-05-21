@@ -6,7 +6,11 @@ import { fetchHarrisSd4Summary } from "./lib/harrisVotes.mjs";
 import { fetchMontgomeryEresultsSd4Summary } from "./lib/montgomeryEresults.mjs";
 import { fetchChambersSd4Summary } from "./lib/chambersReport.mjs";
 import { runCountyFeedFetch } from "./lib/countyFeedHandlers.mjs";
-import { countyHasHubDiscoveryProfile, discoverCountyFeedUrlFromHub } from "./lib/countyHubDiscovery.mjs";
+import {
+  countyKeysWithHubDiscoveryProfile,
+  discoverCountyFeedUrlFromHub,
+  discoverCountyFeedUrlsBulk,
+} from "./lib/countyHubDiscovery.mjs";
 import { getSd4HistoricalPayloadForApi } from "./lib/sd4HistoricalPrecinct.mjs";
 import { buildElectionFileFromCountyFeeds } from "./lib/electionFileFromCountyResults.mjs";
 import { decodeBase64Json, decodeUploadPayload, encodeBase64Json } from "./lib/b64.mjs";
@@ -68,7 +72,6 @@ import {
   listIngestVendors,
   replaceElectionFeedSourcesForElection,
   flushPendingDatabasePersist,
-  updateElectionFeedSourceUrl,
   upsertElectionSourceConfig,
   setDefaultElectionCatalog,
   updateManualElection,
@@ -80,6 +83,8 @@ import {
 } from "./db.mjs";
 import { catalogIdForSourceConfig, resolveDefaultCatalogId } from "./lib/electionCatalogId.mjs";
 import { buildCountyRaceMappingView } from "./lib/countyRaceMappingView.mjs";
+import { collectCivixSosRaces } from "./lib/civixSosRaces.mjs";
+import { inferElectionPartyFromConfig } from "./lib/countySosRaceMatch.mjs";
 import { mergeLinkedCountyOverridesIntoCivix } from "./lib/mergeLinkedCountyIntoCivix.mjs";
 
 /** Only civix election wired for full ingest + live merge in this deployment. */
@@ -710,30 +715,16 @@ export function createApiApp() {
         totalSteps,
       });
       try {
-        let effectiveUrl = String(feed.sourceUrl ?? "").trim();
-        const hubPage = String(feed.hubPageUrl ?? "").trim();
-        let hubSuffix = "";
-        if (hubPage && countyHasHubDiscoveryProfile(ck)) {
-          setIngestProgress({
-            electionId: String(electionId),
-            phase: "county",
-            countyKey: ck,
-            detail: `Discovering feed URL for ${countyLabel}…`,
-            step,
-            totalSteps,
-          });
-          try {
-            const disc = await discoverCountyFeedUrlFromHub(hubPage, { countyKey: ck });
-            if (disc.url) {
-              effectiveUrl = disc.url;
-              await updateElectionFeedSourceUrl(String(electionId), feed.id, disc.url);
-              hubSuffix = `; hub → ${disc.matchedLabel ?? disc.matchedStage ?? "matched link"}`;
-            } else if (disc.message) {
-              hubSuffix = `; hub discovery: ${disc.message}`;
-            }
-          } catch (e) {
-            hubSuffix = `; hub discovery failed: ${String(e?.message || e)}`;
-          }
+        const effectiveUrl = String(feed.sourceUrl ?? "").trim();
+        if (!effectiveUrl) {
+          const hubPage = String(feed.hubPageUrl ?? "").trim();
+          const msg = hubPage
+            ? "Feed URL is empty — use “Discover from hubs” in election settings (hub page is saved but not resolved on ingest)."
+            : "Feed URL is empty — set a feed URL or hub page in election settings.";
+          result.errors.push(`${label}: ${msg}`);
+          result.counties[ck] = { inserted: 0 };
+          await appendSourceImportLog({ sourceKey: sourceLogKey(ck), ok: false, message: msg });
+          continue;
         }
 
         const seg = await runCountyFeedFetch(
@@ -749,7 +740,7 @@ export function createApiApp() {
         await appendSourceImportLog({
           sourceKey: sourceLogKey(ck),
           ok: true,
-          message: `OK: ${n} rows (${vendor.displayName})${reconNote}${hubSuffix}`,
+          message: `OK: ${n} rows (${vendor.displayName})${reconNote}`,
         });
       } catch (e) {
         const msg = String(e?.message || e);
@@ -1162,9 +1153,15 @@ export function createApiApp() {
       const bundle = cfg.sosCountyInfoUrl
         ? await fetchCivixElectionBundleWithOverrides(num, { countyInfoUrl: cfg.sosCountyInfoUrl })
         : await fetchCivixElectionBundle(num);
-      const districted = decodeBase64Json(bundle.election.Districted);
-      const sosRaces = districted?.Races ?? [];
-      const view = await buildCountyRaceMappingView(electionId, sosRaces);
+      const sosRaces = collectCivixSosRaces(bundle.election);
+      const electionParty = inferElectionPartyFromConfig({
+        electionId: cfg.electionId ?? electionId,
+        label: cfg.label,
+      });
+      const view = await buildCountyRaceMappingView(electionId, sosRaces, {
+        electionParty,
+        electionLabel: cfg.label,
+      });
       res.json({ electionId, ...view });
     } catch (e) {
       console.error(e);
@@ -1256,6 +1253,10 @@ export function createApiApp() {
     }
   });
 
+  app.get("/api/county-feed/hub-discovery-counties", (_req, res) => {
+    res.json({ countyKeys: countyKeysWithHubDiscoveryProfile() });
+  });
+
   /** Resolve a county results file URL from an election hub HTML page (county-specific link matching). */
   app.post("/api/county-feed/discover-url", async (req, res) => {
     try {
@@ -1270,6 +1271,28 @@ export function createApiApp() {
     } catch (e) {
       console.error(e);
       res.status(400).json({ error: String(e?.message || e) });
+    }
+  });
+
+  /** Bulk-resolve feed URLs from hub pages (settings workflow; not run during ingest). */
+  app.post("/api/county-feed/discover-urls-bulk", async (req, res) => {
+    try {
+      const items = req.body?.items;
+      if (!Array.isArray(items) || !items.length) {
+        return res.status(400).json({ error: "body.items must be a non-empty array" });
+      }
+      const normalized = items.map((item) => ({
+        countyKey: String(item?.countyKey ?? "").trim().toLowerCase(),
+        vendorId: item?.vendorId != null ? String(item.vendorId).trim() : undefined,
+        hubUrl: String(item?.hubUrl ?? "").trim(),
+        html: item?.html != null && String(item.html).trim() ? String(item.html) : undefined,
+      }));
+      const results = await discoverCountyFeedUrlsBulk(normalized);
+      const okCount = results.filter((r) => r.ok).length;
+      res.json({ results, okCount, total: results.length });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
     }
   });
 

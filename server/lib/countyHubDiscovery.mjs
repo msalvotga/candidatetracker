@@ -48,12 +48,65 @@ const PROFILES = /** @type {Record<string, DiscoveryStage[]>} */ ({
   harris: HARRIS_STAGES,
 });
 
-/** True when ingest/UI should run hub-page link discovery for this county slug. */
+/** True when hub-page link discovery is configured for this county slug. */
 export function countyHasHubDiscoveryProfile(countyKey) {
   const k = String(countyKey ?? "")
     .trim()
     .toLowerCase();
   return !!(k && PROFILES[k]?.length);
+}
+
+/** County slugs with hub discovery profiles (for UI hints). */
+export function countyKeysWithHubDiscoveryProfile() {
+  return Object.keys(PROFILES);
+}
+
+/**
+ * Resolve feed URLs from hub pages (settings-time bulk; not used during ingest).
+ * @param {{ countyKey: string, hubUrl: string, vendorId?: string, html?: string }[]} items
+ */
+export async function discoverCountyFeedUrlsBulk(items) {
+  const results = [];
+  for (const item of items) {
+    const countyKey = String(item.countyKey ?? "")
+      .trim()
+      .toLowerCase();
+    const hubUrl = String(item.hubUrl ?? "").trim();
+    const vendorId = item.vendorId != null ? String(item.vendorId).trim() : undefined;
+    const html = item.html != null && String(item.html).trim() ? String(item.html) : undefined;
+    if (!countyKey || !hubUrl) {
+      results.push({
+        countyKey,
+        vendorId,
+        url: null,
+        ok: false,
+        message: "countyKey and hubUrl are required",
+      });
+      continue;
+    }
+    try {
+      const disc = await discoverCountyFeedUrlFromHub(hubUrl, { countyKey, html });
+      results.push({
+        countyKey,
+        vendorId,
+        url: disc.url,
+        ok: !!disc.url,
+        matchedStage: disc.matchedStage,
+        matchedLabel: disc.matchedLabel,
+        linkText: disc.linkText,
+        message: disc.message,
+      });
+    } catch (e) {
+      results.push({
+        countyKey,
+        vendorId,
+        url: null,
+        ok: false,
+        error: String(e?.message || e),
+      });
+    }
+  }
+  return results;
 }
 
 function normalizeFetchUrl(hubUrl) {

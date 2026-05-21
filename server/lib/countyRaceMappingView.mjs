@@ -5,13 +5,45 @@ import {
   listCountySosRaceLinks,
   listCountySosRaceVoteSources,
 } from "../db.mjs";
-import { suggestSosRaceForCountyContest } from "./countySosRaceMatch.mjs";
+import {
+  extractContestParty,
+  inferElectionPartyFromConfig,
+  suggestSosRaceForCountyContest,
+} from "./countySosRaceMatch.mjs";
+
+/**
+ * @param {Array<{ partyName?: string }>} rows
+ * @returns {import('./countySosRaceMatch.mjs').PartyCode | null}
+ */
+function dominantCountyPartyFromRows(rows) {
+  const counts = /** @type {Record<string, number>} */ ({});
+  for (const row of rows ?? []) {
+    const p = String(row.partyName ?? "")
+      .trim()
+      .toUpperCase();
+    if (!p || p === "—") continue;
+    counts[p] = (counts[p] ?? 0) + 1;
+  }
+  let best = null;
+  let n = 0;
+  for (const [p, c] of Object.entries(counts)) {
+    if (c > n) {
+      best = p;
+      n = c;
+    }
+  }
+  return best === "REP" || best === "DEM" || best === "LIB" || best === "IND" || best === "GRN" ? best : null;
+}
 
 /**
  * @param {string} electionId
  * @param {Array<{ id: string|number, N?: string, Candidates?: unknown[] }>} sosRaces
+ * @param {{ electionParty?: import('./countySosRaceMatch.mjs').PartyCode | null, electionLabel?: string }} [options]
  */
-export async function buildCountyRaceMappingView(electionId, sosRaces) {
+export async function buildCountyRaceMappingView(electionId, sosRaces, options = {}) {
+  const electionParty =
+    options.electionParty ??
+    inferElectionPartyFromConfig({ electionId, label: options.electionLabel });
   const [byCivixName, links, manualVotes, voteSources, civixToCountyKey] = await Promise.all([
     getLatestCountyRows(String(electionId)),
     listCountySosRaceLinks(String(electionId)),
@@ -31,32 +63,46 @@ export async function buildCountyRaceMappingView(electionId, sosRaces) {
 
   for (const [civixName, rows] of Object.entries(byCivixName)) {
     const countyKey = civixToCountyKey[civixName] ?? civixName.toLowerCase().replace(/\s+county$/i, "").replace(/\s+/g, "");
+    const byContest = new Map();
     for (const row of rows ?? []) {
       const contestName = String(row.contestName ?? "").trim();
       if (!contestName) continue;
+      const list = byContest.get(contestName) ?? [];
+      list.push(row);
+      byContest.set(contestName, list);
+    }
+
+    for (const [contestName, contestRows] of byContest) {
       const lk = linkKey(countyKey, contestName);
       const link = linkByContest.get(lk);
-      const entry = {
-        countyKey,
-        civixCountyName: civixName,
-        contestName,
-        choiceName: String(row.choiceName ?? ""),
-        partyName: String(row.partyName ?? ""),
-        earlyVotes: Number(row.earlyVotes ?? 0),
-        electionDayVotes: Number(row.electionDayVotes ?? 0),
-        totalVotes: Number(row.totalVotes ?? 0),
-        percentOfVotes: String(row.percentOfVotes ?? ""),
-      };
-      if (link) {
-        linkedCountyRows.push({ ...entry, sosRaceId: link.sosRaceId, sosRaceName: link.sosRaceName, linkType: link.linkType });
-      } else {
-        const suggestion = suggestSosRaceForCountyContest(sosRaces, contestName);
-        unlinked.push({
-          ...entry,
-          suggestedSosRaceId: suggestion?.race?.id != null ? String(suggestion.race.id) : "",
-          suggestedSosRaceName: suggestion?.race?.N != null ? String(suggestion.race.N) : "",
-          suggestedScore: suggestion?.score ?? 0,
-        });
+      const countyParty =
+        extractContestParty(contestName) || dominantCountyPartyFromRows(contestRows);
+      const suggestion = link
+        ? null
+        : suggestSosRaceForCountyContest(sosRaces, contestName, { electionParty, countyParty });
+
+      for (const row of contestRows) {
+        const entry = {
+          countyKey,
+          civixCountyName: civixName,
+          contestName,
+          choiceName: String(row.choiceName ?? ""),
+          partyName: String(row.partyName ?? ""),
+          earlyVotes: Number(row.earlyVotes ?? 0),
+          electionDayVotes: Number(row.electionDayVotes ?? 0),
+          totalVotes: Number(row.totalVotes ?? 0),
+          percentOfVotes: String(row.percentOfVotes ?? ""),
+        };
+        if (link) {
+          linkedCountyRows.push({ ...entry, sosRaceId: link.sosRaceId, sosRaceName: link.sosRaceName, linkType: link.linkType });
+        } else {
+          unlinked.push({
+            ...entry,
+            suggestedSosRaceId: suggestion?.race?.id != null ? String(suggestion.race.id) : "",
+            suggestedSosRaceName: suggestion?.race?.N != null ? String(suggestion.race.N) : "",
+            suggestedScore: suggestion?.score ?? 0,
+          });
+        }
       }
     }
   }
@@ -65,6 +111,7 @@ export async function buildCountyRaceMappingView(electionId, sosRaces) {
     sosRaces: (sosRaces ?? []).map((r) => ({
       id: String(r.id ?? ""),
       name: String(r.N ?? ""),
+      section: String(r.section ?? ""),
       candidateCount: Array.isArray(r.Candidates) ? r.Candidates.length : 0,
       candidates: (r.Candidates ?? []).map((c) => ({
         id: String(c.ID ?? ""),
@@ -77,7 +124,8 @@ export async function buildCountyRaceMappingView(electionId, sosRaces) {
     voteSources,
     unlinked,
     linkedCountyRows,
+    electionParty: electionParty ?? null,
     note:
-      "County-only contests (not on the SOS ballot) stay in the unlinked list until you link them to an SOS race or ignore them. Linked contests honor the vote source: SOS, county feed, or manual entry.",
+      "SOS races include federal, statewide, district, and statewide proposition contests from Civix. Suggestions honor REP/DEM (and similar) in county contest names and your election’s party (e.g. Republican Primary Runoff). Click Link to apply.",
   };
 }
