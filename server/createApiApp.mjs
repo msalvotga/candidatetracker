@@ -1542,32 +1542,38 @@ export function createApiApp() {
     }
   }
 
-  /** POST avoids Render static rewrites truncating long path tokens. */
-  app.post("/api/election-data", async (req, res) => {
-    const id = req.body?.catalogId;
+  function catalogIdFromElectionDataRequest(req) {
+    if (typeof req.body?.catalogId === "string") return req.body.catalogId;
+    if (typeof req.query.catalogId === "string") return req.query.catalogId;
+    if (typeof req.query.id === "string") return req.query.id;
+    if (typeof req.query.token === "string") {
+      try {
+        return decodeCatalogIdFromPath(req.query.token);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  async function handleElectionDataRequest(req, res) {
+    const id = catalogIdFromElectionDataRequest(req);
     if (typeof id !== "string" || !id.includes(":")) {
-      return res.status(400).json({ error: "Body catalogId must be like civix:…, manual:…, or election:…" });
+      return res.status(400).json({
+        error: "Pass catalogId (e.g. civix:56181) as ?catalogId=… or POST JSON { catalogId }",
+        hint: "Render static rewrites often drop POST bodies — prefer GET ?catalogId=",
+      });
     }
     return respondElectionByCatalogId(id, res);
-  });
+  }
 
-  /** GET + token for direct API access (optional). */
+  app.get("/api/election-data", handleElectionDataRequest);
+  app.post("/api/election-data", handleElectionDataRequest);
+
+  /** Base64url token in path (direct API access only). */
   app.get("/api/election-data/:token", async (req, res) => {
     try {
       const id = decodeCatalogIdFromPath(String(req.params.token ?? ""));
-      return respondElectionByCatalogId(id, res);
-    } catch {
-      return res.status(400).json({ error: "Invalid election-data token" });
-    }
-  });
-
-  app.get("/api/election-data", async (req, res) => {
-    const token = req.query.token;
-    if (typeof token !== "string") {
-      return res.status(400).json({ error: "Query token required, or POST { catalogId }" });
-    }
-    try {
-      const id = decodeCatalogIdFromPath(token);
       return respondElectionByCatalogId(id, res);
     } catch {
       return res.status(400).json({ error: "Invalid election-data token" });

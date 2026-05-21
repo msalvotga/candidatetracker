@@ -86,12 +86,10 @@ export function civixListToOptions(items: CivixElectionListItem[]): ElectionOpti
 }
 
 export async function loadElectionFromBackend(catalogId: string, catalogLabel: string): Promise<LoadedElection> {
-  const r = await fetch("/api/election-data", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    cache: "no-store",
-    body: JSON.stringify({ catalogId }),
-  });
+  const r = await fetch(
+    `/api/election-data?${new URLSearchParams({ catalogId })}`,
+    { cache: "no-store" },
+  );
   if (!r.ok) throw new Error(`HTTP ${r.status} loading ${catalogId}`);
   const body = (await r.json()) as
     | { provider: "manual"; electionFile: ElectionFile }
