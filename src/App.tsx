@@ -18,9 +18,8 @@ import { ReportingRibbon } from "./components/ReportingRibbon";
 import { RaceSummary } from "./components/RaceSummary";
 import { CountyBreakdown } from "./components/CountyBreakdown";
 import { SettingsScreen } from "./components/SettingsScreen";
-
-/** Matches server default Civix election — used so the initial dropdown choice stays predictable when the catalog lists many elections. */
-const PREFERRED_CIVIX_CATALOG_ID = "civix:56181";
+import { EV_ROSTER_ENABLED } from "./lib/featureFlags";
+import { EvRosterScreen } from "./components/EvRosterScreen";
 
 const OFFICE_ORDER: OfficeType[] = [
   "FEDERAL OFFICES",
@@ -43,7 +42,7 @@ function racesForTab(election: LoadedElection | undefined, tab: OfficeType | nul
 }
 
 export function App() {
-  const [screen, setScreen] = useState<"dashboard" | "settings">("dashboard");
+  const [screen, setScreen] = useState<"dashboard" | "settings" | "ev-roster">("dashboard");
   const [useBackend, setUseBackend] = useState<boolean | null>(null);
   const [catalogRefresh, setCatalogRefresh] = useState(0);
 
@@ -65,6 +64,10 @@ export function App() {
   const bumpCatalog = useCallback(() => setCatalogRefresh((n) => n + 1), []);
 
   useEffect(() => {
+    if (!EV_ROSTER_ENABLED && screen === "ev-roster") setScreen("dashboard");
+  }, [screen]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       setListLoading(true);
@@ -78,19 +81,24 @@ export function App() {
           setElectionOptions([]);
           setSelectedElectionId(null);
           setLoadError(
-            "Local election API is not reachable at /api/health. From the project root run npm run dev (Vite serves /api in-process). If this persists, check the terminal for server errors.",
+            "Local election API is not reachable. From the project folder run npm run server (wait for “Database ready”), then npm run dev -- --mode proxy — or run npm run dev:all once. Hard-refresh this page.",
           );
           return;
         }
 
-        const raw = backendOk
-          ? await fetchCatalogFromBackend()
-          : civixListToOptions(await listCivixElections());
-        const options = raw;
+        let options: ElectionOption[];
+        let defaultCatalogId: string | null = null;
+        if (backendOk) {
+          const catalog = await fetchCatalogFromBackend();
+          options = catalog.options;
+          defaultCatalogId = catalog.defaultCatalogId;
+        } else {
+          options = civixListToOptions(await listCivixElections());
+        }
         if (cancelled) return;
         setElectionOptions(options);
         const preferred =
-          options.find((o) => o.catalogId === PREFERRED_CIVIX_CATALOG_ID) ??
+          (defaultCatalogId && options.find((o) => o.catalogId === defaultCatalogId)) ??
           options.find((o) => o.provider === "civix") ??
           options[0];
         if (preferred) setSelectedElectionId(preferred.catalogId);
@@ -198,7 +206,7 @@ export function App() {
         });
     };
     poll();
-    const id = window.setInterval(poll, 1000);
+    const id = window.setInterval(poll, 5000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
@@ -332,6 +340,14 @@ export function App() {
 
   const backendLabel = useBackend === null ? "…" : useBackend ? "API + Civix merge" : "Browser only (Civix)";
 
+  if (screen === "ev-roster" && EV_ROSTER_ENABLED) {
+    return (
+      <div className="enr-app">
+        <EvRosterScreen onBack={() => setScreen("dashboard")} />
+      </div>
+    );
+  }
+
   if (screen === "settings") {
     return (
       <div className="enr-app">
@@ -373,6 +389,11 @@ export function App() {
           <button type="button" className="enr-navlink is-active" onClick={() => setView("race")}>
             Home
           </button>
+          {EV_ROSTER_ENABLED ? (
+            <button type="button" className="enr-navlink" onClick={() => setScreen("ev-roster")}>
+              Early voting rosters
+            </button>
+          ) : null}
           <button type="button" className="enr-navlink" onClick={() => setScreen("settings")}>
             Settings
           </button>

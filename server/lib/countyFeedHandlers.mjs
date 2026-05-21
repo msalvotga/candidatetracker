@@ -3,11 +3,21 @@ import { fetchHarrisSd4Summary } from "./harrisVotes.mjs";
 import { fetchMontgomeryEresultsSd4Summary } from "./montgomeryEresults.mjs";
 import { fetchChambersSd4Summary } from "./chambersReport.mjs";
 import { fetchDallasElectionwarePdfAllContests } from "./dallasReport.mjs";
+import { fetchCollinElectionwarePdfAllContests } from "./collinReport.mjs";
+import { fetchCameronCountyResultsPdf } from "./cameronReport.mjs";
+import { fetchHaysEgovlinkCumulativePdfAllContests } from "./haysReport.mjs";
+import { fetchMcLennanCivicplusCumulativePdfAllContests } from "./mclennanReport.mjs";
+import { fetchEllisLiveVoterTurnoutAllContests } from "./ellisLiveVoterTurnout.mjs";
 
 /** When a feed row was saved as "Other / custom", infer handler from county_key. */
 const COUNTY_FALLBACK_HANDLER_KEY = {
   harris: "harris_pdf",
   chambers: "chambers_pdf",
+  collin: "collin_electionware_pdf",
+  cameron: "cameron_pdf",
+  hays: "hays_egovlink_cumulative_pdf",
+  mclennan: "mclennan_civicplus_cumulative_pdf",
+  ellis: "ellis_livevoterturnout_html",
 };
 
 /**
@@ -70,6 +80,31 @@ export async function runCountyFeedFetch(feed, vendor) {
     case "dallas_pdf": {
       const summary = await fetchDallasElectionwarePdfAllContests(url);
       return { countyId, sourceUrl: summary.source.pdfUrl, rows: summary.rows };
+    }
+    case "collin_electionware_pdf": {
+      const summary = await fetchCollinElectionwarePdfAllContests(url);
+      return { countyId, sourceUrl: summary.source.pdfUrl, rows: summary.rows };
+    }
+    case "cameron_pdf": {
+      const summary = await fetchCameronCountyResultsPdf(url);
+      return {
+        countyId,
+        sourceUrl: summary.source.pdfUrl,
+        rows: summary.rows,
+        reconciliationOnly: Boolean(summary.reconciliationOnly),
+      };
+    }
+    case "hays_egovlink_cumulative_pdf": {
+      const summary = await fetchHaysEgovlinkCumulativePdfAllContests(url);
+      return { countyId, sourceUrl: summary.source.pdfUrl, rows: summary.rows };
+    }
+    case "mclennan_civicplus_cumulative_pdf": {
+      const summary = await fetchMcLennanCivicplusCumulativePdfAllContests(url);
+      return { countyId, sourceUrl: summary.source.pdfUrl, rows: summary.rows };
+    }
+    case "ellis_livevoterturnout_html": {
+      const summary = await fetchEllisLiveVoterTurnoutAllContests(url);
+      return { countyId, sourceUrl: summary.source.pageUrl, rows: summary.rows };
     }
     case "civix_sos":
       throw new Error("SOS / Civix is fetched separately; pick a county ingest process for county feeds.");

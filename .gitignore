@@ -8,6 +8,10 @@ dist
 .env.*
 !.env.example
 
+# Local runtime backups (machine-specific feeds / home default)
+server/data/election-feed-configs.json
+server/data/election-source-configs.json
+
 # SQLite (manual elections + future snapshots)
 server/data/*.db
 server/data/*.db-wal

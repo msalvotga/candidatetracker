@@ -35,7 +35,7 @@ const HARRIS_STAGES = /** @type {DiscoveryStage[]} */ ([
   },
 ]);
 
-function normalizeLinkText(s) {
+export function normalizeLinkText(s) {
   return String(s ?? "")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
@@ -110,12 +110,14 @@ export function extractAnchorsFromHtml(html, baseUrl) {
   return out;
 }
 
-async function fetchHtml(url) {
+export async function fetchHubPageHtml(url) {
   const res = await fetch(url, {
     headers: {
-      Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Cache-Control": "no-cache",
       "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 ElectionNightTracker/1",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     },
     redirect: "follow",
   });
@@ -207,7 +209,7 @@ export async function discoverCountyFeedUrlFromHub(hubUrl, options = {}) {
     html = pasted;
   } else {
     validateHubUrlForDiscoveryFetch(trimmed);
-    html = await fetchHtml(fetchUrl);
+    html = await fetchHubPageHtml(fetchUrl);
   }
 
   const links = extractAnchorsFromHtml(html, fetchUrl);

@@ -12,6 +12,10 @@ export async function ensureDb() {
   return backend().ensureDb();
 }
 
+export function isDatabaseLoaded() {
+  return backend().isDatabaseLoaded?.() ?? false;
+}
+
 export function getDbInfo() {
   return backend().getDbInfo();
 }
@@ -76,6 +80,38 @@ export async function getSd4MergePreferCountyFeedNameSet(electionId) {
   return backend().getSd4MergePreferCountyFeedNameSet(electionId);
 }
 
+export async function listCountySosRaceLinks(electionId) {
+  return backend().listCountySosRaceLinks(electionId);
+}
+
+export async function upsertCountySosRaceLink(electionId, link) {
+  return backend().upsertCountySosRaceLink(electionId, link);
+}
+
+export async function deleteCountySosRaceLink(electionId, countyKey, countyContestName) {
+  return backend().deleteCountySosRaceLink(electionId, countyKey, countyContestName);
+}
+
+export async function listCountySosManualVotes(electionId) {
+  return backend().listCountySosManualVotes(electionId);
+}
+
+export async function upsertCountySosManualVote(electionId, row) {
+  return backend().upsertCountySosManualVote(electionId, row);
+}
+
+export async function listCountySosRaceVoteSources(electionId) {
+  return backend().listCountySosRaceVoteSources(electionId);
+}
+
+export async function upsertCountySosRaceVoteSource(electionId, row) {
+  return backend().upsertCountySosRaceVoteSource(electionId, row);
+}
+
+export async function buildCivixNameToCountyKeyMap(electionId) {
+  return backend().buildCivixNameToCountyKeyMap(electionId);
+}
+
 export async function insertSosCandidateRows(payload) {
   return backend().insertSosCandidateRows(payload);
 }
@@ -108,6 +144,10 @@ export async function upsertElectionSourceConfig(payload) {
   return backend().upsertElectionSourceConfig(payload);
 }
 
+export async function setDefaultElectionCatalog(electionId) {
+  return backend().setDefaultElectionCatalog(electionId);
+}
+
 export async function listIngestVendors() {
   return backend().listIngestVendors();
 }
@@ -118,6 +158,11 @@ export async function listElectionFeedSources(electionId) {
 
 export async function replaceElectionFeedSourcesForElection(electionId, sources) {
   return backend().replaceElectionFeedSourcesForElection(electionId, sources);
+}
+
+export async function flushPendingDatabasePersist() {
+  const fn = backend().flushPendingDatabasePersist;
+  return typeof fn === "function" ? fn() : true;
 }
 
 export async function updateElectionFeedSourceUrl(electionId, feedId, sourceUrl) {
@@ -138,4 +183,88 @@ export async function appendSourceImportLog(payload) {
 
 export async function getSourceImportLogPayload(opts) {
   return backend().getSourceImportLogPayload(opts);
+}
+
+export async function listEvRosterConfigs() {
+  return backend().listEvRosterConfigs();
+}
+
+export async function upsertEvRosterConfig(payload) {
+  return backend().upsertEvRosterConfig(payload);
+}
+
+export async function saveEvRosterPull(payload, options) {
+  return backend().saveEvRosterPull(payload, options);
+}
+
+export async function mergeEvRosterPull(payload) {
+  return backend().mergeEvRosterPull(payload);
+}
+
+export async function dedupeEvRosterVotersKeepOldestDate(evrElectionId) {
+  return backend().dedupeEvRosterVotersKeepOldestDate(evrElectionId);
+}
+
+export async function rebuildEvRosterSummaryCacheForElection(evrElectionId) {
+  return backend().rebuildEvRosterSummaryCacheForElection(evrElectionId);
+}
+
+export async function clearEvRosterPullData() {
+  return backend().clearEvRosterPullData();
+}
+
+export async function listEvRosterVoters(evrElectionId, votingDate, options) {
+  return backend().listEvRosterVoters(evrElectionId, votingDate, options);
+}
+
+export async function listEvRosterPullDates(evrElectionId) {
+  return backend().listEvRosterPullDates(evrElectionId);
+}
+
+export async function listEvRosterPullDatesForElections(evrElectionIds) {
+  return backend().listEvRosterPullDatesForElections(evrElectionIds);
+}
+
+export async function listEvRosterVoterDatesForElections(evrElectionIds) {
+  return backend().listEvRosterVoterDatesForElections(evrElectionIds);
+}
+
+export async function getEvRosterAggregatedSummary(evrElectionIds, dateFrom, dateTo) {
+  return backend().getEvRosterAggregatedSummary(evrElectionIds, dateFrom, dateTo);
+}
+
+export async function getEvRosterPullPayload(evrElectionId, votingDate) {
+  return backend().getEvRosterPullPayload(evrElectionId, votingDate);
+}
+
+export async function listEvRosterCountySources(evrElectionId) {
+  return backend().listEvRosterCountySources(evrElectionId);
+}
+
+export async function upsertEvRosterCountySource(row) {
+  return backend().upsertEvRosterCountySource(row);
+}
+
+export async function syncEvRosterCountySourcesFromTurnout(evrElectionId, counties) {
+  return backend().syncEvRosterCountySourcesFromTurnout(evrElectionId, counties);
+}
+
+export async function getEvRosterExportRows(evrElectionId, votingDate) {
+  return backend().getEvRosterExportRows(evrElectionId, votingDate);
+}
+
+export async function getEvRosterCountyPullLog(evrElectionId, votingDate) {
+  return backend().getEvRosterCountyPullLog(evrElectionId, votingDate);
+}
+
+export async function getConfirmedEvRosterCountyNames(evrElectionId, votingDate) {
+  return backend().getConfirmedEvRosterCountyNames(evrElectionId, votingDate);
+}
+
+export async function recordEvRosterCountyPullResults(evrElectionId, votingDate, countyPullLog) {
+  return backend().recordEvRosterCountyPullResults(evrElectionId, votingDate, countyPullLog);
+}
+
+export async function confirmEvRosterCountyPull(evrElectionId, votingDate, countyName) {
+  return backend().confirmEvRosterCountyPull(evrElectionId, votingDate, countyName);
 }

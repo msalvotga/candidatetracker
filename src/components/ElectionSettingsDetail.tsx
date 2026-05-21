@@ -3,14 +3,18 @@ import {
   discoverCountyFeedUrl,
   fetchElectionFeedSources,
   forceRefreshAllSources,
+  startIngestStatusPoll,
   saveElectionFeedSources,
   updateElectionSourceConfig,
   type ElectionFeedSourceRow,
   type ElectionSourceConfig,
   type ImportLogPayload,
   type IngestProcess,
+  type IngestProgress,
   type SourceImportLatest,
 } from "../lib/dataBackend";
+import { IngestProgressStatus, IngestSpinner } from "./IngestProgressStatus";
+import { CountyRaceMappingSection } from "./CountyRaceMappingSection";
 import { TX_CIVIX_DEFAULT_COUNTYINFO_PREFIX, civixDefaultCountyInfoUrl } from "../lib/civix/urls";
 import { TEXAS_COUNTIES, TEXAS_COUNTY_KEY_SET } from "../lib/texasCounties";
 
@@ -35,14 +39,67 @@ type FeedDraft = Pick<
   "countyKey" | "vendorId" | "sourceUrl" | "hubPageUrl" | "isEnabled" | "civixCountyName" | "preferOverSos"
 >;
 
+function feedRowKey(r: FeedDraft) {
+  return `${r.countyKey.toLowerCase().trim()}|${r.vendorId}`;
+}
+
+function hasFeedUrl(r: Pick<FeedDraft, "sourceUrl">) {
+  return !!String(r.sourceUrl ?? "").trim();
+}
+
+function mapSourceToFeedDraft(s: ElectionFeedSourceRow): FeedDraft {
+  const sourceUrl = s.sourceUrl ?? "";
+  return {
+    countyKey: s.countyKey,
+    vendorId: s.vendorId,
+    sourceUrl,
+    hubPageUrl: s.hubPageUrl ?? "",
+    isEnabled: hasFeedUrl({ sourceUrl }),
+    civixCountyName: s.civixCountyName ?? "",
+    preferOverSos: !!s.preferOverSos,
+  };
+}
+
+function patchFeedRow(row: FeedDraft, patch: Partial<FeedDraft>): FeedDraft {
+  const next = { ...row, ...patch };
+  if ("sourceUrl" in patch) {
+    next.isEnabled = hasFeedUrl(next);
+  }
+  return next;
+}
+
+/** Bulk-add column 3: what to paste as the feed URL (not the hub page). */
+const BULK_FEED_URL_HINTS: Partial<Record<string, string>> = {
+  "harris-pdf": "Direct HTTPS link to the Harris cumulative results PDF.",
+  "clarity-enr-summary-zip":
+    "Clarity ENR page or direct link to summary.zip (ElectionSystems — imports all contests in the ZIP).",
+  "montgomery-eresults-html":
+    "Full browser URL from elections.mctx.org while the results page is loaded (not the Election Central landing page alone).",
+  "dallas-pdf": "Dallas Votes Electionware “Summary Results Report” PDF (final election night).",
+  "collin-pdf":
+    "Collin Electionware early-voting summary PDF, e.g. collincountytx.gov/.../early-voting-summary-report.pdf",
+  "cameron-pdf":
+    "Electionware summary PDF when posted, or SOS reconciliation PDF e.g. cameroncountytx.gov/.../P26-preliminary-reconciliation-REP.pdf",
+  "hays-pdf":
+    "Hays egovlink.com official cumulative PDF, e.g. …/Cumulative Results - Democratic Party - official.pdf (one PDF per party).",
+  "mclennan-pdf":
+    "McLennan CivicPlus cumulative PDF, e.g. tx-mclennancounty.civicplus.com/DocumentCenter/View/…/Republican-Party---Cumulative-Results-….pdf",
+  "ellis-enr-html":
+    "Ellis livevoterturnout ENR Index URL, e.g. livevoterturnout.com/ENR/ellistxenr/9/en/Index_9.html (use the address bar while results are showing).",
+  "chambers-pdf": "Chambers cumulative results PDF.",
+  "other-vendor": "Any URL to document the source (no automated ingest yet).",
+};
+
 export function ElectionSettingsDetail({
   cfg,
+  allElections,
   vendors,
   importLog,
   onBack,
   onSaved,
 }: {
   cfg: ElectionSourceConfig;
+  allElections: ElectionSourceConfig[];
   vendors: IngestProcess[];
   importLog: ImportLogPayload | null;
   onBack: () => void;
@@ -51,6 +108,8 @@ export function ElectionSettingsDetail({
   const feedDraftStorageKey = `enr:feed-draft:${cfg.electionId}`;
   const electionId = cfg.electionId;
   const [busy, setBusy] = useState(false);
+  const [forceRefreshing, setForceRefreshing] = useState(false);
+  const [ingestProgress, setIngestProgress] = useState<IngestProgress | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [label, setLabel] = useState(cfg.label);
   const [isEnabled, setIsEnabled] = useState(cfg.isEnabled);
@@ -62,6 +121,22 @@ export function ElectionSettingsDetail({
   /** Optional pasted page HTML when the hub cannot be fetched (e.g. WAF); not persisted. */
   const [hubHtmlDrafts, setHubHtmlDrafts] = useState<string[]>([]);
   const [bulkText, setBulkText] = useState("");
+  const [copyFromElectionId, setCopyFromElectionId] = useState("");
+  const [copyFeedsMode, setCopyFeedsMode] = useState<"replace" | "merge">("replace");
+  const [hideNoFeedUrl, setHideNoFeedUrl] = useState(true);
+
+  const visibleFeedIndices = useMemo(() => {
+    return feeds
+      .map((_, i) => i)
+      .filter((i) => !hideNoFeedUrl || hasFeedUrl(feeds[i]));
+  }, [feeds, hideNoFeedUrl]);
+
+  const hiddenNoUrlCount = useMemo(() => feeds.filter((r) => !hasFeedUrl(r)).length, [feeds]);
+
+  const copySourceOptions = useMemo(
+    () => allElections.filter((e) => e.electionId !== electionId).sort((a, b) => a.label.localeCompare(b.label, "en")),
+    [allElections, electionId],
+  );
 
   useEffect(() => {
     setLabel(cfg.label);
@@ -74,15 +149,7 @@ export function ElectionSettingsDetail({
 
   const reloadFeeds = useCallback(async () => {
     const { sources } = await fetchElectionFeedSources(electionId);
-    const mapped = sources.map((s) => ({
-      countyKey: s.countyKey,
-      vendorId: s.vendorId,
-      sourceUrl: s.sourceUrl,
-      hubPageUrl: s.hubPageUrl ?? "",
-      isEnabled: s.isEnabled,
-      civixCountyName: s.civixCountyName ?? "",
-      preferOverSos: !!s.preferOverSos,
-    }));
+    const mapped = sources.map(mapSourceToFeedDraft);
     setFeeds(mapped);
     try {
       localStorage.setItem(feedDraftStorageKey, JSON.stringify(mapped));
@@ -128,6 +195,65 @@ export function ElectionSettingsDetail({
     });
   }, [feeds.length]);
 
+  async function onCopyCountyFeeds(saveAfterCopy: boolean) {
+    const fromId = copyFromElectionId.trim();
+    if (!fromId) {
+      setMsg("Choose an election to copy county feeds from.");
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      const { sources } = await fetchElectionFeedSources(fromId);
+      const copied = sources.map(mapSourceToFeedDraft);
+      if (!copied.length) {
+        setMsg(`Election ${fromId} has no county feeds to copy.`);
+        return;
+      }
+      let next: FeedDraft[];
+      if (copyFeedsMode === "replace") {
+        next = copied;
+      } else {
+        const existingKeys = new Set(feeds.map(feedRowKey));
+        next = [...feeds, ...copied.filter((r) => !existingKeys.has(feedRowKey(r)))];
+      }
+      setFeeds(next);
+      setHubHtmlDrafts(next.map(() => ""));
+      if (saveAfterCopy) {
+        const saved = await saveElectionFeedSources(electionId, next);
+        setMsg(
+          saved.warning
+            ? `Copied ${copied.length} feed(s) from ${fromId} and saved. ${saved.warning}`
+            : `Copied ${copied.length} feed(s) from ${fromId} and saved.`,
+        );
+        onSaved();
+      } else {
+        setMsg(
+          `Copied ${copied.length} feed(s) from ${fromId} into the table (${copyFeedsMode === "replace" ? "replaced" : "merged"}). Click Save county feeds to persist.`,
+        );
+      }
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Copy county feeds failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function setDefaultCountyFeed(idx: number) {
+    const key = feeds[idx]?.countyKey?.toLowerCase().trim();
+    if (!key) {
+      setMsg("Select a county before setting a default feed.");
+      return;
+    }
+    setFeeds((prev) =>
+      prev.map((r, i) => ({
+        ...r,
+        preferOverSos: i === idx ? true : r.countyKey.toLowerCase().trim() === key ? false : r.preferOverSos,
+      })),
+    );
+    setMsg(null);
+  }
+
   async function onSaveElectionMeta() {
     setBusy(true);
     setMsg(null);
@@ -158,8 +284,12 @@ export function ElectionSettingsDetail({
     setBusy(true);
     setMsg(null);
     try {
-      await saveElectionFeedSources(electionId, feeds);
-      setMsg("Saved county feed list.");
+      const saved = await saveElectionFeedSources(electionId, feeds);
+      setMsg(
+        saved.warning
+          ? `Saved county feed list. ${saved.warning}`
+          : "Saved county feed list to the database.",
+      );
       try {
         localStorage.setItem(feedDraftStorageKey, JSON.stringify(feeds));
       } catch {
@@ -188,13 +318,15 @@ export function ElectionSettingsDetail({
         vendorId,
         sourceUrl,
         hubPageUrl: "",
-        isEnabled: true,
+        isEnabled: hasFeedUrl({ sourceUrl }),
         civixCountyName: "",
         preferOverSos: false,
       });
     }
     if (!added.length) {
-      setMsg("No valid bulk lines. Use: county_key,process_id,url (one per line).");
+      setMsg(
+        "No valid bulk lines. Each line needs three parts: county_key,process_id,https://feed-url (see Bulk add help). Hub page URLs are not set via bulk — add those in the table.",
+      );
       return;
     }
     setFeeds((prev) => [...prev, ...added]);
@@ -223,7 +355,7 @@ export function ElectionSettingsDetail({
         ...(pasted ? { html: pasted } : {}),
       });
       if (result.url) {
-        setFeeds((prev) => prev.map((r, i) => (i === rowIdx ? { ...r, sourceUrl: result.url! } : r)));
+        setFeeds((prev) => prev.map((r, i) => (i === rowIdx ? patchFeedRow(r, { sourceUrl: result.url! }) : r)));
         setMsg(
           `Filled feed URL from hub (${result.matchedLabel ?? result.matchedStage ?? "matched link"}).`,
         );
@@ -238,8 +370,13 @@ export function ElectionSettingsDetail({
   }
 
   async function onForce() {
-    setBusy(true);
+    setForceRefreshing(true);
     setMsg(null);
+    setIngestProgress({ detail: `Starting ingest for ${electionId}…` });
+    const stopPoll = startIngestStatusPoll((st) => {
+      if (st.progress) setIngestProgress(st.progress);
+      else if (st.running) setIngestProgress((prev) => prev ?? { detail: "Updating sources…" });
+    });
     try {
       const result = await forceRefreshAllSources(electionId);
       const countyParts = Object.entries(result.counties).map(([k, v]) => `${k}: ${v.inserted}`);
@@ -252,7 +389,9 @@ export function ElectionSettingsDetail({
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Refresh failed");
     } finally {
-      setBusy(false);
+      stopPoll();
+      setForceRefreshing(false);
+      setIngestProgress(null);
     }
   }
 
@@ -278,6 +417,12 @@ export function ElectionSettingsDetail({
         .filter((v) => v.vendorTier !== "enr")
         .sort((a, b) => a.displayName.localeCompare(b.displayName, "en")),
     [countyVendors],
+  );
+
+  const bulkProcessHelp = useMemo(
+    () =>
+      [...enrVendors, ...otherVendors].sort((a, b) => a.displayName.localeCompare(b.displayName, "en")),
+    [enrVendors, otherVendors],
   );
 
   return (
@@ -382,10 +527,24 @@ export function ElectionSettingsDetail({
               <button type="button" className="enr-primaryBtn" disabled={busy} onClick={() => void onSaveElectionMeta()}>
                 Save election settings
               </button>
-              <button type="button" className="enr-primaryBtn" disabled={busy} onClick={() => void onForce()}>
-                Force one-time ingest (this election)
+              <button
+                type="button"
+                className="enr-primaryBtn"
+                disabled={busy || forceRefreshing}
+                onClick={() => void onForce()}
+              >
+                {forceRefreshing ? (
+                  <>
+                    <IngestSpinner label="Updating sources" /> Updating…
+                  </>
+                ) : (
+                  "Force one-time ingest (this election)"
+                )}
               </button>
             </div>
+            {forceRefreshing ? (
+              <IngestProgressStatus progress={ingestProgress} fallback={`Updating election ${electionId}…`} />
+            ) : null}
           </section>
 
           <section className="enr-panel enr-settings__section">
@@ -396,7 +555,7 @@ export function ElectionSettingsDetail({
               <a href="https://elections.mctx.org/index.asp" target="_blank" rel="noreferrer">
                 Election Central
               </a>
-              ). Turn on <strong>Feed &gt; SOS</strong> for that row if Civix SOS totals are wrong for Montgomery.
+              ). Use <strong>Set as default</strong> on that row if Civix SOS totals are wrong for Montgomery.
             </p>
             <p className="enr-muted">
               Each row is a <strong>county</strong> result source (Harris PDF, Clarity ZIP, etc.). These are{" "}
@@ -413,6 +572,123 @@ export function ElectionSettingsDetail({
               <strong>Montgomery County</strong> appears under <strong>M</strong>. Choose{" "}
               <strong>Montgomery County eResults (live HTML)</strong> and paste the address-bar URL after the results page loads.
             </p>
+            <p className="enr-muted" style={{ marginTop: 8 }}>
+              <strong>Collin County:</strong> use process <strong>Collin County (Electionware EV summary PDF)</strong> and paste
+              the early-voting summary PDF URL (e.g.{" "}
+              <code>collincountytx.gov/.../early-voting-summary-report.pdf</code>).
+            </p>
+            <p className="enr-muted" style={{ marginTop: 8 }}>
+              <strong>Cameron County:</strong> use <strong>Cameron County (results / reconciliation PDF)</strong>. Paste the SOS
+              preliminary reconciliation PDF (e.g.{" "}
+              <code>P26-preliminary-reconciliation-REP.pdf</code> on cameroncountytx.gov) for turnout totals, or an Electionware
+              summary PDF when posted for per-contest results. Reconciliation PDFs alone do not include SD4 candidate lines — use
+              Texas SOS for SD4 unless Cameron posts an election-night summary with contests.
+            </p>
+            <p className="enr-muted" style={{ marginTop: 8 }}>
+              <strong>Hays County:</strong> use <strong>Hays County (eGovlink cumulative PDF)</strong> and paste the official
+              cumulative PDF from egovlink.com (e.g.{" "}
+              <code>…/Cumulative Results - Democratic Party - official.pdf</code>). Hays posts separate Democratic and Republican
+              PDFs — add one feed row per party PDF you want ingested.
+            </p>
+            <p className="enr-muted" style={{ marginTop: 8 }}>
+              <strong>McLennan County:</strong> use <strong>McLennan County (CivicPlus cumulative PDF)</strong> and paste the
+              official cumulative PDF URL from CivicPlus (e.g.{" "}
+              <code>tx-mclennancounty.civicplus.com/DocumentCenter/View/…/Cumulative-Results-….pdf</code>). One row per party
+              PDF. Link contests to SOS races in <strong>County results → SOS races</strong> below.
+            </p>
+            <p className="enr-muted" style={{ marginTop: 8 }}>
+              <strong>Ellis County:</strong> use <strong>Ellis County (livevoterturnout ENR HTML)</strong> and paste the full{" "}
+              <code>Index_*.html</code> URL from the browser while results are on screen (e.g.{" "}
+              <code>livevoterturnout.com/ENR/ellistxenr/9/en/Index_9.html</code>). The page lists per-precinct tables;
+              ingest sums them to county-wide totals for every contest on that election.
+            </p>
+            <p className="enr-muted" style={{ marginTop: 8 }}>
+              <strong>On</strong> starts off for new rows and turns on automatically when you enter a feed URL. Only counties with
+              a URL are included on refresh when <strong>On</strong> is checked.
+              {usesCivixSos ? (
+                <>
+                  {" "}
+                  <strong>Prefer over SOS</strong> applies only when this election uses Texas SOS / Civix ingest and you have
+                  more than one feed for the same county — it picks which county file wins over statewide SOS totals for that
+                  county.
+                </>
+              ) : null}
+            </p>
+            {copySourceOptions.length > 0 ? (
+              <div className="enr-copyFeedsBar">
+                <label className="enr-field">
+                  Copy county feeds from
+                  <select
+                    className="enr-input"
+                    value={copyFromElectionId}
+                    onChange={(e) => setCopyFromElectionId(e.target.value)}
+                    disabled={busy}
+                  >
+                    <option value="">Select election…</option>
+                    {copySourceOptions.map((e) => (
+                      <option key={e.electionId} value={e.electionId}>
+                        {e.label} ({e.electionId})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="enr-copyFeedsBar__mode" role="group" aria-label="Copy mode">
+                  <label>
+                    <input
+                      type="radio"
+                      name="copyFeedsMode"
+                      checked={copyFeedsMode === "replace"}
+                      onChange={() => setCopyFeedsMode("replace")}
+                      disabled={busy}
+                    />
+                    Replace all rows
+                  </label>
+                  <label>
+                    <input
+                      type="radio"
+                      name="copyFeedsMode"
+                      checked={copyFeedsMode === "merge"}
+                      onChange={() => setCopyFeedsMode("merge")}
+                      disabled={busy}
+                    />
+                    Add missing only (same county + process)
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  className="enr-secondaryBtn"
+                  disabled={busy || !copyFromElectionId}
+                  onClick={() => void onCopyCountyFeeds(false)}
+                >
+                  Copy into table
+                </button>
+                <button
+                  type="button"
+                  className="enr-primaryBtn"
+                  disabled={busy || !copyFromElectionId}
+                  onClick={() => void onCopyCountyFeeds(true)}
+                >
+                  Copy and save
+                </button>
+              </div>
+            ) : (
+              <p className="enr-muted">Add another election under Source configuration to copy its county feeds here.</p>
+            )}
+            <div className="enr-countyFeedsToolbar">
+              <label className="enr-inlineToggle">
+                <input
+                  type="checkbox"
+                  checked={hideNoFeedUrl}
+                  onChange={(e) => setHideNoFeedUrl(e.target.checked)}
+                  disabled={busy}
+                />
+                <span>Hide rows without a feed URL</span>
+              </label>
+              <span className="enr-muted" style={{ fontSize: 13 }}>
+                Showing {visibleFeedIndices.length} of {feeds.length}
+                {hideNoFeedUrl && hiddenNoUrlCount > 0 ? ` (${hiddenNoUrlCount} hidden)` : ""}
+              </span>
+            </div>
             <div className="enr-tablewrap">
               <table className="enr-table">
                 <thead>
@@ -422,24 +698,61 @@ export function ElectionSettingsDetail({
                     <th>Process</th>
                     <th>Hub page</th>
                     <th>Feed URL</th>
-                    <th title="For SD4: use this county feed instead of Texas SOS / Civix countyInfo for this county">
-                      Feed &gt; SOS
+                    {usesCivixSos ? (
+                      <th title="When multiple feeds exist for one county, use this row instead of Texas SOS / Civix countyInfo for that county in SD4 merge">
+                        Prefer over SOS
+                      </th>
+                    ) : null}
+                    <th title="County feed is included on refresh when On is checked and a feed URL is present">
+                      On
                     </th>
-                    <th>On</th>
                     <th />
                   </tr>
                 </thead>
                 <tbody>
-                  {feeds.map((row, idx) => (
-                    <tr key={idx}>
+                  {visibleFeedIndices.length === 0 ? (
+                    <tr>
+                      <td colSpan={usesCivixSos ? 8 : 7} className="enr-muted">
+                        {feeds.length === 0
+                          ? "No county feeds yet — add a row or copy from another election."
+                          : "All rows are hidden (no feed URL). Uncheck “Hide rows without a feed URL” or add URLs."}
+                      </td>
+                    </tr>
+                  ) : null}
+                  {visibleFeedIndices.map((idx) => {
+                    const row = feeds[idx];
+                    return (
+                    <tr key={idx} className={!hasFeedUrl(row) ? "enr-feedRow--noUrl" : undefined}>
                       <td>
                         <select
                           className="enr-input"
                           style={{ minWidth: 220 }}
                           value={row.countyKey}
-                          onChange={(e) =>
-                            setFeeds((prev) => prev.map((r, i) => (i === idx ? { ...r, countyKey: e.target.value } : r)))
-                          }
+                          onChange={(e) => {
+                            const countyKey = e.target.value;
+                            setFeeds((prev) =>
+                              prev.map((r, i) => {
+                                if (i !== idx) return r;
+                                let vendorId = r.vendorId;
+                                if (countyKey === "collin" && (vendorId === "other-vendor" || !vendorId)) {
+                                  vendorId = "collin-pdf";
+                                }
+                                if (countyKey === "cameron" && (vendorId === "other-vendor" || !vendorId)) {
+                                  vendorId = "cameron-pdf";
+                                }
+                                if (countyKey === "hays" && (vendorId === "other-vendor" || !vendorId)) {
+                                  vendorId = "hays-pdf";
+                                }
+                                if (countyKey === "mclennan" && (vendorId === "other-vendor" || !vendorId)) {
+                                  vendorId = "mclennan-pdf";
+                                }
+                                if (countyKey === "ellis" && (vendorId === "other-vendor" || !vendorId)) {
+                                  vendorId = "ellis-enr-html";
+                                }
+                                return { ...r, countyKey, vendorId };
+                              }),
+                            );
+                          }}
                           disabled={busy}
                         >
                           <option value="">Select county…</option>
@@ -539,28 +852,35 @@ export function ElectionSettingsDetail({
                           className="enr-input"
                           value={row.sourceUrl}
                           onChange={(e) =>
-                            setFeeds((prev) => prev.map((r, i) => (i === idx ? { ...r, sourceUrl: e.target.value } : r)))
-                          }
-                          disabled={busy}
-                        />
-                      </td>
-                      <td style={{ textAlign: "center" }}>
-                        <input
-                          type="checkbox"
-                          checked={row.preferOverSos}
-                          title={
-                            usesCivixSos
-                              ? "Prefer this ingested feed over SOS / Civix countyInfo for SD4 in this county"
-                              : "Enable Texas SOS / Civix ingest above for this option to apply when viewing Civix elections."
-                          }
-                          onChange={(e) =>
                             setFeeds((prev) =>
-                              prev.map((r, i) => (i === idx ? { ...r, preferOverSos: e.target.checked } : r)),
+                              prev.map((r, i) => (i === idx ? patchFeedRow(r, { sourceUrl: e.target.value }) : r)),
                             )
                           }
                           disabled={busy}
                         />
                       </td>
+                      {usesCivixSos ? (
+                        <td style={{ whiteSpace: "nowrap" }}>
+                          {row.preferOverSos ? (
+                            <span
+                              className="enr-defaultBadge"
+                              title="This feed is preferred over SOS / Civix countyInfo for this county"
+                            >
+                              Preferred
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="enr-secondaryBtn"
+                              disabled={busy || !row.countyKey.trim()}
+                              title="Use this feed instead of SOS / Civix countyInfo for this county when both exist"
+                              onClick={() => setDefaultCountyFeed(idx)}
+                            >
+                              Prefer over SOS
+                            </button>
+                          )}
+                        </td>
+                      ) : null}
                       <td>
                         <input
                           type="checkbox"
@@ -568,16 +888,27 @@ export function ElectionSettingsDetail({
                           onChange={(e) =>
                             setFeeds((prev) => prev.map((r, i) => (i === idx ? { ...r, isEnabled: e.target.checked } : r)))
                           }
-                          disabled={busy}
+                          disabled={busy || !hasFeedUrl(row)}
+                          title={
+                            hasFeedUrl(row)
+                              ? "Include this county feed on refresh"
+                              : "Add a feed URL first — On turns on automatically when a URL is entered"
+                          }
                         />
                       </td>
                       <td>
-                        <button type="button" className="enr-navlink" disabled={busy} onClick={() => setFeeds((p) => p.filter((_, i) => i !== idx))}>
+                        <button
+                          type="button"
+                          className="enr-secondaryBtn"
+                          disabled={busy}
+                          onClick={() => setFeeds((p) => p.filter((_, i) => i !== idx))}
+                        >
                           Remove
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -594,7 +925,7 @@ export function ElectionSettingsDetail({
                       vendorId: "other-vendor",
                       sourceUrl: "",
                       hubPageUrl: "",
-                      isEnabled: true,
+                      isEnabled: false,
                       civixCountyName: "",
                       preferOverSos: false,
                     },
@@ -606,22 +937,100 @@ export function ElectionSettingsDetail({
               <button type="button" className="enr-primaryBtn" disabled={busy} onClick={() => void onSaveFeeds()}>
                 Save county feeds
               </button>
+              <span className="enr-muted" style={{ fontSize: 13, alignSelf: "center" }}>
+                Required for feeds to survive restart — also written to <code>election-feed-configs.json</code> when the
+                main database is too large to flush immediately.
+              </span>
             </div>
-            <label className="enr-field">
-              Bulk add (one per line: <code>county_key,process_id,url</code>)
-              <textarea
-                className="enr-textarea"
-                rows={4}
-                value={bulkText}
-                onChange={(e) => setBulkText(e.target.value)}
-                disabled={busy}
-                placeholder="harris,harris-pdf,https://..."
-              />
-            </label>
-            <button type="button" className="enr-primaryBtn" disabled={busy} onClick={applyBulk}>
-              Apply bulk to table
-            </button>
+            <div className="enr-bulkAdd">
+              <h3 className="enr-bulkAdd__title">Bulk add county feeds</h3>
+              <p className="enr-muted">
+                Paste <strong>one feed per line</strong>. Commas separate the first two fields only; if the URL contains
+                commas, everything after the second comma is treated as the URL.
+              </p>
+              <p className="enr-bulkAdd__format">
+                <code>county_key</code>,<code>process_id</code>,<code>https://…</code>
+              </p>
+              <dl className="enr-bulkAdd__fields">
+                <div>
+                  <dt>
+                    <code>county_key</code>
+                  </dt>
+                  <dd>
+                    Lowercase county slug — same value as the <strong>County</strong> dropdown (
+                    <code>collin</code>, <code>cameron</code>, <code>montgomery</code>, <code>harris</code>, etc.). Not
+                    the display name (“Collin County”).
+                  </dd>
+                </div>
+                <div>
+                  <dt>
+                    <code>process_id</code>
+                  </dt>
+                  <dd>
+                    Exact ingest process ID from the <strong>Process</strong> column (e.g. <code>collin-pdf</code>,{" "}
+                    <code>cameron-pdf</code>) — not the long label shown in the dropdown.
+                  </dd>
+                </div>
+                <div>
+                  <dt>Feed URL</dt>
+                  <dd>
+                    Full <code>https://</code> link to the file or live results page the ingest pulls from — PDF, HTML
+                    page URL, or Clarity <code>summary.zip</code>. This is <strong>Feed URL</strong> in the table, not{" "}
+                    <strong>Hub page</strong> (hub URLs must be added per row after bulk). Rows turn <strong>On</strong>{" "}
+                    automatically when a URL is present.
+                  </dd>
+                </div>
+              </dl>
+              <details className="enr-bulkAdd__processes">
+                <summary>Process IDs and what to put in the URL column</summary>
+                <ul className="enr-bulkAdd__processList">
+                  {bulkProcessHelp.map((v) => (
+                    <li key={v.id}>
+                      <code>{v.id}</code> — {BULK_FEED_URL_HINTS[v.id] ?? v.notes}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+              <p className="enr-muted enr-bulkAdd__examplesTitle">Examples (one line each):</p>
+              <pre className="enr-bulkAdd__examples" aria-hidden="true">
+                {`collin,collin-pdf,https://www.collincountytx.gov/.../early-voting-summary-report.pdf
+cameron,cameron-pdf,https://www.cameroncountytx.gov/elections/.../P26-preliminary-reconciliation-REP.pdf
+hays,hays-pdf,https://www.egovlink.com/.../Cumulative%20Results%20-%20Democratic%20Party%20-%20official.pdf
+mclennan,mclennan-pdf,https://tx-mclennancounty.civicplus.com/DocumentCenter/View/.../Cumulative-Results-....pdf
+ellis,ellis-enr-html,https://www.livevoterturnout.com/ENR/ellistxenr/9/en/Index_9.html
+montgomery,montgomery-eresults-html,https://elections.mctx.org/...`}
+              </pre>
+              <label className="enr-field">
+                Lines to add
+                <textarea
+                  className="enr-textarea"
+                  rows={5}
+                  value={bulkText}
+                  onChange={(e) => setBulkText(e.target.value)}
+                  disabled={busy}
+                  placeholder={
+                    "collin,collin-pdf,https://www.collincountytx.gov/.../early-voting-summary-report.pdf\n" +
+                    "cameron,cameron-pdf,https://www.cameroncountytx.gov/elections/.../P26-preliminary-reconciliation-REP.pdf\n" +
+                    "hays,hays-pdf,https://www.egovlink.com/.../Cumulative%20Results%20-%20Democratic%20Party%20-%20official.pdf\n" +
+                    "ellis,ellis-enr-html,https://www.livevoterturnout.com/ENR/ellistxenr/9/en/Index_9.html"
+                  }
+                />
+              </label>
+              <button type="button" className="enr-primaryBtn" disabled={busy} onClick={applyBulk}>
+                Apply bulk to table
+              </button>
+              <p className="enr-muted" style={{ marginTop: 8, fontSize: 13 }}>
+                After applying, click <strong>Save county feeds</strong> so URLs survive a server restart.
+              </p>
+            </div>
           </section>
+
+          <CountyRaceMappingSection
+            electionId={electionId}
+            usesCivixSos={usesCivixSos}
+            busy={busy}
+            onMessage={setMsg}
+          />
         </div>
       </main>
     </>

@@ -2,6 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sql from "mssql";
+import { resolveVoterActivityDate } from "./lib/evRosterVoterDates.mjs";
+import {
+  EV_ROSTER_SUMMARY_CACHE_DDL_MSSQL,
+  loadSummaryRollupsFromCache,
+  rebuildEvRosterSummaryCache,
+} from "./lib/evRosterSummaryCache.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LEGACY_MANIFEST = path.join(__dirname, "data", "manual-manifest.json");
@@ -449,9 +455,95 @@ IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'dallas-pdf')
     N'dallas_pdf',
     N'Dallas County Votes: Electionware Summary Results Report PDF. Imports all contests; layout differs from Harris / Montgomery / Chambers.'
   );
+IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'collin-pdf')
+  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
+  VALUES (
+    N'collin-pdf',
+    N'Collin County (Electionware EV summary PDF)',
+    N'enr',
+    N'collin_electionware_pdf',
+    N'Collin County Electionware early-voting summary PDF (Mail + Early Voting). Imports all contests in the file.'
+  );
+IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'cameron-pdf')
+  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
+  VALUES (
+    N'cameron-pdf',
+    N'Cameron County (results / reconciliation PDF)',
+    N'enr',
+    N'cameron_pdf',
+    N'Cameron County: Electionware summary PDFs (all contests) or SOS preliminary reconciliation P26 PDFs (turnout only).'
+  );
+IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'hays-pdf')
+  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
+  VALUES (
+    N'hays-pdf',
+    N'Hays County (eGovlink cumulative PDF)',
+    N'enr',
+    N'hays_egovlink_cumulative_pdf',
+    N'Hays County official cumulative results PDF on egovlink.com (Absentee + Early + Election Day). Imports all contests in the file.'
+  );
+IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'mclennan-pdf')
+  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
+  VALUES (
+    N'mclennan-pdf',
+    N'McLennan County (CivicPlus cumulative PDF)',
+    N'enr',
+    N'mclennan_civicplus_cumulative_pdf',
+    N'McLennan County official cumulative PDF on CivicPlus (Absentee + Early + Election Day). Imports all contests in the file.'
+  );
+IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'ellis-enr-html')
+  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
+  VALUES (
+    N'ellis-enr-html',
+    N'Ellis County (livevoterturnout ENR HTML)',
+    N'enr',
+    N'ellis_livevoterturnout_html',
+    N'Ellis County ENR on livevoterturnout.com — Index HTML URL; sums precinct results to county-wide contest totals.'
+  );
 IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'other-vendor')
   INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
   VALUES (N'other-vendor', N'Other / custom (no ingest yet)', N'other', N'unimplemented', N'');
+
+IF OBJECT_ID(N'dbo.county_sos_race_links', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.county_sos_race_links (
+    election_id NVARCHAR(128) NOT NULL,
+    county_key NVARCHAR(64) NOT NULL,
+    county_contest_name NVARCHAR(512) NOT NULL,
+    sos_race_id NVARCHAR(64) NOT NULL,
+    sos_race_name NVARCHAR(512) NULL,
+    link_type NVARCHAR(32) NOT NULL CONSTRAINT DF_county_sos_race_links_type DEFAULT (N'manual'),
+    updated_at DATETIME2 NOT NULL CONSTRAINT DF_county_sos_race_links_updated DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_county_sos_race_links PRIMARY KEY (election_id, county_key, county_contest_name)
+  );
+END;
+IF OBJECT_ID(N'dbo.county_sos_manual_votes', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.county_sos_manual_votes (
+    election_id NVARCHAR(128) NOT NULL,
+    county_key NVARCHAR(64) NOT NULL,
+    sos_race_id NVARCHAR(64) NOT NULL,
+    sos_candidate_id NVARCHAR(64) NOT NULL,
+    choice_name NVARCHAR(512) NOT NULL,
+    party_name NVARCHAR(64) NULL,
+    early_votes BIGINT NOT NULL CONSTRAINT DF_county_sos_manual_early DEFAULT (0),
+    election_day_votes BIGINT NOT NULL CONSTRAINT DF_county_sos_manual_ed DEFAULT (0),
+    total_votes BIGINT NOT NULL CONSTRAINT DF_county_sos_manual_total DEFAULT (0),
+    updated_at DATETIME2 NOT NULL CONSTRAINT DF_county_sos_manual_updated DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_county_sos_manual_votes PRIMARY KEY (election_id, county_key, sos_race_id, sos_candidate_id)
+  );
+END;
+IF OBJECT_ID(N'dbo.county_sos_race_vote_source', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.county_sos_race_vote_source (
+    election_id NVARCHAR(128) NOT NULL,
+    county_key NVARCHAR(64) NOT NULL,
+    sos_race_id NVARCHAR(64) NOT NULL,
+    vote_source NVARCHAR(32) NOT NULL CONSTRAINT DF_county_sos_race_vote_source DEFAULT (N'sos'),
+    updated_at DATETIME2 NOT NULL CONSTRAINT DF_county_sos_race_vote_source_updated DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT PK_county_sos_race_vote_source PRIMARY KEY (election_id, county_key, sos_race_id)
+  );
+END;
 
 IF OBJECT_ID(N'dbo.vote_update_history', N'U') IS NULL
 BEGIN
@@ -589,10 +681,203 @@ BEGIN
   ALTER TABLE dbo.election_source_configs ADD show_in_catalog BIT NOT NULL CONSTRAINT DF_election_source_show_catalog DEFAULT (1);
 END;
 
+IF COL_LENGTH(N'dbo.election_source_configs', N'is_default_catalog') IS NULL
+BEGIN
+  ALTER TABLE dbo.election_source_configs ADD is_default_catalog BIT NOT NULL CONSTRAINT DF_election_source_default_catalog DEFAULT (0);
+  UPDATE dbo.election_source_configs SET is_default_catalog = 1 WHERE election_id = N'56181';
+  IF @@ROWCOUNT = 0
+    UPDATE t SET is_default_catalog = 1
+    FROM (
+      SELECT TOP (1) election_id FROM dbo.election_source_configs ORDER BY election_id
+    ) x
+    INNER JOIN dbo.election_source_configs t ON t.election_id = x.election_id;
+END;
+
 IF COL_LENGTH(N'dbo.election_source_configs', N'county_prefer_over_sos_json') IS NULL
 BEGIN
   ALTER TABLE dbo.election_source_configs ADD county_prefer_over_sos_json NVARCHAR(MAX) NOT NULL CONSTRAINT DF_election_source_prefer_county DEFAULT (N'[]');
 END;
+
+IF OBJECT_ID(N'dbo.ev_roster_configs', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.ev_roster_configs (
+    evr_election_id INT NOT NULL CONSTRAINT PK_ev_roster_configs PRIMARY KEY,
+    party NVARCHAR(16) NOT NULL,
+    election_name NVARCHAR(512) NOT NULL,
+    election_date NVARCHAR(32) NOT NULL,
+    is_enabled BIT NOT NULL CONSTRAINT DF_ev_roster_enabled DEFAULT (1),
+    notes NVARCHAR(MAX) NULL,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_ev_roster_cfg_created DEFAULT (SYSUTCDATETIME()),
+    updated_at DATETIME2 NOT NULL CONSTRAINT DF_ev_roster_cfg_updated DEFAULT (SYSUTCDATETIME())
+  );
+END;
+
+IF OBJECT_ID(N'dbo.ev_roster_pulls', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.ev_roster_pulls (
+    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_ev_roster_pulls PRIMARY KEY,
+    evr_election_id INT NOT NULL,
+    voting_date NVARCHAR(16) NOT NULL,
+    hub_page_url NVARCHAR(2048) NULL,
+    sos_turnout_url NVARCHAR(2048) NULL,
+    sos_roster_url NVARCHAR(2048) NULL,
+    statewide_voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_pull_voters DEFAULT (0),
+    pulled_at DATETIME2 NOT NULL CONSTRAINT DF_ev_roster_pull_at DEFAULT (SYSUTCDATETIME()),
+    ok BIT NOT NULL CONSTRAINT DF_ev_roster_pull_ok DEFAULT (1),
+    message NVARCHAR(MAX) NOT NULL CONSTRAINT DF_ev_roster_pull_msg DEFAULT (N''),
+    CONSTRAINT UQ_ev_roster_pull UNIQUE (evr_election_id, voting_date)
+  );
+  CREATE INDEX idx_ev_roster_pulls_election ON dbo.ev_roster_pulls (evr_election_id, voting_date DESC);
+END;
+
+IF OBJECT_ID(N'dbo.ev_roster_county_summary', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.ev_roster_county_summary (
+    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_ev_roster_county_summary PRIMARY KEY,
+    pull_id INT NOT NULL,
+    county_name NVARCHAR(128) NOT NULL,
+    county_id INT NULL,
+    registered_voters BIGINT NOT NULL CONSTRAINT DF_ev_roster_reg DEFAULT (0),
+    in_person_votes_on_date BIGINT NOT NULL CONSTRAINT DF_ev_roster_ip_day DEFAULT (0),
+    total_in_person_votes_for_election BIGINT NOT NULL CONSTRAINT DF_ev_roster_ip_cum DEFAULT (0),
+    total_mail_votes_for_election BIGINT NOT NULL CONSTRAINT DF_ev_roster_mail DEFAULT (0),
+    cumulative_total BIGINT NOT NULL CONSTRAINT DF_ev_roster_cum DEFAULT (0),
+    sos_voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_sos_v DEFAULT (0),
+    county_voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_cty_v DEFAULT (0),
+    chosen_source NVARCHAR(32) NOT NULL CONSTRAINT DF_ev_roster_chosen DEFAULT (N'sos'),
+    chosen_voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_chosen_v DEFAULT (0),
+    CONSTRAINT FK_ev_roster_county_pull FOREIGN KEY (pull_id) REFERENCES dbo.ev_roster_pulls (id) ON DELETE CASCADE
+  );
+  CREATE INDEX idx_ev_roster_county_pull ON dbo.ev_roster_county_summary (pull_id, county_name);
+END;
+
+IF OBJECT_ID(N'dbo.ev_roster_voters', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.ev_roster_voters (
+    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_ev_roster_voters PRIMARY KEY,
+    evr_election_id INT NOT NULL,
+    voting_date NVARCHAR(16) NOT NULL,
+    county_name NVARCHAR(128) NOT NULL,
+    vuid NVARCHAR(32) NOT NULL,
+    voter_name NVARCHAR(256) NULL,
+    voting_method NVARCHAR(64) NULL,
+    precinct NVARCHAR(64) NULL,
+    source NVARCHAR(32) NOT NULL CONSTRAINT DF_ev_roster_voter_src DEFAULT (N'sos'),
+    CONSTRAINT UQ_ev_roster_voter UNIQUE (evr_election_id, voting_date, vuid)
+  );
+  CREATE INDEX idx_ev_roster_voters_lookup ON dbo.ev_roster_voters (evr_election_id, voting_date, county_name);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM dbo.ev_roster_configs WHERE evr_election_id = 58315)
+  INSERT INTO dbo.ev_roster_configs (evr_election_id, party, election_name, election_date, notes)
+  VALUES (58315, N'REP', N'2026 REPUBLICAN PRIMARY RUNOFF ELECTION', N'05/26/2026', N'Civix EVR — statewide roster + county totals');
+IF NOT EXISTS (SELECT 1 FROM dbo.ev_roster_configs WHERE evr_election_id = 58314)
+  INSERT INTO dbo.ev_roster_configs (evr_election_id, party, election_name, election_date, notes)
+  VALUES (58314, N'DEM', N'2026 DEMOCRATIC PRIMARY RUNOFF ELECTION', N'05/26/2026', N'Civix EVR — statewide roster + county totals');
+
+IF OBJECT_ID(N'dbo.ev_roster_county_sources', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.ev_roster_county_sources (
+    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_ev_roster_county_sources PRIMARY KEY,
+    evr_election_id INT NOT NULL,
+    county_key NVARCHAR(64) NOT NULL,
+    variant_key NVARCHAR(64) NOT NULL CONSTRAINT DF_ev_roster_variant DEFAULT (N'sos-default'),
+    source_label NVARCHAR(256) NOT NULL CONSTRAINT DF_ev_roster_src_label DEFAULT (N'SOS default'),
+    civix_county_name NVARCHAR(128) NOT NULL,
+    civix_county_id INT NULL,
+    handler_key NVARCHAR(64) NOT NULL CONSTRAINT DF_ev_roster_handler DEFAULT (N'civix_sos_county_slice'),
+    hub_page_url NVARCHAR(2048) NOT NULL CONSTRAINT DF_ev_roster_hub DEFAULT (N''),
+    roster_url NVARCHAR(2048) NOT NULL CONSTRAINT DF_ev_roster_roster_url DEFAULT (N''),
+    voting_method_scope NVARCHAR(16) NOT NULL CONSTRAINT DF_ev_roster_method_scope DEFAULT (N'ALL'),
+    date_scope NVARCHAR(32) NOT NULL CONSTRAINT DF_ev_roster_date_scope DEFAULT (N'SINGLE_DAY'),
+    file_format NVARCHAR(16) NOT NULL CONSTRAINT DF_ev_roster_file_fmt DEFAULT (N'auto'),
+    discovery_profile_key NVARCHAR(64) NULL,
+    training_notes NVARCHAR(MAX) NULL,
+    is_enabled BIT NOT NULL CONSTRAINT DF_ev_roster_county_enabled DEFAULT (1),
+    last_pull_ok BIT NULL,
+    last_pull_message NVARCHAR(MAX) NULL,
+    last_pull_at DATETIME2 NULL,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_ev_roster_cty_created DEFAULT (SYSUTCDATETIME()),
+    updated_at DATETIME2 NOT NULL CONSTRAINT DF_ev_roster_cty_updated DEFAULT (SYSUTCDATETIME()),
+    CONSTRAINT UQ_ev_roster_county_variant UNIQUE (evr_election_id, county_key, variant_key)
+  );
+END;
+
+IF OBJECT_ID(N'dbo.ev_roster_county_pull_log', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.ev_roster_county_pull_log (
+    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_ev_roster_county_pull_log PRIMARY KEY,
+    pull_id INT NOT NULL,
+    county_key NVARCHAR(64) NOT NULL,
+    county_name NVARCHAR(128) NOT NULL,
+    handler_key NVARCHAR(64) NOT NULL,
+    ok BIT NOT NULL,
+    voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_log_v DEFAULT (0),
+    source_url NVARCHAR(2048) NULL,
+    message NVARCHAR(MAX) NOT NULL CONSTRAINT DF_ev_roster_log_msg DEFAULT (N''),
+    CONSTRAINT FK_ev_roster_log_pull FOREIGN KEY (pull_id) REFERENCES dbo.ev_roster_pulls (id) ON DELETE CASCADE
+  );
+END;
+
+IF COL_LENGTH(N'dbo.ev_roster_voters', N'party') IS NULL
+  ALTER TABLE dbo.ev_roster_voters ADD party NVARCHAR(16) NULL;
+IF COL_LENGTH(N'dbo.ev_roster_voters', N'method_code') IS NULL
+  ALTER TABLE dbo.ev_roster_voters ADD method_code NVARCHAR(8) NULL;
+IF COL_LENGTH(N'dbo.ev_roster_voters', N'reporting_date') IS NULL
+BEGIN
+  ALTER TABLE dbo.ev_roster_voters ADD reporting_date NVARCHAR(16) NULL;
+  UPDATE dbo.ev_roster_voters SET reporting_date = voting_date WHERE reporting_date IS NULL;
+END;
+IF COL_LENGTH(N'dbo.ev_roster_pulls', N'raw_record_count') IS NULL
+  ALTER TABLE dbo.ev_roster_pulls ADD raw_record_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_raw DEFAULT (0);
+IF COL_LENGTH(N'dbo.ev_roster_pulls', N'deduped_voter_count') IS NULL
+  ALTER TABLE dbo.ev_roster_pulls ADD deduped_voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_dedup DEFAULT (0);
+
+IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'variant_key') IS NULL
+  ALTER TABLE dbo.ev_roster_county_sources ADD variant_key NVARCHAR(64) NOT NULL CONSTRAINT DF_ev_roster_variant DEFAULT (N'sos-default');
+IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'source_label') IS NULL
+  ALTER TABLE dbo.ev_roster_county_sources ADD source_label NVARCHAR(256) NOT NULL CONSTRAINT DF_ev_roster_src_label DEFAULT (N'SOS default');
+IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'voting_method_scope') IS NULL
+  ALTER TABLE dbo.ev_roster_county_sources ADD voting_method_scope NVARCHAR(16) NOT NULL CONSTRAINT DF_ev_roster_method_scope DEFAULT (N'ALL');
+IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'date_scope') IS NULL
+  ALTER TABLE dbo.ev_roster_county_sources ADD date_scope NVARCHAR(32) NOT NULL CONSTRAINT DF_ev_roster_date_scope DEFAULT (N'SINGLE_DAY');
+IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'file_format') IS NULL
+  ALTER TABLE dbo.ev_roster_county_sources ADD file_format NVARCHAR(16) NOT NULL CONSTRAINT DF_ev_roster_file_fmt DEFAULT (N'auto');
+IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'roster_party_scope') IS NULL
+  ALTER TABLE dbo.ev_roster_county_sources ADD roster_party_scope NVARCHAR(16) NOT NULL CONSTRAINT DF_ev_roster_party_scope DEFAULT (N'COMBINED');
+IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'discovery_profile_key') IS NULL
+  ALTER TABLE dbo.ev_roster_county_sources ADD discovery_profile_key NVARCHAR(64) NULL;
+IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'training_notes') IS NULL
+  ALTER TABLE dbo.ev_roster_county_sources ADD training_notes NVARCHAR(MAX) NULL;
+
+IF EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = N'UQ_ev_roster_voter' AND parent_object_id = OBJECT_ID(N'dbo.ev_roster_voters'))
+  ALTER TABLE dbo.ev_roster_voters DROP CONSTRAINT UQ_ev_roster_voter;
+IF NOT EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = N'UQ_ev_roster_voter' AND parent_object_id = OBJECT_ID(N'dbo.ev_roster_voters'))
+  ALTER TABLE dbo.ev_roster_voters ADD CONSTRAINT UQ_ev_roster_voter UNIQUE (evr_election_id, voting_date, county_name, vuid);
+
+IF EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = N'UQ_ev_roster_county' AND parent_object_id = OBJECT_ID(N'dbo.ev_roster_county_sources'))
+  ALTER TABLE dbo.ev_roster_county_sources DROP CONSTRAINT UQ_ev_roster_county;
+IF NOT EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = N'UQ_ev_roster_county_variant' AND parent_object_id = OBJECT_ID(N'dbo.ev_roster_county_sources'))
+  ALTER TABLE dbo.ev_roster_county_sources ADD CONSTRAINT UQ_ev_roster_county_variant UNIQUE (evr_election_id, county_key, variant_key);
+
+IF OBJECT_ID(N'dbo.ev_roster_county_pull_status', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.ev_roster_county_pull_status (
+    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_ev_roster_county_pull_status PRIMARY KEY,
+    evr_election_id INT NOT NULL,
+    voting_date NVARCHAR(16) NOT NULL,
+    county_name NVARCHAR(128) NOT NULL,
+    county_key NVARCHAR(64) NULL,
+    last_pull_ok BIT NULL,
+    last_pull_at DATETIME2 NULL,
+    last_pull_message NVARCHAR(MAX) NULL,
+    voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_status_voters DEFAULT (0),
+    confirmed_at DATETIME2 NULL,
+    CONSTRAINT UQ_ev_roster_county_pull_status UNIQUE (evr_election_id, voting_date, county_name)
+  );
+  CREATE INDEX idx_ev_roster_county_pull_status ON dbo.ev_roster_county_pull_status (evr_election_id, voting_date);
+END;
+${EV_ROSTER_SUMMARY_CACHE_DDL_MSSQL}
 `;
 
 async function migrateLegacyJsonIfNeeded(pool) {
@@ -689,6 +974,41 @@ async function syncIngestVendorMetadataMssql(pool) {
       notes:
         "Dallas County Votes: Electionware Summary Results Report PDF. Imports all contests; layout differs from Harris / Montgomery / Chambers.",
     },
+    {
+      id: "collin-pdf",
+      display_name: "Collin County (Electionware EV summary PDF)",
+      vendor_tier: "enr",
+      notes:
+        "Collin County Electionware early-voting summary PDF (Mail + Early Voting). Imports all contests in the file.",
+    },
+    {
+      id: "cameron-pdf",
+      display_name: "Cameron County (results / reconciliation PDF)",
+      vendor_tier: "enr",
+      notes:
+        "Cameron County: Electionware summary PDFs (all contests) or SOS preliminary reconciliation P26 PDFs (turnout only).",
+    },
+    {
+      id: "hays-pdf",
+      display_name: "Hays County (eGovlink cumulative PDF)",
+      vendor_tier: "enr",
+      notes:
+        "Hays egovlink.com cumulative results PDF (official). Imports all contests; separate DEM/REP PDFs per party.",
+    },
+    {
+      id: "mclennan-pdf",
+      display_name: "McLennan County (CivicPlus cumulative PDF)",
+      vendor_tier: "enr",
+      notes:
+        "McLennan CivicPlus cumulative PDF (official). Imports all contests; separate DEM/REP PDFs per party.",
+    },
+    {
+      id: "ellis-enr-html",
+      display_name: "Ellis County (livevoterturnout ENR HTML)",
+      vendor_tier: "enr",
+      notes:
+        "Ellis livevoterturnout.com ENR Index page — imports all contests (precinct tables summed to county).",
+    },
   ];
   for (const r of rows) {
     await pool
@@ -703,6 +1023,10 @@ async function syncIngestVendorMetadataMssql(pool) {
          WHERE id = @id`,
       );
   }
+}
+
+export function isDatabaseLoaded() {
+  return !!_pool?.connected;
 }
 
 export async function ensureDb() {
@@ -1116,6 +1440,151 @@ export async function getSd4MergePreferCountyFeedNameSet(electionId = "56181") {
   return set;
 }
 
+export async function listCountySosRaceLinks(electionId) {
+  const pool = await ensureDb();
+  const r = await pool.request().input("election_id", sql.NVarChar(128), String(electionId)).query(`
+    SELECT county_key AS countyKey, county_contest_name AS countyContestName, sos_race_id AS sosRaceId,
+           sos_race_name AS sosRaceName, link_type AS linkType, updated_at AS updatedAt
+    FROM dbo.county_sos_race_links WHERE election_id = @election_id
+    ORDER BY county_key, county_contest_name
+  `);
+  return (r.recordset ?? []).map((row) => ({
+    countyKey: String(row.countyKey ?? ""),
+    countyContestName: String(row.countyContestName ?? ""),
+    sosRaceId: String(row.sosRaceId ?? ""),
+    sosRaceName: String(row.sosRaceName ?? ""),
+    linkType: String(row.linkType ?? "manual"),
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt ?? ""),
+  }));
+}
+
+export async function upsertCountySosRaceLink(electionId, link) {
+  const pool = await ensureDb();
+  await pool
+    .request()
+    .input("election_id", sql.NVarChar(128), String(electionId))
+    .input("county_key", sql.NVarChar(64), String(link.countyKey ?? "").toLowerCase().trim())
+    .input("county_contest_name", sql.NVarChar(512), String(link.countyContestName ?? "").trim())
+    .input("sos_race_id", sql.NVarChar(64), String(link.sosRaceId ?? "").trim())
+    .input("sos_race_name", sql.NVarChar(512), String(link.sosRaceName ?? "").trim())
+    .input("link_type", sql.NVarChar(32), String(link.linkType ?? "manual"))
+    .query(`
+      MERGE dbo.county_sos_race_links AS t
+      USING (SELECT @election_id AS election_id, @county_key AS county_key, @county_contest_name AS county_contest_name) AS s
+      ON t.election_id = s.election_id AND t.county_key = s.county_key AND t.county_contest_name = s.county_contest_name
+      WHEN MATCHED THEN UPDATE SET sos_race_id = @sos_race_id, sos_race_name = @sos_race_name, link_type = @link_type, updated_at = SYSUTCDATETIME()
+      WHEN NOT MATCHED THEN INSERT (election_id, county_key, county_contest_name, sos_race_id, sos_race_name, link_type)
+        VALUES (@election_id, @county_key, @county_contest_name, @sos_race_id, @sos_race_name, @link_type);
+    `);
+}
+
+export async function deleteCountySosRaceLink(electionId, countyKey, countyContestName) {
+  const pool = await ensureDb();
+  await pool
+    .request()
+    .input("election_id", sql.NVarChar(128), String(electionId))
+    .input("county_key", sql.NVarChar(64), String(countyKey).toLowerCase().trim())
+    .input("county_contest_name", sql.NVarChar(512), String(countyContestName).trim())
+    .query(`
+      DELETE FROM dbo.county_sos_race_links
+      WHERE election_id = @election_id AND county_key = @county_key AND county_contest_name = @county_contest_name
+    `);
+}
+
+export async function listCountySosManualVotes(electionId) {
+  const pool = await ensureDb();
+  const r = await pool.request().input("election_id", sql.NVarChar(128), String(electionId)).query(`
+    SELECT county_key AS countyKey, sos_race_id AS sosRaceId, sos_candidate_id AS sosCandidateId,
+           choice_name AS choiceName, party_name AS partyName, early_votes AS earlyVotes,
+           election_day_votes AS electionDayVotes, total_votes AS totalVotes, updated_at AS updatedAt
+    FROM dbo.county_sos_manual_votes WHERE election_id = @election_id
+    ORDER BY county_key, sos_race_id, sos_candidate_id
+  `);
+  return (r.recordset ?? []).map((row) => ({
+    countyKey: String(row.countyKey ?? ""),
+    sosRaceId: String(row.sosRaceId ?? ""),
+    sosCandidateId: String(row.sosCandidateId ?? ""),
+    choiceName: String(row.choiceName ?? ""),
+    partyName: String(row.partyName ?? ""),
+    earlyVotes: Number(row.earlyVotes ?? 0),
+    electionDayVotes: Number(row.electionDayVotes ?? 0),
+    totalVotes: Number(row.totalVotes ?? 0),
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt ?? ""),
+  }));
+}
+
+export async function upsertCountySosManualVote(electionId, row) {
+  const pool = await ensureDb();
+  await pool
+    .request()
+    .input("election_id", sql.NVarChar(128), String(electionId))
+    .input("county_key", sql.NVarChar(64), String(row.countyKey ?? "").toLowerCase().trim())
+    .input("sos_race_id", sql.NVarChar(64), String(row.sosRaceId ?? "").trim())
+    .input("sos_candidate_id", sql.NVarChar(64), String(row.sosCandidateId ?? "").trim())
+    .input("choice_name", sql.NVarChar(512), String(row.choiceName ?? "").trim())
+    .input("party_name", sql.NVarChar(64), String(row.partyName ?? "").trim())
+    .input("early_votes", sql.BigInt, Number(row.earlyVotes ?? 0))
+    .input("election_day_votes", sql.BigInt, Number(row.electionDayVotes ?? 0))
+    .input("total_votes", sql.BigInt, Number(row.totalVotes ?? 0))
+    .query(`
+      MERGE dbo.county_sos_manual_votes AS t
+      USING (SELECT @election_id AS election_id, @county_key AS county_key, @sos_race_id AS sos_race_id, @sos_candidate_id AS sos_candidate_id) AS s
+      ON t.election_id = s.election_id AND t.county_key = s.county_key AND t.sos_race_id = s.sos_race_id AND t.sos_candidate_id = s.sos_candidate_id
+      WHEN MATCHED THEN UPDATE SET choice_name = @choice_name, party_name = @party_name, early_votes = @early_votes,
+        election_day_votes = @election_day_votes, total_votes = @total_votes, updated_at = SYSUTCDATETIME()
+      WHEN NOT MATCHED THEN INSERT (election_id, county_key, sos_race_id, sos_candidate_id, choice_name, party_name, early_votes, election_day_votes, total_votes)
+        VALUES (@election_id, @county_key, @sos_race_id, @sos_candidate_id, @choice_name, @party_name, @early_votes, @election_day_votes, @total_votes);
+    `);
+}
+
+export async function listCountySosRaceVoteSources(electionId) {
+  const pool = await ensureDb();
+  const r = await pool.request().input("election_id", sql.NVarChar(128), String(electionId)).query(`
+    SELECT county_key AS countyKey, sos_race_id AS sosRaceId, vote_source AS voteSource, updated_at AS updatedAt
+    FROM dbo.county_sos_race_vote_source WHERE election_id = @election_id
+  `);
+  return (r.recordset ?? []).map((row) => ({
+    countyKey: String(row.countyKey ?? ""),
+    sosRaceId: String(row.sosRaceId ?? ""),
+    voteSource: String(row.voteSource ?? "sos"),
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt ?? ""),
+  }));
+}
+
+export async function upsertCountySosRaceVoteSource(electionId, row) {
+  const src = String(row.voteSource ?? "sos").toLowerCase();
+  if (!["sos", "county_feed", "manual"].includes(src)) {
+    throw new Error("voteSource must be sos, county_feed, or manual");
+  }
+  const pool = await ensureDb();
+  await pool
+    .request()
+    .input("election_id", sql.NVarChar(128), String(electionId))
+    .input("county_key", sql.NVarChar(64), String(row.countyKey ?? "").toLowerCase().trim())
+    .input("sos_race_id", sql.NVarChar(64), String(row.sosRaceId ?? "").trim())
+    .input("vote_source", sql.NVarChar(32), src)
+    .query(`
+      MERGE dbo.county_sos_race_vote_source AS t
+      USING (SELECT @election_id AS election_id, @county_key AS county_key, @sos_race_id AS sos_race_id) AS s
+      ON t.election_id = s.election_id AND t.county_key = s.county_key AND t.sos_race_id = s.sos_race_id
+      WHEN MATCHED THEN UPDATE SET vote_source = @vote_source, updated_at = SYSUTCDATETIME()
+      WHEN NOT MATCHED THEN INSERT (election_id, county_key, sos_race_id, vote_source)
+        VALUES (@election_id, @county_key, @sos_race_id, @vote_source);
+    `);
+}
+
+export async function buildCivixNameToCountyKeyMap(electionId) {
+  const pool = await ensureDb();
+  const feeds = await listElectionFeedSources(electionId);
+  const map = {};
+  for (const f of feeds) {
+    const slug = String(f.countyKey ?? "").trim().toLowerCase();
+    if (!slug) continue;
+    map[await civixCountyLabelForSlugMssql(pool, electionId, slug)] = slug;
+  }
+  return map;
+}
+
 async function migrateCountyPreferJsonToFeedsMssql(pool) {
   try {
     const cfgRows = await pool.request().query(`
@@ -1417,12 +1886,12 @@ export async function listElectionSourceConfigs() {
   const pool = await ensureDb();
   const r = await pool.request().query(`
     SELECT election_id AS electionId, label, is_enabled AS isEnabled, auto_refresh_enabled AS autoRefreshEnabled,
-           uses_civix_sos AS usesCivixSos, show_in_catalog AS showInCatalog,
+           uses_civix_sos AS usesCivixSos, show_in_catalog AS showInCatalog, is_default_catalog AS isDefaultCatalog,
            sos_countyinfo_url AS sosCountyInfoUrl, harris_source_url AS harrisSourceUrl, galveston_source_url AS galvestonSourceUrl,
            jefferson_source_url AS jeffersonSourceUrl, montgomery_source_url AS montgomerySourceUrl, chambers_source_url AS chambersSourceUrl,
            updated_at AS updatedAt
     FROM dbo.election_source_configs
-    ORDER BY election_id
+    ORDER BY is_default_catalog DESC, election_id
   `);
   return (r.recordset ?? []).map((row) => ({
     electionId: String(row.electionId ?? ""),
@@ -1431,6 +1900,7 @@ export async function listElectionSourceConfigs() {
     autoRefreshEnabled: !!row.autoRefreshEnabled,
     usesCivixSos: row.usesCivixSos == null ? true : !!row.usesCivixSos,
     showInCatalog: row.showInCatalog == null ? true : !!row.showInCatalog,
+    isDefaultCatalog: !!row.isDefaultCatalog,
     sosCountyInfoUrl: String(row.sosCountyInfoUrl ?? ""),
     harrisSourceUrl: String(row.harrisSourceUrl ?? ""),
     galvestonSourceUrl: String(row.galvestonSourceUrl ?? ""),
@@ -1445,7 +1915,7 @@ export async function getElectionSourceConfig(electionId) {
   const pool = await ensureDb();
   const r = await pool.request().input("election_id", sql.NVarChar(128), String(electionId)).query(`
     SELECT election_id AS electionId, label, is_enabled AS isEnabled, auto_refresh_enabled AS autoRefreshEnabled,
-           uses_civix_sos AS usesCivixSos, show_in_catalog AS showInCatalog,
+           uses_civix_sos AS usesCivixSos, show_in_catalog AS showInCatalog, is_default_catalog AS isDefaultCatalog,
            sos_countyinfo_url AS sosCountyInfoUrl, harris_source_url AS harrisSourceUrl, galveston_source_url AS galvestonSourceUrl,
            jefferson_source_url AS jeffersonSourceUrl, montgomery_source_url AS montgomerySourceUrl, chambers_source_url AS chambersSourceUrl
     FROM dbo.election_source_configs WHERE election_id = @election_id
@@ -1459,6 +1929,7 @@ export async function getElectionSourceConfig(electionId) {
     autoRefreshEnabled: !!row.autoRefreshEnabled,
     usesCivixSos: row.usesCivixSos == null ? true : !!row.usesCivixSos,
     showInCatalog: row.showInCatalog == null ? true : !!row.showInCatalog,
+    isDefaultCatalog: !!row.isDefaultCatalog,
     sosCountyInfoUrl: String(row.sosCountyInfoUrl ?? ""),
     harrisSourceUrl: String(row.harrisSourceUrl ?? ""),
     galvestonSourceUrl: String(row.galvestonSourceUrl ?? ""),
@@ -1466,6 +1937,26 @@ export async function getElectionSourceConfig(electionId) {
     montgomerySourceUrl: String(row.montgomerySourceUrl ?? ""),
     chambersSourceUrl: String(row.chambersSourceUrl ?? ""),
   };
+}
+
+export async function setDefaultElectionCatalog(electionId) {
+  const pool = await ensureDb();
+  const id = String(electionId ?? "").trim();
+  if (!id) throw new Error("electionId is required");
+  const check = await pool.request().input("election_id", sql.NVarChar(128), id).query(`
+    SELECT 1 AS ok FROM dbo.election_source_configs WHERE election_id = @election_id
+  `);
+  if (!check.recordset?.length) throw new Error(`Election ${id} not found`);
+  await pool.request().query(`UPDATE dbo.election_source_configs SET is_default_catalog = 0`);
+  await pool
+    .request()
+    .input("election_id", sql.NVarChar(128), id)
+    .query(`
+      UPDATE dbo.election_source_configs
+      SET is_default_catalog = 1, updated_at = SYSUTCDATETIME()
+      WHERE election_id = @election_id
+    `);
+  return getElectionSourceConfig(id);
 }
 
 export async function upsertElectionSourceConfig(payload) {
@@ -1626,4 +2117,1016 @@ export async function getSourceImportLogPayload({ recentLimit = 200 } = {}) {
     };
   }
   return { entries, latestBySource };
+}
+
+export async function listEvRosterConfigs() {
+  const pool = await ensureDb();
+  const r = await pool.request().query(`
+    SELECT evr_election_id AS evrElectionId, party, election_name AS electionName, election_date AS electionDate,
+           is_enabled AS isEnabled, notes, updated_at AS updatedAt
+    FROM dbo.ev_roster_configs ORDER BY party, evr_election_id
+  `);
+  return (r.recordset ?? []).map((row) => ({
+    evrElectionId: Number(row.evrElectionId),
+    party: String(row.party ?? ""),
+    electionName: String(row.electionName ?? ""),
+    electionDate: String(row.electionDate ?? ""),
+    isEnabled: !!row.isEnabled,
+    notes: row.notes != null ? String(row.notes) : null,
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt ?? ""),
+  }));
+}
+
+export async function upsertEvRosterConfig({ evrElectionId, party, electionName, electionDate, isEnabled, notes }) {
+  const pool = await ensureDb();
+  await pool
+    .request()
+    .input("evr_election_id", sql.Int, Number(evrElectionId))
+    .input("party", sql.NVarChar(16), String(party ?? ""))
+    .input("election_name", sql.NVarChar(512), String(electionName ?? ""))
+    .input("election_date", sql.NVarChar(32), String(electionDate ?? ""))
+    .input("is_enabled", sql.Bit, isEnabled === false ? 0 : 1)
+    .input("notes", sql.NVarChar(sql.MAX), notes != null ? String(notes) : null)
+    .query(`
+      MERGE dbo.ev_roster_configs AS target
+      USING (SELECT @evr_election_id AS evr_election_id) AS source
+      ON target.evr_election_id = source.evr_election_id
+      WHEN MATCHED THEN UPDATE SET
+        party = @party, election_name = @election_name, election_date = @election_date,
+        is_enabled = @is_enabled, notes = @notes, updated_at = SYSUTCDATETIME()
+      WHEN NOT MATCHED THEN INSERT (evr_election_id, party, election_name, election_date, is_enabled, notes)
+        VALUES (@evr_election_id, @party, @election_name, @election_date, @is_enabled, @notes);
+    `);
+  return listEvRosterConfigs();
+}
+
+/** @returns {Promise<Set<string>>} uppercased county names confirmed for this date */
+export async function getConfirmedEvRosterCountyNames(evrElectionId, votingDate) {
+  const pool = await ensureDb();
+  const r = await pool
+    .request()
+    .input("evr_election_id", sql.Int, Number(evrElectionId))
+    .input("voting_date", sql.NVarChar(16), String(votingDate ?? "").trim())
+    .query(`
+      SELECT county_name AS countyName
+      FROM dbo.ev_roster_county_pull_status
+      WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date AND confirmed_at IS NOT NULL
+    `);
+  return new Set((r.recordset ?? []).map((row) => String(row.countyName ?? "").toUpperCase()).filter(Boolean));
+}
+
+export async function listEvRosterCountyPullStatuses(evrElectionId, votingDate) {
+  const pool = await ensureDb();
+  const r = await pool
+    .request()
+    .input("evr_election_id", sql.Int, Number(evrElectionId))
+    .input("voting_date", sql.NVarChar(16), String(votingDate ?? "").trim())
+    .query(`
+      SELECT county_name AS countyName, county_key AS countyKey, last_pull_ok AS lastPullOk,
+             last_pull_at AS lastPullAt, last_pull_message AS lastPullMessage, voter_count AS voterCount,
+             confirmed_at AS confirmedAt
+      FROM dbo.ev_roster_county_pull_status
+      WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date
+    `);
+  return (r.recordset ?? []).map((row) => ({
+    countyName: String(row.countyName ?? ""),
+    countyKey: row.countyKey != null ? String(row.countyKey) : null,
+    lastPullOk: row.lastPullOk == null ? null : !!row.lastPullOk,
+    lastPullAt: row.lastPullAt instanceof Date ? row.lastPullAt.toISOString() : row.lastPullAt ? String(row.lastPullAt) : null,
+    lastPullMessage: row.lastPullMessage != null ? String(row.lastPullMessage) : null,
+    voterCount: Number(row.voterCount ?? 0),
+    confirmedAt: row.confirmedAt instanceof Date ? row.confirmedAt.toISOString() : row.confirmedAt ? String(row.confirmedAt) : null,
+  }));
+}
+
+/**
+ * @param {number} evrElectionId
+ * @param {string} votingDate
+ * @param {Array<{ countyName?: string, countyKey?: string, ok?: boolean, voterCount?: number, message?: string }>} countyPullLog
+ */
+export async function recordEvRosterCountyPullResults(evrElectionId, votingDate, countyPullLog) {
+  const { aggregateCountyPullResults } = await import("./lib/evRosterCountyStatus.mjs");
+  const pool = await ensureDb();
+  const eid = Number(evrElectionId);
+  const vDate = String(votingDate ?? "").trim();
+  const now = new Date();
+  for (const row of aggregateCountyPullResults(countyPullLog)) {
+    await pool
+      .request()
+      .input("evr_election_id", sql.Int, eid)
+      .input("voting_date", sql.NVarChar(16), vDate)
+      .input("county_name", sql.NVarChar(128), row.countyName)
+      .input("county_key", sql.NVarChar(64), row.countyKey || null)
+      .input("last_pull_ok", sql.Bit, row.lastPullOk ? 1 : 0)
+      .input("last_pull_at", sql.DateTime2, now)
+      .input("last_pull_message", sql.NVarChar(sql.MAX), row.messages.join(" | ").slice(0, 4000) || null)
+      .input("voter_count", sql.BigInt, Number(row.voterCount ?? 0))
+      .query(`
+        MERGE dbo.ev_roster_county_pull_status AS target
+        USING (SELECT @evr_election_id AS evr_election_id, @voting_date AS voting_date, @county_name AS county_name) AS source
+        ON target.evr_election_id = source.evr_election_id AND target.voting_date = source.voting_date
+          AND target.county_name = source.county_name
+        WHEN MATCHED THEN UPDATE SET
+          county_key = COALESCE(@county_key, target.county_key),
+          last_pull_ok = @last_pull_ok, last_pull_at = @last_pull_at, last_pull_message = @last_pull_message,
+          voter_count = @voter_count
+        WHEN NOT MATCHED THEN INSERT
+          (evr_election_id, voting_date, county_name, county_key, last_pull_ok, last_pull_at, last_pull_message, voter_count)
+        VALUES (@evr_election_id, @voting_date, @county_name, @county_key, @last_pull_ok, @last_pull_at, @last_pull_message, @voter_count);
+      `);
+  }
+}
+
+export async function confirmEvRosterCountyPull(evrElectionId, votingDate, countyName) {
+  const pool = await ensureDb();
+  const name = String(countyName ?? "").toUpperCase();
+  const check = await pool
+    .request()
+    .input("evr_election_id", sql.Int, Number(evrElectionId))
+    .input("voting_date", sql.NVarChar(16), String(votingDate ?? "").trim())
+    .input("county_name", sql.NVarChar(128), name)
+    .query(`
+      SELECT last_pull_ok AS lastPullOk FROM dbo.ev_roster_county_pull_status
+      WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date AND county_name = @county_name
+    `);
+  if (!check.recordset?.length) {
+    throw new Error(`No county pull recorded for ${name} on this date — pull the county first.`);
+  }
+  if (!check.recordset[0].lastPullOk) {
+    throw new Error(`Latest pull for ${name} did not succeed — fix sources and pull again before confirming.`);
+  }
+  await pool
+    .request()
+    .input("evr_election_id", sql.Int, Number(evrElectionId))
+    .input("voting_date", sql.NVarChar(16), String(votingDate ?? "").trim())
+    .input("county_name", sql.NVarChar(128), name)
+    .query(`
+      UPDATE dbo.ev_roster_county_pull_status SET confirmed_at = SYSUTCDATETIME()
+      WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date AND county_name = @county_name
+    `);
+  return listEvRosterCountyPullStatuses(evrElectionId, votingDate);
+}
+
+/** Remove all stored pulls, voters, summaries, and per-county pull status (keeps configs & county sources). */
+export async function clearEvRosterPullData() {
+  const pool = await ensureDb();
+  const count = async (table) => {
+    const r = await pool.request().query(`SELECT COUNT(*) AS n FROM ${table}`);
+    return Number(r.recordset?.[0]?.n ?? 0);
+  };
+  const before = {
+    voters: await count("dbo.ev_roster_voters"),
+    pulls: await count("dbo.ev_roster_pulls"),
+  };
+  const tables = [
+    "dbo.ev_roster_county_pull_log",
+    "dbo.ev_roster_county_summary",
+    "dbo.ev_roster_county_pull_status",
+    "dbo.ev_roster_voters",
+    "dbo.ev_roster_pulls",
+    "dbo.ev_roster_activity_cache",
+    "dbo.ev_roster_registered_cache",
+  ];
+  for (const t of tables) {
+    await pool.request().query(`DELETE FROM ${t}`);
+  }
+  return { cleared: before, remaining: { voters: 0, pulls: 0 } };
+}
+
+export async function saveEvRosterPull(payload, options = {}) {
+  if (options?.merge) return mergeEvRosterPull(payload);
+  const {
+    evrElectionId,
+    votingDate,
+    hubPageUrl,
+    sosTurnoutUrl,
+    sosRosterUrl,
+    statewideVoterCount,
+    rawRecordCount,
+    dedupedVoterCount,
+    ok,
+    message,
+    countySummaries,
+    voters,
+    countyPullLog,
+  } = payload;
+  const pool = await ensureDb();
+  const eid = Number(evrElectionId);
+  const vDate = String(votingDate ?? "").trim();
+  const locked = await getConfirmedEvRosterCountyNames(eid, vDate);
+  const { filterSummariesForLocked, filterVotersForLocked } = await import("./lib/evRosterCountyStatus.mjs");
+  let preservedSummaries = [];
+  if (locked.size) {
+    const existing = await getEvRosterPullPayload(eid, vDate);
+    preservedSummaries = (existing?.counties ?? []).filter((c) =>
+      locked.has(String(c.countyName ?? "").toUpperCase()),
+    );
+  }
+  const summariesToWrite = [
+    ...filterSummariesForLocked(countySummaries, locked),
+    ...preservedSummaries,
+  ];
+  const votersToWrite = filterVotersForLocked(voters, locked);
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin();
+  try {
+    const req = () => new sql.Request(transaction);
+    await req()
+      .input("evr_election_id", sql.Int, eid)
+      .input("voting_date", sql.NVarChar(16), vDate)
+      .query(`DELETE FROM dbo.ev_roster_pulls WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date`);
+    const ins = await req()
+      .input("evr_election_id", sql.Int, eid)
+      .input("voting_date", sql.NVarChar(16), vDate)
+      .input("hub_page_url", sql.NVarChar(2048), hubPageUrl ?? null)
+      .input("sos_turnout_url", sql.NVarChar(2048), sosTurnoutUrl ?? null)
+      .input("sos_roster_url", sql.NVarChar(2048), sosRosterUrl ?? null)
+      .input("statewide_voter_count", sql.BigInt, Number(statewideVoterCount ?? 0))
+      .input("raw_record_count", sql.BigInt, Number(rawRecordCount ?? 0))
+      .input("deduped_voter_count", sql.BigInt, Number(dedupedVoterCount ?? 0))
+      .input("ok", sql.Bit, ok === false ? 0 : 1)
+      .input("message", sql.NVarChar(sql.MAX), String(message ?? "").slice(0, 4000))
+      .query(`
+        INSERT INTO dbo.ev_roster_pulls
+          (evr_election_id, voting_date, hub_page_url, sos_turnout_url, sos_roster_url, statewide_voter_count,
+           raw_record_count, deduped_voter_count, ok, message)
+        OUTPUT INSERTED.id AS id
+        VALUES (@evr_election_id, @voting_date, @hub_page_url, @sos_turnout_url, @sos_roster_url, @statewide_voter_count,
+                @raw_record_count, @deduped_voter_count, @ok, @message)
+      `);
+    const pullId = Number(ins.recordset?.[0]?.id);
+    for (const c of summariesToWrite) {
+      await req()
+        .input("pull_id", sql.Int, pullId)
+        .input("county_name", sql.NVarChar(128), String(c.countyName ?? ""))
+        .input("county_id", sql.Int, c.countyId != null ? Number(c.countyId) : null)
+        .input("registered_voters", sql.BigInt, Number(c.registeredVoters ?? 0))
+        .input("in_person_votes_on_date", sql.BigInt, Number(c.inPersonVotesOnDate ?? 0))
+        .input("total_in_person_votes_for_election", sql.BigInt, Number(c.totalInPersonVotesForElection ?? 0))
+        .input("total_mail_votes_for_election", sql.BigInt, Number(c.totalMailVotesForElection ?? 0))
+        .input("cumulative_total", sql.BigInt, Number(c.cumulativeTotal ?? 0))
+        .input("sos_voter_count", sql.BigInt, Number(c.sosVoterCount ?? 0))
+        .input("county_voter_count", sql.BigInt, Number(c.countyVoterCount ?? 0))
+        .input("chosen_source", sql.NVarChar(32), String(c.chosenSource ?? "sos"))
+        .input("chosen_voter_count", sql.BigInt, Number(c.chosenVoterCount ?? 0))
+        .query(`
+          INSERT INTO dbo.ev_roster_county_summary
+            (pull_id, county_name, county_id, registered_voters, in_person_votes_on_date, total_in_person_votes_for_election,
+             total_mail_votes_for_election, cumulative_total, sos_voter_count, county_voter_count, chosen_source, chosen_voter_count)
+          VALUES (@pull_id, @county_name, @county_id, @registered_voters, @in_person_votes_on_date, @total_in_person_votes_for_election,
+                  @total_mail_votes_for_election, @cumulative_total, @sos_voter_count, @county_voter_count, @chosen_source, @chosen_voter_count)
+        `);
+    }
+    if (locked.size) {
+      const names = [...locked];
+      const placeholders = names.map((_, i) => `@lock_${i}`).join(", ");
+      const delReq = req()
+        .input("evr_election_id", sql.Int, eid)
+        .input("voting_date", sql.NVarChar(16), vDate);
+      names.forEach((n, i) => delReq.input(`lock_${i}`, sql.NVarChar(128), n));
+      await delReq.query(`
+        DELETE FROM dbo.ev_roster_voters
+        WHERE evr_election_id = @evr_election_id
+          AND COALESCE(reporting_date, voting_date) = @voting_date
+          AND county_name NOT IN (${placeholders})
+      `);
+    } else {
+      await req()
+        .input("evr_election_id", sql.Int, eid)
+        .input("voting_date", sql.NVarChar(16), vDate)
+        .query(`
+          DELETE FROM dbo.ev_roster_voters
+          WHERE evr_election_id = @evr_election_id
+            AND COALESCE(reporting_date, voting_date) = @voting_date
+        `);
+    }
+    for (const v of votersToWrite) {
+      const activityDate = resolveVoterActivityDate(v, vDate);
+      await req()
+        .input("evr_election_id", sql.Int, eid)
+        .input("voting_date", sql.NVarChar(16), activityDate)
+        .input("reporting_date", sql.NVarChar(16), vDate)
+        .input("county_name", sql.NVarChar(128), String(v.countyName ?? v.county ?? ""))
+        .input("vuid", sql.NVarChar(32), String(v.vuid ?? ""))
+        .input("voter_name", sql.NVarChar(256), v.voterName != null ? String(v.voterName) : null)
+        .input("voting_method", sql.NVarChar(64), v.votingMethod != null ? String(v.votingMethod) : null)
+        .input("method_code", sql.NVarChar(8), v.methodCode != null ? String(v.methodCode) : null)
+        .input("party", sql.NVarChar(16), v.party != null ? String(v.party) : null)
+        .input("precinct", sql.NVarChar(64), v.precinct != null ? String(v.precinct) : null)
+        .input("source", sql.NVarChar(32), String(v.sourceKey ?? v.source ?? "sos"))
+        .query(`
+          MERGE dbo.ev_roster_voters AS target
+          USING (SELECT @evr_election_id AS evr_election_id, @voting_date AS voting_date, @vuid AS vuid) AS source
+          ON target.evr_election_id = source.evr_election_id AND target.voting_date = source.voting_date
+            AND target.county_name = @county_name AND target.vuid = source.vuid
+          WHEN MATCHED THEN UPDATE SET
+            voter_name = @voter_name, voting_method = @voting_method,
+            method_code = @method_code, party = @party, precinct = @precinct, source = @source,
+            reporting_date = @reporting_date
+          WHEN NOT MATCHED THEN INSERT
+            (evr_election_id, voting_date, reporting_date, county_name, vuid, voter_name, voting_method, method_code, party, precinct, source)
+          VALUES (@evr_election_id, @voting_date, @reporting_date, @county_name, @vuid, @voter_name, @voting_method, @method_code, @party, @precinct, @source);
+        `);
+    }
+    for (const log of countyPullLog ?? []) {
+      await req()
+        .input("pull_id", sql.Int, pullId)
+        .input("county_key", sql.NVarChar(64), String(log.countyKey ?? ""))
+        .input("county_name", sql.NVarChar(128), String(log.countyName ?? ""))
+        .input("handler_key", sql.NVarChar(64), String(log.handlerKey ?? ""))
+        .input("ok", sql.Bit, log.ok === false ? 0 : 1)
+        .input("voter_count", sql.BigInt, Number(log.voterCount ?? 0))
+        .input("source_url", sql.NVarChar(2048), log.sourceUrl ?? null)
+        .input("message", sql.NVarChar(sql.MAX), String(log.message ?? "").slice(0, 2000))
+        .query(`
+          INSERT INTO dbo.ev_roster_county_pull_log
+            (pull_id, county_key, county_name, handler_key, ok, voter_count, source_url, message)
+          VALUES (@pull_id, @county_key, @county_name, @handler_key, @ok, @voter_count, @source_url, @message)
+        `);
+    }
+    await transaction.commit();
+  } catch (e) {
+    await transaction.rollback();
+    throw e;
+  }
+  await rebuildEvRosterSummaryCache(eid, { pool });
+  return getEvRosterPullPayload(eid, vDate);
+}
+
+/**
+ * One row per VUID per runoff election — keep earliest voting_date (then lowest id).
+ * @returns {Promise<{ removed: number, distinctVuids: number }>}
+ */
+export async function dedupeEvRosterVotersKeepOldestDate(evrElectionId) {
+  const pool = await ensureDb();
+  const eid = Number(evrElectionId);
+
+  const beforeR = await pool
+    .request()
+    .input("evr_election_id", sql.Int, eid)
+    .query(`SELECT COUNT(*) AS n FROM dbo.ev_roster_voters WHERE evr_election_id = @evr_election_id`);
+  const before = Number(beforeR.recordset?.[0]?.n ?? 0);
+
+  await pool.request().input("evr_election_id", sql.Int, eid).query(`
+    DELETE FROM dbo.ev_roster_voters
+    WHERE evr_election_id = @evr_election_id
+    AND id NOT IN (
+      SELECT id FROM (
+        SELECT id,
+          ROW_NUMBER() OVER (PARTITION BY vuid ORDER BY voting_date ASC, id ASC) AS rn
+        FROM dbo.ev_roster_voters
+        WHERE evr_election_id = @evr_election_id
+      ) ranked WHERE rn = 1
+    )
+  `);
+
+  const afterR = await pool
+    .request()
+    .input("evr_election_id", sql.Int, eid)
+    .query(`SELECT COUNT(*) AS n FROM dbo.ev_roster_voters WHERE evr_election_id = @evr_election_id`);
+  const after = Number(afterR.recordset?.[0]?.n ?? 0);
+
+  const distinctR = await pool
+    .request()
+    .input("evr_election_id", sql.Int, eid)
+    .query(`SELECT COUNT(DISTINCT vuid) AS n FROM dbo.ev_roster_voters WHERE evr_election_id = @evr_election_id`);
+  const distinctVuids = Number(distinctR.recordset?.[0]?.n ?? 0);
+
+  await pool.request().input("evr_election_id", sql.Int, eid).query(`
+    UPDATE p SET deduped_voter_count = c.n
+    FROM dbo.ev_roster_pulls p
+    INNER JOIN (
+      SELECT evr_election_id, voting_date, COUNT(*) AS n
+      FROM dbo.ev_roster_voters
+      WHERE evr_election_id = @evr_election_id
+      GROUP BY evr_election_id, voting_date
+    ) c ON c.evr_election_id = p.evr_election_id AND c.voting_date = p.voting_date
+    WHERE p.evr_election_id = @evr_election_id
+  `);
+
+  await rebuildEvRosterSummaryCache(eid, { pool });
+  return { removed: Math.max(0, before - after), distinctVuids };
+}
+
+export async function rebuildEvRosterSummaryCacheForElection(evrElectionId) {
+  const pool = await ensureDb();
+  return rebuildEvRosterSummaryCache(Number(evrElectionId), { pool });
+}
+
+export async function mergeEvRosterPull({
+  evrElectionId,
+  votingDate,
+  hubPageUrl,
+  sosTurnoutUrl,
+  sosRosterUrl,
+  statewideVoterCount,
+  rawRecordCount,
+  dedupedVoterCount,
+  ok,
+  message,
+  countySummaries,
+  voters,
+  countyPullLog,
+}) {
+  const pool = await ensureDb();
+  const eid = Number(evrElectionId);
+  const vDate = String(votingDate ?? "").trim();
+  const locked = await getConfirmedEvRosterCountyNames(eid, vDate);
+  const { filterSummariesForLocked, filterVotersForLocked } = await import("./lib/evRosterCountyStatus.mjs");
+  const countySummariesWritable = filterSummariesForLocked(countySummaries, locked);
+  const votersWritable = filterVotersForLocked(voters, locked);
+  const findR = await pool
+    .request()
+    .input("evr_election_id", sql.Int, eid)
+    .input("voting_date", sql.NVarChar(16), vDate)
+    .query(`SELECT TOP 1 id FROM dbo.ev_roster_pulls WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date`);
+  let pullId = findR.recordset?.[0]?.id != null ? Number(findR.recordset[0].id) : null;
+  if (pullId == null) {
+    const ins = await pool
+      .request()
+      .input("evr_election_id", sql.Int, eid)
+      .input("voting_date", sql.NVarChar(16), vDate)
+      .input("hub_page_url", sql.NVarChar(2048), hubPageUrl ?? null)
+      .input("sos_turnout_url", sql.NVarChar(2048), sosTurnoutUrl ?? null)
+      .input("sos_roster_url", sql.NVarChar(2048), sosRosterUrl ?? null)
+      .input("statewide_voter_count", sql.BigInt, Number(statewideVoterCount ?? 0))
+      .input("message", sql.NVarChar(sql.MAX), String(message ?? "Merged county pull").slice(0, 4000))
+      .query(`
+        INSERT INTO dbo.ev_roster_pulls
+          (evr_election_id, voting_date, hub_page_url, sos_turnout_url, sos_roster_url, statewide_voter_count, raw_record_count, deduped_voter_count, ok, message)
+        OUTPUT INSERTED.id AS id
+        VALUES (@evr_election_id, @voting_date, @hub_page_url, @sos_turnout_url, @sos_roster_url, @statewide_voter_count, 0, 0, 1, @message)
+      `);
+    pullId = Number(ins.recordset?.[0]?.id);
+  }
+  const voterCountyNames = [
+    ...new Set(
+      (votersWritable ?? []).map((v) => String(v.countyName ?? v.county ?? "").toUpperCase()).filter(Boolean),
+    ),
+  ];
+  for (const name of voterCountyNames) {
+    await pool
+      .request()
+      .input("evr_election_id", sql.Int, eid)
+      .input("voting_date", sql.NVarChar(16), vDate)
+      .input("county_name", sql.NVarChar(128), name)
+      .query(`
+        DELETE FROM dbo.ev_roster_voters
+        WHERE evr_election_id = @evr_election_id
+          AND COALESCE(reporting_date, voting_date) = @voting_date
+          AND county_name = @county_name
+      `);
+  }
+  const summaryCountyNames = [
+    ...new Set(
+      (countySummariesWritable ?? []).map((c) => String(c.countyName ?? "").toUpperCase()).filter(Boolean),
+    ),
+  ];
+  for (const name of summaryCountyNames) {
+    await pool
+      .request()
+      .input("pull_id", sql.Int, pullId)
+      .input("county_name", sql.NVarChar(128), name)
+      .query(`DELETE FROM dbo.ev_roster_county_summary WHERE pull_id = @pull_id AND county_name = @county_name`);
+  }
+  for (const c of countySummariesWritable) {
+    await pool
+      .request()
+      .input("pull_id", sql.Int, pullId)
+      .input("county_name", sql.NVarChar(128), String(c.countyName ?? ""))
+      .input("county_id", sql.Int, c.countyId != null ? Number(c.countyId) : null)
+      .input("registered_voters", sql.BigInt, Number(c.registeredVoters ?? 0))
+      .input("in_person_votes_on_date", sql.BigInt, Number(c.inPersonVotesOnDate ?? 0))
+      .input("total_in_person_votes_for_election", sql.BigInt, Number(c.totalInPersonVotesForElection ?? 0))
+      .input("total_mail_votes_for_election", sql.BigInt, Number(c.totalMailVotesForElection ?? 0))
+      .input("cumulative_total", sql.BigInt, Number(c.cumulativeTotal ?? 0))
+      .input("sos_voter_count", sql.BigInt, Number(c.sosVoterCount ?? 0))
+      .input("county_voter_count", sql.BigInt, Number(c.countyVoterCount ?? 0))
+      .input("chosen_source", sql.NVarChar(32), String(c.chosenSource ?? "county"))
+      .input("chosen_voter_count", sql.BigInt, Number(c.chosenVoterCount ?? 0))
+      .query(`
+        INSERT INTO dbo.ev_roster_county_summary
+          (pull_id, county_name, county_id, registered_voters, in_person_votes_on_date, total_in_person_votes_for_election,
+           total_mail_votes_for_election, cumulative_total, sos_voter_count, county_voter_count, chosen_source, chosen_voter_count)
+        VALUES (@pull_id, @county_name, @county_id, @registered_voters, @in_person_votes_on_date, @total_in_person_votes_for_election,
+                @total_mail_votes_for_election, @cumulative_total, @sos_voter_count, @county_voter_count, @chosen_source, @chosen_voter_count)
+      `);
+  }
+  for (const v of votersWritable) {
+    const activityDate = resolveVoterActivityDate(v, vDate);
+    await pool
+      .request()
+      .input("evr_election_id", sql.Int, eid)
+      .input("voting_date", sql.NVarChar(16), activityDate)
+      .input("reporting_date", sql.NVarChar(16), vDate)
+      .input("county_name", sql.NVarChar(128), String(v.countyName ?? v.county ?? ""))
+      .input("vuid", sql.NVarChar(32), String(v.vuid ?? ""))
+      .input("voter_name", sql.NVarChar(256), v.voterName != null ? String(v.voterName) : null)
+      .input("voting_method", sql.NVarChar(64), v.votingMethod != null ? String(v.votingMethod) : null)
+      .input("method_code", sql.NVarChar(8), v.methodCode != null ? String(v.methodCode) : null)
+      .input("party", sql.NVarChar(16), v.party != null ? String(v.party) : null)
+      .input("precinct", sql.NVarChar(64), v.precinct != null ? String(v.precinct) : null)
+      .input("source", sql.NVarChar(64), String(v.sourceKey ?? v.source ?? "county"))
+      .query(`
+        MERGE dbo.ev_roster_voters AS target
+        USING (SELECT @evr_election_id AS evr_election_id, @voting_date AS voting_date, @vuid AS vuid) AS source
+        ON target.evr_election_id = source.evr_election_id AND target.voting_date = source.voting_date
+          AND target.county_name = @county_name AND target.vuid = source.vuid
+        WHEN MATCHED THEN UPDATE SET
+          voter_name = @voter_name, voting_method = @voting_method,
+          method_code = @method_code, party = @party, precinct = @precinct, source = @source,
+          reporting_date = @reporting_date
+        WHEN NOT MATCHED THEN INSERT
+          (evr_election_id, voting_date, reporting_date, county_name, vuid, voter_name, voting_method, method_code, party, precinct, source)
+        VALUES (@evr_election_id, @voting_date, @reporting_date, @county_name, @vuid, @voter_name, @voting_method, @method_code, @party, @precinct, @source);
+      `);
+  }
+  for (const log of countyPullLog ?? []) {
+    await pool
+      .request()
+      .input("pull_id", sql.Int, pullId)
+      .input("county_key", sql.NVarChar(64), String(log.countyKey ?? ""))
+      .input("county_name", sql.NVarChar(128), String(log.countyName ?? ""))
+      .input("handler_key", sql.NVarChar(64), String(log.handlerKey ?? ""))
+      .input("ok", sql.Bit, log.ok === false ? 0 : 1)
+      .input("voter_count", sql.BigInt, Number(log.voterCount ?? 0))
+      .input("source_url", sql.NVarChar(2048), log.sourceUrl ?? null)
+      .input("message", sql.NVarChar(sql.MAX), String(log.message ?? "").slice(0, 2000))
+      .query(`
+        INSERT INTO dbo.ev_roster_county_pull_log
+          (pull_id, county_key, county_name, handler_key, ok, voter_count, source_url, message)
+        VALUES (@pull_id, @county_key, @county_name, @handler_key, @ok, @voter_count, @source_url, @message)
+      `);
+  }
+  await dedupeEvRosterVotersKeepOldestDate(eid);
+
+  const countR = await pool
+    .request()
+    .input("evr_election_id", sql.Int, eid)
+    .input("voting_date", sql.NVarChar(16), vDate)
+    .query(`SELECT COUNT(*) AS n FROM dbo.ev_roster_voters WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date`);
+  const totalVoters = Number(countR.recordset?.[0]?.n ?? 0);
+  await pool
+    .request()
+    .input("id", sql.Int, pullId)
+    .input("raw_record_count", sql.BigInt, Number(rawRecordCount ?? 0))
+    .input("deduped_voter_count", sql.BigInt, totalVoters)
+    .input("message", sql.NVarChar(sql.MAX), String(message ?? "").slice(0, 4000))
+    .input("ok", sql.Bit, ok === false ? 0 : 1)
+    .query(`
+      UPDATE dbo.ev_roster_pulls SET
+        raw_record_count = COALESCE(raw_record_count, 0) + @raw_record_count,
+        deduped_voter_count = @deduped_voter_count,
+        message = @message,
+        pulled_at = SYSUTCDATETIME(),
+        ok = @ok
+      WHERE id = @id
+    `);
+  return getEvRosterPullPayload(eid, vDate);
+}
+
+export async function listEvRosterVoters(evrElectionId, votingDate, options = {}) {
+  const { normalizeVoterCountyFilter } = await import("./lib/evRosterVoters.mjs");
+  const pool = await ensureDb();
+  const eid = Number(evrElectionId);
+  const vDate = String(votingDate ?? "").trim();
+  const limit = Math.min(Math.max(Number(options.limit) || 500, 1), 5000);
+  const offset = Math.max(Number(options.offset) || 0, 0);
+  const countyList = normalizeVoterCountyFilter(options.counties, options.county);
+  const q = options.q ? String(options.q).trim() : "";
+
+  let where = `WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date`;
+  const req = pool.request().input("evr_election_id", sql.Int, eid).input("voting_date", sql.NVarChar(16), vDate);
+  countyList.forEach((name, i) => {
+    req.input(`county_${i}`, sql.NVarChar(128), name);
+  });
+  if (countyList.length) {
+    where += ` AND county_name IN (${countyList.map((_, i) => `@county_${i}`).join(", ")})`;
+  }
+  if (q) {
+    where += ` AND (vuid LIKE @q OR county_name LIKE @q OR party LIKE @q)`;
+    req.input("q", sql.NVarChar(128), `%${q}%`);
+  }
+  const countR = await req.query(`SELECT COUNT(*) AS n FROM dbo.ev_roster_voters ${where}`);
+  const total = Number(countR.recordset?.[0]?.n ?? 0);
+  const dataReq = pool
+    .request()
+    .input("evr_election_id", sql.Int, eid)
+    .input("voting_date", sql.NVarChar(16), vDate)
+    .input("limit", sql.Int, limit)
+    .input("offset", sql.Int, offset);
+  countyList.forEach((name, i) => {
+    dataReq.input(`county_${i}`, sql.NVarChar(128), name);
+  });
+  if (q) dataReq.input("q", sql.NVarChar(128), `%${q}%`);
+  const dataR = await dataReq.query(`
+      SELECT vuid, party, voting_date AS votingDate, county_name AS countyName,
+             COALESCE(method_code, N'EV') AS methodCode
+      FROM dbo.ev_roster_voters
+      ${where}
+      ORDER BY county_name, vuid
+      OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
+    `);
+  return {
+    total,
+    limit,
+    offset,
+    rows: (dataR.recordset ?? []).map((row) => ({
+      vuid: String(row.vuid ?? ""),
+      party: String(row.party ?? ""),
+      votingDate: String(row.votingDate ?? ""),
+      countyName: String(row.countyName ?? ""),
+      methodCode: String(row.methodCode ?? "EV"),
+    })),
+  };
+}
+
+export async function listEvRosterPullDates(evrElectionId) {
+  return listEvRosterPullDatesForElections([Number(evrElectionId)]);
+}
+
+export async function listEvRosterPullDatesForElections(evrElectionIds) {
+  const ids = [...new Set((evrElectionIds ?? []).map(Number).filter(Boolean))];
+  if (!ids.length) return [];
+  const pool = await ensureDb();
+  const r = await pool.request().query(`
+    SELECT voting_date AS votingDate, MAX(pulled_at) AS pulledAt,
+           SUM(statewide_voter_count) AS statewideVoterCount, MIN(CAST(ok AS INT)) AS okMin,
+           MAX(message) AS message
+    FROM dbo.ev_roster_pulls
+    WHERE evr_election_id IN (${ids.join(", ")})
+    GROUP BY voting_date ORDER BY voting_date DESC
+  `);
+  return (r.recordset ?? []).map((row) => ({
+    votingDate: String(row.votingDate ?? ""),
+    pulledAt: row.pulledAt instanceof Date ? row.pulledAt.toISOString() : String(row.pulledAt ?? ""),
+    statewideVoterCount: Number(row.statewideVoterCount ?? 0),
+    ok: row.okMin == null ? true : !!row.okMin,
+    message: String(row.message ?? ""),
+  }));
+}
+
+export async function listEvRosterVoterDatesForElections(evrElectionIds) {
+  const ids = [...new Set((evrElectionIds ?? []).map(Number).filter(Boolean))];
+  if (!ids.length) return [];
+  const pool = await ensureDb();
+  const r = await pool.request().query(`
+    SELECT voting_date AS votingDate, COUNT(DISTINCT vuid) AS voterCount
+    FROM dbo.ev_roster_voters
+    WHERE evr_election_id IN (${ids.join(", ")})
+    GROUP BY voting_date ORDER BY voting_date DESC
+  `);
+  return (r.recordset ?? []).map((row) => ({
+    votingDate: String(row.votingDate ?? ""),
+    pulledAt: "",
+    statewideVoterCount: Number(row.voterCount ?? 0),
+    ok: true,
+    message: "",
+  }));
+}
+
+export async function getEvRosterAggregatedSummary(evrElectionIds, dateFrom, dateTo) {
+  const { countiesFromVoterActivityInRange, computeSummaryTotals } = await import(
+    "./lib/evRosterAggregateSummary.mjs"
+  );
+  const ids = [...new Set((evrElectionIds ?? []).map(Number).filter(Boolean))];
+  const from = String(dateFrom ?? "").trim();
+  const to = String(dateTo ?? "").trim();
+  if (!ids.length || !from || !to) {
+    return { pull: null, counties: [], dateFrom: from, dateTo: to, countyPullLog: [] };
+  }
+
+  const pool = await ensureDb();
+  const idList = ids.join(", ");
+
+  const {
+    rosterByCounty,
+    methodByCounty,
+    evInPersonDayByCounty,
+    registeredByCounty,
+    statewideDistinct,
+    storedVoterCount,
+  } = await loadSummaryRollupsFromCache(ids, from, to, { pool });
+
+  const statusR = await pool.request().query(`
+    SELECT county_name AS countyName, voting_date AS votingDate, last_pull_ok AS lastPullOk,
+           last_pull_at AS lastPullAt, last_pull_message AS lastPullMessage, voter_count AS voterCount,
+           confirmed_at AS confirmedAt
+    FROM dbo.ev_roster_county_pull_status
+    WHERE evr_election_id IN (${idList})
+  `);
+  const statusByCounty = new Map();
+  for (const s of statusR.recordset ?? []) {
+    const county = String(s.countyName ?? "").toUpperCase();
+    const vDate = String(s.votingDate ?? "");
+    const prev = statusByCounty.get(county);
+    if (!prev || vDate >= String(prev.votingDate ?? "")) {
+      statusByCounty.set(county, {
+        votingDate: vDate,
+        lastPullOk: s.lastPullOk == null ? null : !!s.lastPullOk,
+        lastPullAt: s.lastPullAt instanceof Date ? s.lastPullAt.toISOString() : s.lastPullAt ? String(s.lastPullAt) : null,
+        lastPullMessage: s.lastPullMessage != null ? String(s.lastPullMessage) : null,
+        voterCount: Number(s.voterCount ?? 0),
+        confirmedAt: s.confirmedAt instanceof Date ? s.confirmedAt.toISOString() : s.confirmedAt ? String(s.confirmedAt) : null,
+      });
+    }
+  }
+
+  const counties = countiesFromVoterActivityInRange({
+    rosterByCounty,
+    methodByCounty,
+    evInPersonDayByCounty,
+    registeredByCounty,
+    statusByCounty,
+  });
+
+  const summaryTotals = computeSummaryTotals(
+    { registeredByCounty, evInPersonDayByCounty },
+    0,
+    statewideDistinct,
+  );
+  summaryTotals.cumulativeTotal = storedVoterCount || summaryTotals.cumulativeTotal;
+  summaryTotals.chosenVoterCount = storedVoterCount;
+
+  const pullAggR = await pool.request().query(`
+    SELECT MAX(pulled_at) AS pulledAt, MIN(CAST(ok AS INT)) AS okMin FROM dbo.ev_roster_pulls WHERE evr_election_id IN (${idList})
+  `);
+  const pullAgg = pullAggR.recordset?.[0] ?? {};
+
+  return {
+    dateFrom: from,
+    dateTo: to,
+    pull: {
+      evrElectionIds: ids,
+      votingDate: `${from}..${to}`,
+      pulledAt: pullAgg.pulledAt instanceof Date ? pullAgg.pulledAt.toISOString() : String(pullAgg.pulledAt ?? ""),
+      ok: pullAgg.okMin == null ? true : !!pullAgg.okMin,
+      storedVoterCount,
+      dedupedVoterCount: storedVoterCount,
+      message: `Voter activity ${from} through ${to}`,
+    },
+    counties,
+    countyPullLog: [],
+    summaryTotals,
+  };
+}
+
+export async function getEvRosterPullPayload(evrElectionId, votingDate) {
+  const pool = await ensureDb();
+  const eid = Number(evrElectionId);
+  const vDate = String(votingDate ?? "").trim();
+  const pullR = await pool
+    .request()
+    .input("evr_election_id", sql.Int, eid)
+    .input("voting_date", sql.NVarChar(16), vDate)
+    .query(`
+      SELECT TOP 1 id, evr_election_id AS evrElectionId, voting_date AS votingDate, hub_page_url AS hubPageUrl,
+             sos_turnout_url AS sosTurnoutUrl, sos_roster_url AS sosRosterUrl, statewide_voter_count AS statewideVoterCount,
+             raw_record_count AS rawRecordCount, deduped_voter_count AS dedupedVoterCount,
+             pulled_at AS pulledAt, ok, message
+      FROM dbo.ev_roster_pulls WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date
+    `);
+  const pullRow = pullR.recordset?.[0];
+  if (!pullRow) return null;
+  const pullId = Number(pullRow.id);
+  const countyR = await pool.request().input("pull_id", sql.Int, pullId).query(`
+    SELECT county_name AS countyName, county_id AS countyId, registered_voters AS registeredVoters,
+           in_person_votes_on_date AS inPersonVotesOnDate, total_in_person_votes_for_election AS totalInPersonVotesForElection,
+           total_mail_votes_for_election AS totalMailVotesForElection, cumulative_total AS cumulativeTotal,
+           sos_voter_count AS sosVoterCount, county_voter_count AS countyVoterCount,
+           chosen_source AS chosenSource, chosen_voter_count AS chosenVoterCount
+    FROM dbo.ev_roster_county_summary WHERE pull_id = @pull_id ORDER BY county_name
+  `);
+  const countR = await pool
+    .request()
+    .input("evr_election_id", sql.Int, eid)
+    .input("voting_date", sql.NVarChar(16), vDate)
+    .query(
+      `SELECT COUNT(*) AS n FROM dbo.ev_roster_voters WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date`,
+    );
+  const storedVoterCount = Number(countR.recordset?.[0]?.n ?? 0);
+  const pullStatuses = await listEvRosterCountyPullStatuses(eid, vDate);
+  const statusByCounty = new Map(pullStatuses.map((s) => [String(s.countyName).toUpperCase(), s]));
+  return {
+    pull: {
+      evrElectionId: eid,
+      votingDate: String(pullRow.votingDate ?? ""),
+      hubPageUrl: pullRow.hubPageUrl ? String(pullRow.hubPageUrl) : null,
+      sosTurnoutUrl: pullRow.sosTurnoutUrl ? String(pullRow.sosTurnoutUrl) : null,
+      sosRosterUrl: pullRow.sosRosterUrl ? String(pullRow.sosRosterUrl) : null,
+      statewideVoterCount: Number(pullRow.statewideVoterCount ?? 0),
+      rawRecordCount: Number(pullRow.rawRecordCount ?? 0),
+      dedupedVoterCount: Number(pullRow.dedupedVoterCount ?? 0),
+      pulledAt: pullRow.pulledAt instanceof Date ? pullRow.pulledAt.toISOString() : String(pullRow.pulledAt ?? ""),
+      ok: !!pullRow.ok,
+      message: String(pullRow.message ?? ""),
+      storedVoterCount,
+    },
+    counties: (countyR.recordset ?? []).map((r) => {
+      const countyName = String(r.countyName ?? "");
+      const st = statusByCounty.get(countyName.toUpperCase());
+      return {
+        countyName,
+        countyId: r.countyId != null ? Number(r.countyId) : null,
+        registeredVoters: Number(r.registeredVoters ?? 0),
+        inPersonVotesOnDate: Number(r.inPersonVotesOnDate ?? 0),
+        totalInPersonVotesForElection: Number(r.totalInPersonVotesForElection ?? 0),
+        totalMailVotesForElection: Number(r.totalMailVotesForElection ?? 0),
+        cumulativeTotal: Number(r.cumulativeTotal ?? 0),
+        sosVoterCount: Number(r.sosVoterCount ?? 0),
+        countyVoterCount: Number(r.countyVoterCount ?? 0),
+        chosenSource: String(r.chosenSource ?? "sos"),
+        chosenVoterCount: Number(r.chosenVoterCount ?? 0),
+        pullStatus: st
+          ? {
+              lastPullOk: st.lastPullOk,
+              lastPullAt: st.lastPullAt,
+              lastPullMessage: st.lastPullMessage,
+              voterCount: st.voterCount,
+              confirmedAt: st.confirmedAt,
+            }
+          : null,
+      };
+    }),
+    countyPullLog: await getEvRosterCountyPullLog(eid, vDate),
+  };
+}
+
+export async function listEvRosterCountySources(evrElectionId) {
+  const pool = await ensureDb();
+  const r = await pool.request().input("evr_election_id", sql.Int, Number(evrElectionId)).query(`
+    SELECT id, evr_election_id AS evrElectionId, county_key AS countyKey, variant_key AS variantKey,
+           source_label AS sourceLabel, civix_county_name AS civixCountyName, civix_county_id AS civixCountyId,
+           handler_key AS handlerKey, hub_page_url AS hubPageUrl, roster_url AS rosterUrl,
+           voting_method_scope AS votingMethodScope, date_scope AS dateScope, file_format AS fileFormat,
+           roster_party_scope AS rosterPartyScope,
+           discovery_profile_key AS discoveryProfileKey, training_notes AS trainingNotes, is_enabled AS isEnabled,
+           last_pull_ok AS lastPullOk, last_pull_message AS lastPullMessage, last_pull_at AS lastPullAt
+    FROM dbo.ev_roster_county_sources WHERE evr_election_id = @evr_election_id ORDER BY civix_county_name, variant_key
+  `);
+  return (r.recordset ?? []).map((row) => ({
+    id: Number(row.id),
+    evrElectionId: Number(row.evrElectionId),
+    countyKey: String(row.countyKey ?? ""),
+    variantKey: String(row.variantKey ?? "sos-default"),
+    sourceLabel: String(row.sourceLabel ?? ""),
+    civixCountyName: String(row.civixCountyName ?? ""),
+    civixCountyId: row.civixCountyId != null ? Number(row.civixCountyId) : null,
+    handlerKey: String(row.handlerKey ?? "civix_sos_county_slice"),
+    hubPageUrl: String(row.hubPageUrl ?? ""),
+    rosterUrl: String(row.rosterUrl ?? ""),
+    votingMethodScope: String(row.votingMethodScope ?? "ALL"),
+    dateScope: String(row.dateScope ?? "SINGLE_DAY"),
+    fileFormat: String(row.fileFormat ?? "auto"),
+    rosterPartyScope: String(row.rosterPartyScope ?? "COMBINED"),
+    discoveryProfileKey: row.discoveryProfileKey != null ? String(row.discoveryProfileKey) : null,
+    trainingNotes: row.trainingNotes != null ? String(row.trainingNotes) : null,
+    isEnabled: !!row.isEnabled,
+    lastPullOk: row.lastPullOk == null ? null : !!row.lastPullOk,
+    lastPullMessage: row.lastPullMessage != null ? String(row.lastPullMessage) : null,
+    lastPullAt: row.lastPullAt instanceof Date ? row.lastPullAt.toISOString() : row.lastPullAt ? String(row.lastPullAt) : null,
+  }));
+}
+
+export async function upsertEvRosterCountySource(row) {
+  const pool = await ensureDb();
+  const variantKey = String(row.variantKey ?? "custom").slice(0, 64);
+  if (row.id != null) {
+    await pool
+      .request()
+      .input("id", sql.Int, Number(row.id))
+      .input("source_label", sql.NVarChar(256), String(row.sourceLabel ?? ""))
+      .input("civix_county_name", sql.NVarChar(128), String(row.civixCountyName ?? ""))
+      .input("civix_county_id", sql.Int, row.civixCountyId != null ? Number(row.civixCountyId) : null)
+      .input("handler_key", sql.NVarChar(64), String(row.handlerKey ?? "generic_file_url"))
+      .input("hub_page_url", sql.NVarChar(2048), String(row.hubPageUrl ?? ""))
+      .input("roster_url", sql.NVarChar(2048), String(row.rosterUrl ?? ""))
+      .input("voting_method_scope", sql.NVarChar(16), String(row.votingMethodScope ?? "ALL"))
+      .input("date_scope", sql.NVarChar(32), String(row.dateScope ?? "SINGLE_DAY"))
+      .input("file_format", sql.NVarChar(16), String(row.fileFormat ?? "auto"))
+      .input("roster_party_scope", sql.NVarChar(16), String(row.rosterPartyScope ?? "COMBINED"))
+      .input("discovery_profile_key", sql.NVarChar(64), row.discoveryProfileKey != null ? String(row.discoveryProfileKey) : null)
+      .input("training_notes", sql.NVarChar(sql.MAX), row.trainingNotes != null ? String(row.trainingNotes) : null)
+      .input("is_enabled", sql.Bit, row.isEnabled === false ? 0 : 1)
+      .query(`
+        UPDATE dbo.ev_roster_county_sources SET
+          source_label = @source_label, civix_county_name = @civix_county_name,
+          civix_county_id = COALESCE(@civix_county_id, civix_county_id),
+          handler_key = @handler_key, hub_page_url = @hub_page_url, roster_url = @roster_url,
+          voting_method_scope = @voting_method_scope, date_scope = @date_scope, file_format = @file_format,
+          roster_party_scope = @roster_party_scope,
+          discovery_profile_key = @discovery_profile_key, training_notes = @training_notes, is_enabled = @is_enabled,
+          updated_at = SYSUTCDATETIME()
+        WHERE id = @id
+      `);
+    return;
+  }
+  await pool
+    .request()
+    .input("evr_election_id", sql.Int, Number(row.evrElectionId))
+    .input("county_key", sql.NVarChar(64), String(row.countyKey ?? ""))
+    .input("variant_key", sql.NVarChar(64), variantKey)
+    .input("source_label", sql.NVarChar(256), String(row.sourceLabel ?? ""))
+    .input("civix_county_name", sql.NVarChar(128), String(row.civixCountyName ?? ""))
+    .input("civix_county_id", sql.Int, row.civixCountyId != null ? Number(row.civixCountyId) : null)
+    .input("handler_key", sql.NVarChar(64), String(row.handlerKey ?? "generic_file_url"))
+    .input("hub_page_url", sql.NVarChar(2048), String(row.hubPageUrl ?? ""))
+    .input("roster_url", sql.NVarChar(2048), String(row.rosterUrl ?? ""))
+    .input("voting_method_scope", sql.NVarChar(16), String(row.votingMethodScope ?? "ALL"))
+    .input("date_scope", sql.NVarChar(32), String(row.dateScope ?? "SINGLE_DAY"))
+    .input("file_format", sql.NVarChar(16), String(row.fileFormat ?? "auto"))
+    .input("roster_party_scope", sql.NVarChar(16), String(row.rosterPartyScope ?? "COMBINED"))
+    .input("discovery_profile_key", sql.NVarChar(64), row.discoveryProfileKey != null ? String(row.discoveryProfileKey) : null)
+    .input("training_notes", sql.NVarChar(sql.MAX), row.trainingNotes != null ? String(row.trainingNotes) : null)
+    .input("is_enabled", sql.Bit, row.isEnabled === false ? 0 : 1)
+    .query(`
+      MERGE dbo.ev_roster_county_sources AS target
+      USING (SELECT @evr_election_id AS evr_election_id, @county_key AS county_key, @variant_key AS variant_key) AS source
+      ON target.evr_election_id = source.evr_election_id AND target.county_key = source.county_key
+        AND target.variant_key = source.variant_key
+      WHEN MATCHED THEN UPDATE SET
+        source_label = @source_label, civix_county_name = @civix_county_name,
+        civix_county_id = COALESCE(@civix_county_id, target.civix_county_id),
+        handler_key = @handler_key, hub_page_url = @hub_page_url, roster_url = @roster_url,
+        voting_method_scope = @voting_method_scope, date_scope = @date_scope, file_format = @file_format,
+        roster_party_scope = @roster_party_scope,
+        discovery_profile_key = @discovery_profile_key, training_notes = @training_notes, is_enabled = @is_enabled,
+        updated_at = SYSUTCDATETIME()
+      WHEN NOT MATCHED THEN INSERT
+        (evr_election_id, county_key, variant_key, source_label, civix_county_name, civix_county_id, handler_key,
+         hub_page_url, roster_url, voting_method_scope, date_scope, file_format, roster_party_scope,
+         discovery_profile_key, training_notes, is_enabled)
+      VALUES (@evr_election_id, @county_key, @variant_key, @source_label, @civix_county_name, @civix_county_id, @handler_key,
+              @hub_page_url, @roster_url, @voting_method_scope, @date_scope, @file_format, @roster_party_scope,
+              @discovery_profile_key, @training_notes, @is_enabled);
+    `);
+}
+
+export async function syncEvRosterCountySourcesFromTurnout(evrElectionId, counties) {
+  const { civixCountyNameToKey } = await import("./lib/texasCountyKeys.mjs");
+  for (const c of counties ?? []) {
+    const name = String(c.name ?? c.countyName ?? "").toUpperCase();
+    if (!name || name === "TOTAL") continue;
+    await upsertEvRosterCountySource({
+      evrElectionId,
+      countyKey: civixCountyNameToKey(name),
+      variantKey: "sos-default",
+      sourceLabel: "SOS default",
+      civixCountyName: name,
+      civixCountyId: c.id ?? c.countyId ?? null,
+      handlerKey: "civix_sos_county_slice",
+      hubPageUrl: "",
+      rosterUrl: "",
+      votingMethodScope: "ALL",
+      dateScope: "SINGLE_DAY",
+      fileFormat: "auto",
+      isEnabled: true,
+    });
+  }
+  return listEvRosterCountySources(evrElectionId);
+}
+
+export async function getEvRosterExportRows(evrElectionId, votingDate) {
+  const pool = await ensureDb();
+  const r = await pool
+    .request()
+    .input("evr_election_id", sql.Int, Number(evrElectionId))
+    .input("voting_date", sql.NVarChar(16), String(votingDate ?? "").trim())
+    .query(`
+      SELECT vuid, party, voting_date AS votingDate, county_name AS countyName, COALESCE(method_code, N'EV') AS methodCode
+      FROM dbo.ev_roster_voters WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date
+      ORDER BY county_name, vuid
+    `);
+  return (r.recordset ?? []).map((row) => ({
+    vuid: String(row.vuid ?? ""),
+    party: String(row.party ?? ""),
+    votingDate: String(row.votingDate ?? ""),
+    countyName: String(row.countyName ?? ""),
+    methodCode: String(row.methodCode ?? "EV"),
+  }));
+}
+
+export async function getEvRosterCountyPullLog(evrElectionId, votingDate) {
+  const pool = await ensureDb();
+  const pullR = await pool
+    .request()
+    .input("evr_election_id", sql.Int, Number(evrElectionId))
+    .input("voting_date", sql.NVarChar(16), String(votingDate ?? "").trim())
+    .query(`SELECT TOP 1 id FROM dbo.ev_roster_pulls WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date`);
+  const pullId = pullR.recordset?.[0]?.id;
+  if (pullId == null) return [];
+  const r = await pool.request().input("pull_id", sql.Int, Number(pullId)).query(`
+    SELECT county_key AS countyKey, county_name AS countyName, handler_key AS handlerKey, ok,
+           voter_count AS voterCount, source_url AS sourceUrl, message
+    FROM dbo.ev_roster_county_pull_log WHERE pull_id = @pull_id ORDER BY county_name
+  `);
+  return (r.recordset ?? []).map((row) => ({
+    countyKey: String(row.countyKey ?? ""),
+    countyName: String(row.countyName ?? ""),
+    handlerKey: String(row.handlerKey ?? ""),
+    ok: !!row.ok,
+    voterCount: Number(row.voterCount ?? 0),
+    sourceUrl: row.sourceUrl != null ? String(row.sourceUrl) : null,
+    message: String(row.message ?? ""),
+  }));
 }

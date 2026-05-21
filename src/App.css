@@ -727,6 +727,24 @@
   margin-top: 12px;
 }
 
+.enr-ingest-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  background: #f0f6fc;
+  border: 1px solid rgba(15, 39, 71, 0.12);
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--tx-navy, #0f2747);
+}
+
+.enr-primaryBtn .enr-ev-roster__pull-spinner {
+  margin-right: 8px;
+  vertical-align: -2px;
+}
+
 button.enr-electionOpenBtn {
   display: block;
   width: 100%;
@@ -840,6 +858,92 @@ button.enr-electionOpenBtn:disabled {
   cursor: not-allowed;
 }
 
+/** Visible on white settings panels (unlike .enr-navlink, which is for the dark header). */
+.enr-secondaryBtn {
+  border: 1px solid var(--tx-navy, #0f2747);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  background: #fff;
+  color: var(--tx-navy, #0f2747);
+}
+
+.enr-secondaryBtn:hover:not(:disabled) {
+  background: #f0f6fc;
+}
+
+.enr-secondaryBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.enr-defaultBadge {
+  display: inline-block;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  background: var(--tx-navy, #0f2747);
+  color: #fff;
+  white-space: nowrap;
+}
+
+.enr-table .enr-secondaryBtn {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.enr-table .enr-defaultBadge {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.enr-copyFeedsBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: flex-end;
+  margin: 16px 0 12px;
+  padding: 14px 16px;
+  background: #f4f7fb;
+  border: 1px solid var(--tx-border, #d8dee8);
+  border-radius: 10px;
+}
+
+.enr-copyFeedsBar .enr-field {
+  margin: 0;
+  min-width: 200px;
+}
+
+.enr-copyFeedsBar__mode {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--tx-navy, #0f2747);
+}
+
+.enr-copyFeedsBar__mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.enr-countyFeedsToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  margin: 12px 0 8px;
+}
+
+.enr-table tr.enr-feedRow--noUrl td {
+  opacity: 0.72;
+}
+
 .enr-miniBtn {
   margin-left: 8px;
   border: 1px solid var(--tx-border);
@@ -874,6 +978,130 @@ button.enr-electionOpenBtn:disabled {
   flex-wrap: wrap;
 }
 
+.enr-bulkAdd {
+  margin-top: 20px;
+  padding: 16px 18px;
+  background: #f8fafc;
+  border: 1px solid var(--tx-border, #d8dee8);
+  border-radius: 10px;
+}
+
+.enr-bulkAdd__title {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+  color: var(--tx-navy, #0f2747);
+}
+
+.enr-bulkAdd__format {
+  margin: 8px 0 14px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid var(--tx-border, #d8dee8);
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.enr-bulkAdd__fields {
+  margin: 0 0 14px;
+  display: grid;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.enr-bulkAdd__fields > div {
+  display: grid;
+  grid-template-columns: minmax(7rem, 9rem) 1fr;
+  gap: 8px 12px;
+}
+
+.enr-bulkAdd__fields dt {
+  margin: 0;
+  font-weight: 600;
+  color: var(--tx-navy, #0f2747);
+}
+
+.enr-bulkAdd__fields dd {
+  margin: 0;
+  color: #3a4a5c;
+}
+
+.enr-bulkAdd__processes {
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.enr-bulkAdd__processes summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--tx-navy, #0f2747);
+}
+
+.enr-bulkAdd__processList {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  max-height: 220px;
+  overflow: auto;
+  line-height: 1.45;
+}
+
+.enr-bulkAdd__processList code {
+  font-size: 12px;
+}
+
+.enr-bulkAdd__examplesTitle {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.enr-bulkAdd__examples {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid var(--tx-border, #d8dee8);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.enr-countyRaceMapping {
+  margin-top: 24px;
+}
+
+.enr-countyRaceMapping__subtitle {
+  margin: 20px 0 10px;
+  font-size: 1rem;
+  color: var(--tx-navy, #0f2747);
+}
+
+.enr-table--compact td,
+.enr-table--compact th {
+  font-size: 13px;
+  vertical-align: top;
+}
+
+.enr-manualVoteForm {
+  margin-top: 12px;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid var(--tx-border, #d8dee8);
+  border-radius: 8px;
+}
+
+.enr-manualVoteForm__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: flex-end;
+  margin-bottom: 10px;
+}
+
+.enr-manualVoteForm__row .enr-field {
+  margin: 0;
+  min-width: 140px;
+}
+
 .enr-importLog {
   max-height: 280px;
   overflow: auto;
@@ -889,4 +1117,617 @@ button.enr-electionOpenBtn:disabled {
 
 code {
   font-size: 0.95em;
+}
+
+.enr-success {
+  color: var(--tx-green);
+  font-weight: 600;
+  margin: 8px 16px;
+}
+
+.enr-ev-roster {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.enr-ev-roster__header {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.enr-ev-roster__header h1 {
+  margin: 0 0 8px;
+  font-size: 1.5rem;
+  color: var(--tx-navy);
+}
+
+.enr-ev-roster__runoff-meta {
+  align-self: end;
+  font-size: 0.85rem;
+}
+
+.enr-ev-roster__pull-statusbar {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin: 0.75rem 0 1rem;
+  padding: 0.85rem 1rem;
+  background: linear-gradient(135deg, #e8f0fe 0%, #e8f5e9 100%);
+  border: 1px solid #b8d4f0;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 40, 80, 0.08);
+}
+
+.enr-ev-roster__pull-statusbar .enr-ev-roster__pull-spinner {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+}
+
+.enr-ev-roster__pull-statusbar-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.enr-ev-roster__pull-statusbar-title {
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.enr-ev-roster__pull-statusbar-meta {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--enr-muted, #555);
+  line-height: 1.4;
+}
+
+.enr-ev-roster__pull-statusbar-track {
+  margin-top: 0.5rem;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.enr-ev-roster__pull-statusbar-fill {
+  height: 100%;
+  background: #1a5fb4;
+  border-radius: 3px;
+  transition: width 0.35s ease;
+}
+
+.enr-ev-roster__table-toolbar label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.enr-ev-roster__table-toolbar select,
+.enr-ev-roster__table-toolbar input[type="date"] {
+  font-weight: 400;
+}
+
+.enr-ev-roster__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: flex-end;
+  margin-bottom: 16px;
+}
+
+.enr-ev-roster__controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.enr-ev-roster__controls select,
+.enr-ev-roster__controls input[type="date"],
+.enr-ev-roster__controls input[type="search"] {
+  min-width: 160px;
+  padding: 6px 8px;
+}
+
+.enr-ev-roster__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.enr-ev-roster__table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--tx-border);
+  border-radius: 6px;
+  background: #fff;
+  position: relative;
+}
+
+.enr-ev-roster__table-wrap.is-summary-loading .enr-ev-roster__table tbody {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.enr-ev-roster__summary-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--tx-muted, #555);
+  border-bottom: 1px solid var(--tx-border);
+  background: #f8fafc;
+}
+
+.enr-ev-roster__county-page-hint {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.enr-ev-roster__table-toolbar {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--tx-border);
+}
+
+.enr-ev-roster__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.enr-ev-roster__table th,
+.enr-ev-roster__table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--tx-border);
+  text-align: left;
+}
+
+.enr-ev-roster__table th.num,
+.enr-ev-roster__table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.enr-ev-roster__table thead th {
+  background: #f5f7fa;
+  font-weight: 700;
+}
+
+.enr-ev-roster__pull-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-left: 0.35rem;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.enr-ev-roster__pull-status--ok {
+  color: #0d5c2e;
+  background: #d4edda;
+}
+
+.enr-ev-roster__pull-status--fail {
+  color: #842029;
+  background: #f8d7da;
+}
+
+.enr-ev-roster__pull-status--locked {
+  font-size: 0.85rem;
+  background: transparent;
+  width: auto;
+  height: auto;
+}
+
+.enr-ev-roster__confirm-pull {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #0d5c2e;
+  background: #e8f5e9;
+  border: 1px solid #a5d6a7;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.enr-ev-roster__confirm-pull:hover:not(:disabled) {
+  background: #c8e6c9;
+}
+
+.enr-ev-roster__confirm-pull:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.enr-ev-roster__table tr.is-county-confirmed td {
+  background: color-mix(in srgb, var(--enr-surface, #f8f9fa) 92%, #e8f5e9);
+}
+
+.enr-ev-roster__county-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.enr-ev-roster__pull-spinner {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(15, 39, 71, 0.15);
+  border-top-color: var(--tx-navy, #0f2747);
+  border-radius: 50%;
+  animation: enr-ev-roster-spin 0.65s linear infinite;
+}
+
+.enr-ev-roster__controls .enr-btn .enr-ev-roster__pull-spinner {
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+
+.enr-ev-roster__edit-source .enr-ev-roster__pull-spinner {
+  margin-right: 4px;
+  vertical-align: -2px;
+}
+
+.enr-ev-roster__table tr.is-county-pulling td {
+  background: #f8fbff;
+}
+
+.enr-ev-roster__table tr.is-county-pulling td.num {
+  color: var(--tx-muted, #5c6b7a);
+}
+
+@keyframes enr-ev-roster-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.enr-ev-roster__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 700;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.enr-ev-roster__sort--num {
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.enr-ev-roster__sort.is-active {
+  color: var(--tx-navy);
+}
+
+.enr-ev-roster__sort:hover {
+  text-decoration: underline;
+}
+
+.enr-ev-roster__totals td {
+  font-weight: 700;
+  background: #fafbfc;
+}
+
+.enr-btn {
+  padding: 8px 14px;
+  border-radius: 4px;
+  border: 1px solid var(--tx-border);
+  background: #fff;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  text-decoration: none;
+  color: inherit;
+  display: inline-block;
+}
+
+.enr-btn--primary {
+  background: var(--tx-navy);
+  color: #fff;
+  border-color: var(--tx-navy);
+}
+
+.enr-btn--ghost {
+  background: transparent;
+}
+
+.enr-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.enr-ev-roster__training {
+  margin-bottom: 20px;
+  padding: 16px;
+  border: 1px solid var(--tx-border);
+  border-radius: 6px;
+  background: #fafbfc;
+}
+
+.enr-ev-roster__training h2 {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+
+.enr-ev-roster__training-form {
+  display: grid;
+  gap: 10px;
+  max-width: 720px;
+}
+
+.enr-ev-roster__training-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.enr-ev-roster__training-form input,
+.enr-ev-roster__training-form select,
+.enr-ev-roster__training-form textarea {
+  font-weight: 400;
+  padding: 6px 8px;
+}
+
+.enr-ev-roster__training-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.enr-ev-roster__training-meta {
+  margin: 0;
+  font-size: 12px;
+}
+
+.enr-ev-roster__training-check {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px !important;
+  font-weight: 600;
+}
+
+.enr-ev-roster__training-check input {
+  width: auto;
+}
+
+.enr-ev-roster__edit-source {
+  display: block;
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--tx-navy);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.enr-ev-roster__edit-source--add {
+  color: var(--tx-muted, #5c6578);
+  font-weight: 500;
+}
+
+.enr-ev-roster__training-new-banner {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #e8f4fc;
+  border: 1px solid #b8d9f0;
+  font-size: 13px;
+}
+
+.enr-ev-roster__training-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  grid-column: 1 / -1;
+}
+
+.enr-ev-roster__training-presets .enr-btn--sm {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.enr-ev-roster__view-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.enr-ev-roster__view-tabs button {
+  padding: 8px 14px;
+  border: 1px solid var(--border, #d0d5dd);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.enr-ev-roster__view-tabs button.is-active {
+  background: var(--tx-navy, #1a365d);
+  color: #fff;
+  border-color: var(--tx-navy, #1a365d);
+}
+
+.enr-ev-roster__voters-toolbar {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.enr-ev-roster__voters-table .mono {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.enr-ev-roster__source-cell {
+  font-size: 11px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.enr-ev-roster__pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--tx-border);
+}
+
+.enr-ev-roster__voters-wrap .enr-ev-roster__pager:last-of-type {
+  border-bottom: none;
+  border-top: 1px solid var(--tx-border);
+}
+
+.enr-ev-roster__pager-meta {
+  flex: 1 1 12rem;
+  text-align: center;
+  font-size: 13px;
+  color: var(--tx-muted, #5c6578);
+}
+
+.enr-ev-roster__voters-meta {
+  align-self: center;
+  font-size: 13px;
+}
+
+.enr-county-multi {
+  position: relative;
+  min-width: 200px;
+}
+
+.enr-county-multi__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 200px;
+  padding: 6px 10px;
+  border: 1px solid var(--tx-border);
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.enr-county-multi__trigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.enr-county-multi__trigger-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enr-county-multi__chevron {
+  color: var(--tx-muted, #5c6578);
+  font-size: 11px;
+}
+
+.enr-county-multi__panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  width: min(320px, 90vw);
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--tx-border);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 39, 71, 0.12);
+}
+
+.enr-county-multi__search-wrap {
+  padding: 8px;
+  border-bottom: 1px solid var(--tx-border);
+}
+
+.enr-county-multi__search {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--tx-border);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.enr-county-multi__actions {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--tx-border);
+}
+
+.enr-btn--sm {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.enr-county-multi__list {
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  overflow-y: auto;
+  max-height: 220px;
+}
+
+.enr-county-multi__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.enr-county-multi__option:hover {
+  background: #f5f7fa;
+}
+
+.enr-county-multi__option input {
+  flex-shrink: 0;
+}
+
+.enr-county-multi__empty {
+  padding: 12px;
+  font-size: 13px;
+  color: var(--tx-muted, #5c6578);
 }

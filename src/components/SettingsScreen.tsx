@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   forceRefreshAllSources,
+  startIngestStatusPoll,
   fetchDbTablePreview,
   fetchDbOverview,
   fetchElectionSourceConfigs,
@@ -8,6 +9,7 @@ import {
   fetchImportLog,
   fetchIngestVendors,
   createElectionSourceConfig,
+  setDefaultElectionCatalog,
   updateElectionSourceConfig,
   updateAppSettings,
   type AppSettings,
@@ -16,9 +18,11 @@ import {
   type ElectionSourceConfig,
   type ImportLogPayload,
   type IngestProcess,
+  type IngestProgress,
   type SourceImportLatest,
 } from "../lib/dataBackend";
 import { ElectionSettingsDetail } from "./ElectionSettingsDetail";
+import { IngestProgressStatus, IngestSpinner } from "./IngestProgressStatus";
 
 function SourceImportAlert({
   sourceKey,
@@ -51,6 +55,7 @@ export function SettingsScreen({
   const [dataSourcesPreview, setDataSourcesPreview] = useState<DbTablePreview | null>(null);
   const [sosCountyPreview, setSosCountyPreview] = useState<DbTablePreview | null>(null);
   const [dbPreviewErr, setDbPreviewErr] = useState<string | null>(null);
+  const [electionsLoadErr, setElectionsLoadErr] = useState<string | null>(null);
   const [appSettings, setAppSettings] = useState<AppSettings>({
     disableAutoIngest: false,
     autoRefreshEnabled: false,
@@ -64,9 +69,12 @@ export function SettingsScreen({
     chambersSourceUrl: "",
   });
   const [forceMsg, setForceMsg] = useState<string | null>(null);
+  const [forceRefreshing, setForceRefreshing] = useState(false);
+  const [ingestProgress, setIngestProgress] = useState<IngestProgress | null>(null);
   const [importLog, setImportLog] = useState<ImportLogPayload | null>(null);
   const [electionConfigs, setElectionConfigs] = useState<ElectionSourceConfig[]>([]);
-  const [selectedElectionId, setSelectedElectionId] = useState<string>("56181");
+  const [selectedElectionId, setSelectedElectionId] = useState<string>("");
+  const userPickedForceElection = useRef(false);
   const [detailElectionId, setDetailElectionId] = useState<string | null>(null);
   const [vendors, setVendors] = useState<IngestProcess[]>([]);
   const [newElectionId, setNewElectionId] = useState("");
@@ -74,14 +82,34 @@ export function SettingsScreen({
   const [newElectionUsesSos, setNewElectionUsesSos] = useState(true);
 
   const refresh = useCallback(async () => {
+    setElectionsLoadErr(null);
     try {
-      const [db, settings, dsPreview, sosPreview, log, configs, vend] = await Promise.all([
+      const configs = await fetchElectionSourceConfigs();
+      setElectionConfigs(configs.elections);
+      const defaultCfg =
+        configs.elections.find((c) => c.isDefaultCatalog) ?? configs.elections[0];
+      const defaultId = defaultCfg?.electionId ?? "";
+      if (!userPickedForceElection.current && defaultId) {
+        setSelectedElectionId(defaultId);
+      } else if (selectedElectionId && !configs.elections.some((c) => c.electionId === selectedElectionId)) {
+        setSelectedElectionId(defaultId);
+      }
+    } catch (e) {
+      setElectionConfigs([]);
+      setElectionsLoadErr(
+        e instanceof Error
+          ? e.message
+          : "Could not load saved elections — is the API running on port 3847?",
+      );
+    }
+
+    try {
+      const [db, settings, dsPreview, sosPreview, log, vend] = await Promise.all([
         fetchDbOverview(),
         fetchAppSettings(),
         fetchDbTablePreview("data_sources", 25),
         fetchDbTablePreview("sos_county_results", 25),
         fetchImportLog(250).catch(() => null),
-        fetchElectionSourceConfigs(),
         fetchIngestVendors().catch(() => ({ vendors: [] as IngestProcess[] })),
       ]);
       setDbOverview(db);
@@ -89,11 +117,7 @@ export function SettingsScreen({
       setDataSourcesPreview(dsPreview);
       setSosCountyPreview(sosPreview);
       setImportLog(log);
-      setElectionConfigs(configs.elections);
       setVendors(vend.vendors);
-      if (configs.elections.length && !configs.elections.some((c) => c.electionId === selectedElectionId)) {
-        setSelectedElectionId(configs.elections[0].electionId);
-      }
       setDbPreviewErr(null);
     } catch (e) {
       setDbPreviewErr(e instanceof Error ? e.message : "Failed to load DB preview");
@@ -144,8 +168,15 @@ export function SettingsScreen({
   }
 
   async function onForceRefresh() {
-    setBusy(true);
+    setForceRefreshing(true);
     setForceMsg(null);
+    setIngestProgress({ detail: `Starting update for election ${selectedElectionId}…` });
+    const stopPoll = startIngestStatusPoll((st) => {
+      if (st.progress) setIngestProgress(st.progress);
+      else if (st.running) {
+        setIngestProgress((prev) => prev ?? { detail: "Updating sources…" });
+      }
+    });
     try {
       const result = await forceRefreshAllSources(selectedElectionId);
       await refresh();
@@ -155,6 +186,26 @@ export function SettingsScreen({
       setForceMsg(result.errors.length ? `${base} Errors: ${result.errors.join(" | ")}` : base);
     } catch (e) {
       setForceMsg(e instanceof Error ? e.message : "Force refresh failed");
+    } finally {
+      stopPoll();
+      setForceRefreshing(false);
+      setIngestProgress(null);
+    }
+  }
+
+  async function onSetDefaultElection(cfg: ElectionSourceConfig) {
+    if (cfg.isDefaultCatalog) return;
+    setBusy(true);
+    setSaveMsg(null);
+    try {
+      await setDefaultElectionCatalog(cfg.electionId);
+      userPickedForceElection.current = false;
+      setSelectedElectionId(cfg.electionId);
+      await refresh();
+      onCatalogChanged();
+      setSaveMsg(`Default selection set to ${cfg.label}.`);
+    } catch (e) {
+      setSaveMsg(e instanceof Error ? e.message : "Failed to set default election");
     } finally {
       setBusy(false);
     }
@@ -250,6 +301,7 @@ export function SettingsScreen({
     return (
       <ElectionSettingsDetail
         cfg={detailCfg}
+        allElections={electionConfigs}
         vendors={vendors}
         importLog={importLog}
         onBack={() => setDetailElectionId(null)}
@@ -353,7 +405,10 @@ export function SettingsScreen({
             className="enr-input"
             value={selectedElectionId}
             disabled={busy}
-            onChange={(e) => setSelectedElectionId(e.target.value)}
+            onChange={(e) => {
+              userPickedForceElection.current = true;
+              setSelectedElectionId(e.target.value);
+            }}
             style={{ maxWidth: 360 }}
           >
             {electionConfigs.map((cfg) => (
@@ -362,10 +417,27 @@ export function SettingsScreen({
               </option>
             ))}
           </select>
-          <button type="button" className="enr-primaryBtn" disabled={busy} onClick={() => void onForceRefresh()}>
-            Force one-time update (selected election)
+          <button
+            type="button"
+            className="enr-primaryBtn"
+            disabled={busy || forceRefreshing}
+            onClick={() => void onForceRefresh()}
+          >
+            {forceRefreshing ? (
+              <>
+                <IngestSpinner label="Updating sources" /> Updating…
+              </>
+            ) : (
+              "Force one-time update (selected election)"
+            )}
           </button>
         </div>
+        {forceRefreshing ? (
+          <IngestProgressStatus
+            progress={ingestProgress}
+            fallback={`Updating election ${selectedElectionId}…`}
+          />
+        ) : null}
         {forceMsg ? <p className={forceMsg.startsWith("Updated") ? "enr-saveOk" : "enr-errorInline"}>{forceMsg}</p> : null}
       </section>
 
@@ -425,6 +497,11 @@ export function SettingsScreen({
           <strong>every election you add here</strong> (plus manual JSON uploads), including county-only elections without a
           Civix id — unless you turn off <strong>Show on main page</strong> on the election detail screen.
         </p>
+        <p className="enr-muted" style={{ marginTop: 8 }}>
+          <strong>Note:</strong> Early voting <em>rosters</em> (runoff Dem/Rep Civix IDs 58314 / 58315) are separate from
+          election-night results and are currently turned off to save memory. Re-add any missing election here if it does not
+          appear below.
+        </p>
         <label className="enr-field" style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 12 }}>
           <input
             type="checkbox"
@@ -474,9 +551,19 @@ export function SettingsScreen({
       <section className="enr-panel enr-settings__section">
         <h2>Source configuration</h2>
         <p className="enr-muted">
-          Open an election for SOS / Civix options, county feed URLs, ingest processes, and bulk import. Toggle auto refresh here
-          without opening the detail page.
+          Open an election for SOS / Civix options, county feed URLs, ingest processes, and bulk import. Use{" "}
+          <strong>Set as default</strong> to choose which election opens first on the home page and in ingest controls below.
+          Toggle auto refresh here without opening the detail page.
         </p>
+        {electionsLoadErr ? (
+          <p className="enr-errorInline" role="alert">
+            {electionsLoadErr} — run <code>npm run server</code> and <code>npm run dev -- --mode proxy</code> (or{" "}
+            <code>npm run dev:all</code>), wait for &quot;Database ready&quot;, then refresh.
+          </p>
+        ) : null}
+        {!electionsLoadErr && electionConfigs.length === 0 ? (
+          <p className="enr-muted">No elections saved yet. Add one above.</p>
+        ) : null}
         <ul className="enr-manualList" style={{ marginTop: 12 }}>
           {electionConfigs.map((cfg) => (
             <li key={cfg.electionId} style={{ marginBottom: 12 }}>
@@ -491,10 +578,31 @@ export function SettingsScreen({
               <SourceImportAlert sourceKey={`${cfg.electionId}:sos`} latestBySource={importLog?.latestBySource} />
               <div className="enr-settingsElectionMeta">
                 <span className="enr-muted" style={{ fontSize: 12 }}>
+                  {cfg.isDefaultCatalog ? (
+                    <>
+                      <strong>Default selection</strong>
+                      {" · "}
+                    </>
+                  ) : null}
                   Ingest {cfg.isEnabled ? "on" : "off"}
                   {cfg.usesCivixSos !== false ? " · SOS/Civix on" : " · SOS/Civix off"}
                   {cfg.showInCatalog === false ? " · Hidden from home menu" : null}
                 </span>
+                {cfg.isDefaultCatalog ? (
+                  <span className="enr-defaultBadge" title="Opens first on the home page and in ingest controls">
+                    Home default
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="enr-secondaryBtn"
+                    disabled={busy}
+                    title="Pre-select this election on the home page and in ingest controls"
+                    onClick={() => void onSetDefaultElection(cfg)}
+                  >
+                    Set as default
+                  </button>
+                )}
                 <label className="enr-inlineToggle">
                   <input
                     type="checkbox"

@@ -10,6 +10,19 @@ import { countyHasHubDiscoveryProfile, discoverCountyFeedUrlFromHub } from "./li
 import { getSd4HistoricalPayloadForApi } from "./lib/sd4HistoricalPrecinct.mjs";
 import { buildElectionFileFromCountyFeeds } from "./lib/electionFileFromCountyResults.mjs";
 import { decodeBase64Json, decodeUploadPayload, encodeBase64Json } from "./lib/b64.mjs";
+import { isEvRosterEnabled } from "./lib/featureFlags.mjs";
+import { buildOfficialEarlyVotingTurnoutPageUrl, listEvrElections } from "./lib/civixEvr.mjs";
+import { pullEvRoster } from "./lib/evRoster.mjs";
+import { EV_ROSTER_PULL_SCOPES } from "./lib/evRosterPullScopes.mjs";
+import { rosterRowsToCsv } from "./lib/evRosterNormalize.mjs";
+import { EV_ROSTER_HANDLERS } from "./lib/evRosterCountyHandlers.mjs";
+import { getSourceOptionsPayload } from "./lib/evRosterSourceOptions.mjs";
+import {
+  countyHasEvRosterDiscoveryProfile,
+  discoverEvRosterUrlFromHub,
+  discoverEvRosterUrlsFromHub,
+  listEvRosterDiscoveryProfiles,
+} from "./lib/evRosterHubDiscovery.mjs";
 import {
   deleteManualElection,
   ensureDb,
@@ -34,15 +47,40 @@ import {
   appendVoteHistoryIfChanged,
   getElectionSourceConfig,
   getSourceImportLogPayload,
+  listEvRosterConfigs,
+  listEvRosterPullDates,
+  listEvRosterPullDatesForElections,
+  listEvRosterVoterDatesForElections,
+  getEvRosterAggregatedSummary,
+  getEvRosterPullPayload,
+  getEvRosterExportRows,
+  listEvRosterCountySources,
+  upsertEvRosterCountySource,
+  syncEvRosterCountySourcesFromTurnout,
+  saveEvRosterPull,
+  mergeEvRosterPull,
+  recordEvRosterCountyPullResults,
+  confirmEvRosterCountyPull,
+  listEvRosterVoters,
+  upsertEvRosterConfig,
   listElectionSourceConfigs,
   listElectionFeedSources,
   listIngestVendors,
   replaceElectionFeedSourcesForElection,
+  flushPendingDatabasePersist,
   updateElectionFeedSourceUrl,
   upsertElectionSourceConfig,
+  setDefaultElectionCatalog,
   updateManualElection,
   updateAppSettings,
+  upsertCountySosRaceLink,
+  deleteCountySosRaceLink,
+  upsertCountySosManualVote,
+  upsertCountySosRaceVoteSource,
 } from "./db.mjs";
+import { catalogIdForSourceConfig, resolveDefaultCatalogId } from "./lib/electionCatalogId.mjs";
+import { buildCountyRaceMappingView } from "./lib/countyRaceMappingView.mjs";
+import { mergeLinkedCountyOverridesIntoCivix } from "./lib/mergeLinkedCountyIntoCivix.mjs";
 
 /** Only civix election wired for full ingest + live merge in this deployment. */
 const TRACKED_CIVIX_ELECTION_ID = 56181;
@@ -488,6 +526,7 @@ export function createApiApp() {
       autoRefreshEnabled: r.autoRefreshEnabled != null ? !!r.autoRefreshEnabled : true,
       usesCivixSos: r.usesCivixSos != null ? !!r.usesCivixSos : !!base.usesCivixSos,
       showInCatalog: r.showInCatalog != null ? !!r.showInCatalog : !!base.showInCatalog,
+      isDefaultCatalog: !!r.isDefaultCatalog,
       sosCountyInfoUrl,
       harrisSourceUrl,
       galvestonSourceUrl,
@@ -515,7 +554,22 @@ export function createApiApp() {
     nextScheduledRunAt: null,
     running: false,
     lastResult: null,
+    /** Live step for /api/ingest/status while a refresh is in flight. */
+    progress: null,
   };
+
+  function clearIngestProgress() {
+    ingestState.progress = null;
+  }
+
+  /** @param {Record<string, unknown>} update */
+  function setIngestProgress(update) {
+    ingestState.progress = {
+      ...ingestState.progress,
+      ...update,
+      updatedAt: Date.now(),
+    };
+  }
 
   /** Serialize every full ingest (auto + manual) so two runs never append rows ms apart. */
   let ingestChain = Promise.resolve();
@@ -551,7 +605,29 @@ export function createApiApp() {
     /** Built after all county fetches; committed in one DB transaction (see commitCountyResultsBatch). */
     const countySegments = [];
 
+    const vendorRows = await listIngestVendors();
+    const vendorById = Object.fromEntries(vendorRows.map((v) => [v.id, v]));
+    const feedRows = await listElectionFeedSources(String(electionId));
+    const enabledFeeds = feedRows.filter((f) => f.isEnabled && String(f.countyKey || "").trim());
+    const totalSteps = (cfg.usesCivixSos ? 1 : 0) + enabledFeeds.length + 2;
+    let step = 0;
+    setIngestProgress({
+      electionId: String(electionId),
+      phase: "start",
+      detail: `Election ${electionId}: preparing ingest…`,
+      step,
+      totalSteps,
+    });
+
     if (cfg.usesCivixSos) {
+      step += 1;
+      setIngestProgress({
+        electionId: String(electionId),
+        phase: "sos",
+        detail: "Updating Texas SOS / Civix statewide data…",
+        step,
+        totalSteps,
+      });
       try {
         const countyInfoUrl = cfg.sosCountyInfoUrl;
         const { election, county } = countyInfoUrl
@@ -611,9 +687,6 @@ export function createApiApp() {
       });
     }
 
-    const vendorRows = await listIngestVendors();
-    const vendorById = Object.fromEntries(vendorRows.map((v) => [v.id, v]));
-    const feedRows = await listElectionFeedSources(String(electionId));
     for (const feed of feedRows) {
       if (!feed.isEnabled) continue;
       const ck = String(feed.countyKey || "").trim().toLowerCase();
@@ -626,11 +699,29 @@ export function createApiApp() {
         await appendSourceImportLog({ sourceKey: sourceLogKey(ck), ok: false, message: msg });
         continue;
       }
+      step += 1;
+      const countyLabel = String(feed.civixCountyName || "").trim() || ck;
+      setIngestProgress({
+        electionId: String(electionId),
+        phase: "county",
+        countyKey: ck,
+        detail: `Updating ${countyLabel} (${vendor.displayName})…`,
+        step,
+        totalSteps,
+      });
       try {
         let effectiveUrl = String(feed.sourceUrl ?? "").trim();
         const hubPage = String(feed.hubPageUrl ?? "").trim();
         let hubSuffix = "";
         if (hubPage && countyHasHubDiscoveryProfile(ck)) {
+          setIngestProgress({
+            electionId: String(electionId),
+            phase: "county",
+            countyKey: ck,
+            detail: `Discovering feed URL for ${countyLabel}…`,
+            step,
+            totalSteps,
+          });
           try {
             const disc = await discoverCountyFeedUrlFromHub(hubPage, { countyKey: ck });
             if (disc.url) {
@@ -652,10 +743,13 @@ export function createApiApp() {
         countySegments.push(seg);
         const n = seg.rows?.length ?? 0;
         result.counties[ck] = { inserted: n };
+        const reconNote = seg.reconciliationOnly
+          ? " — reconciliation turnout only (no per-contest SD4)"
+          : "";
         await appendSourceImportLog({
           sourceKey: sourceLogKey(ck),
           ok: true,
-          message: `OK: ${n} rows (${vendor.displayName})${hubSuffix}`,
+          message: `OK: ${n} rows (${vendor.displayName})${reconNote}${hubSuffix}`,
         });
       } catch (e) {
         const msg = String(e?.message || e);
@@ -666,6 +760,14 @@ export function createApiApp() {
     }
 
     if (countySegments.length > 0) {
+      step += 1;
+      setIngestProgress({
+        electionId: String(electionId),
+        phase: "commit",
+        detail: `Committing ${countySegments.length} county feed(s) to the database…`,
+        step,
+        totalSteps,
+      });
       try {
         await commitCountyResultsBatch({ electionId: String(electionId), batchAt: countyBatchAt, segments: countySegments });
         for (const seg of countySegments) {
@@ -695,6 +797,14 @@ export function createApiApp() {
     }
 
     if (result.errors.length) result.ok = false;
+    step += 1;
+    setIngestProgress({
+      electionId: String(electionId),
+      phase: "prune",
+      detail: "Pruning old result history…",
+      step,
+      totalSteps,
+    });
     try {
       await pruneLiveResultHistory(2);
     } catch (e) {
@@ -706,7 +816,8 @@ export function createApiApp() {
   }
 
   async function getIngestStatusPayload() {
-    await ensureDb();
+    const { isDatabaseLoaded } = await import("./db.mjs");
+    if (!isDatabaseLoaded()) await ensureDb();
     const settings = await getAppSettings();
     const intervalSec = Math.max(15, Number(settings.autoRefreshIntervalSec) || 60);
     const intervalMs = intervalSec * 1000;
@@ -725,6 +836,7 @@ export function createApiApp() {
       lastRunEndTime: ingestState.lastRunEndTime,
       nextRunAt,
       running: ingestState.running,
+      progress: ingestState.progress,
       lastResult: ingestState.lastResult,
     };
   }
@@ -759,7 +871,15 @@ export function createApiApp() {
             const configs = await listElectionSourceConfigs();
             const active = configs.filter((c) => c.isEnabled && c.autoRefreshEnabled);
             const batch = [];
-            for (const c of active) {
+            for (let i = 0; i < active.length; i++) {
+              const c = active[i];
+              setIngestProgress({
+                electionId: String(c.electionId),
+                phase: "batch",
+                detail: `Auto refresh ${i + 1}/${active.length}: ${c.label || c.electionId}`,
+                step: i + 1,
+                totalSteps: active.length,
+              });
               batch.push(await runFullIngestRefresh(String(c.electionId)));
             }
             ingestState.lastRunEndTime = Date.now();
@@ -772,6 +892,7 @@ export function createApiApp() {
             ingestState.nextScheduledRunAt = ingestState.lastRunEndTime + im;
           } finally {
             ingestState.running = false;
+            clearIngestProgress();
           }
         });
       } catch (e) {
@@ -805,13 +926,15 @@ export function createApiApp() {
   });
 
   app.get("/api/health", async (_req, res) => {
-    try {
-      await ensureDb();
-      res.json({ ok: true, service: "electionnighttracker-api", port: PORT, database: getDbInfo() });
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ ok: false, error: String(e?.message || e) });
-    }
+    const { isDatabaseLoaded } = await import("./db.mjs");
+    res.json({
+      ok: true,
+      service: "electionnighttracker-api",
+      port: PORT,
+      databaseReady: isDatabaseLoaded(),
+      database: getDbInfo(),
+      evRosterEnabled: isEvRosterEnabled(),
+    });
   });
 
   app.get("/api/sources", async (_req, res) => {
@@ -919,6 +1042,21 @@ export function createApiApp() {
     }
   });
 
+  app.post("/api/election-source-configs/:electionId/set-default", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      if (!electionId) return res.status(400).json({ error: "electionId required" });
+      const legacy = await getAppSettings();
+      const updated = await setDefaultElectionCatalog(electionId);
+      res.json(buildElectionConfig(electionId, updated, legacy));
+    } catch (e) {
+      console.error(e);
+      const msg = String(e?.message || e);
+      res.status(msg.includes("not found") ? 404 : 500).json({ error: msg });
+    }
+  });
+
   app.put("/api/election-source-configs/:electionId", async (req, res) => {
     try {
       await ensureDb();
@@ -1011,6 +1149,94 @@ export function createApiApp() {
     }
   });
 
+  app.get("/api/elections/:electionId/county-race-mapping", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      if (!electionId) return res.status(400).json({ error: "electionId required" });
+      const num = Number(electionId);
+      if (!Number.isFinite(num)) {
+        return res.status(400).json({ error: "County race mapping requires a Civix numeric election id" });
+      }
+      const cfg = await getElectionIngestConfig(num);
+      const bundle = cfg.sosCountyInfoUrl
+        ? await fetchCivixElectionBundleWithOverrides(num, { countyInfoUrl: cfg.sosCountyInfoUrl })
+        : await fetchCivixElectionBundle(num);
+      const districted = decodeBase64Json(bundle.election.Districted);
+      const sosRaces = districted?.Races ?? [];
+      const view = await buildCountyRaceMappingView(electionId, sosRaces);
+      res.json({ electionId, ...view });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.put("/api/elections/:electionId/county-race-mapping/link", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      const link = req.body?.link;
+      if (!electionId || !link?.countyKey || !link?.countyContestName || !link?.sosRaceId) {
+        return res.status(400).json({ error: "link.countyKey, link.countyContestName, and link.sosRaceId required" });
+      }
+      await upsertCountySosRaceLink(electionId, link);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.delete("/api/elections/:electionId/county-race-mapping/link", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      const countyKey = String(req.body?.countyKey ?? req.query?.countyKey ?? "").trim();
+      const countyContestName = String(req.body?.countyContestName ?? req.query?.countyContestName ?? "").trim();
+      if (!electionId || !countyKey || !countyContestName) {
+        return res.status(400).json({ error: "countyKey and countyContestName required" });
+      }
+      await deleteCountySosRaceLink(electionId, countyKey, countyContestName);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.put("/api/elections/:electionId/county-race-mapping/manual-vote", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      const row = req.body?.row;
+      if (!electionId || !row?.countyKey || !row?.sosRaceId || !row?.sosCandidateId) {
+        return res.status(400).json({ error: "row.countyKey, row.sosRaceId, and row.sosCandidateId required" });
+      }
+      await upsertCountySosManualVote(electionId, row);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.put("/api/elections/:electionId/county-race-mapping/vote-source", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      const row = req.body?.row;
+      if (!electionId || !row?.countyKey || !row?.sosRaceId || !row?.voteSource) {
+        return res.status(400).json({ error: "row.countyKey, row.sosRaceId, and row.voteSource required" });
+      }
+      await upsertCountySosRaceVoteSource(electionId, row);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
   app.put("/api/election-feed-sources/:electionId", async (req, res) => {
     try {
       await ensureDb();
@@ -1019,7 +1245,11 @@ export function createApiApp() {
       const sources = req.body?.sources;
       if (!Array.isArray(sources)) return res.status(400).json({ error: "body.sources must be an array" });
       const updated = await replaceElectionFeedSourcesForElection(electionId, sources);
-      res.json({ electionId, sources: updated });
+      const persistedToDisk = await flushPendingDatabasePersist();
+      const warning = persistedToDisk
+        ? undefined
+        : "County feeds are saved to election-feed-configs.json. Full elections.db write was skipped or delayed (large database) — feeds will reload from the JSON backup after restart.";
+      res.json({ electionId, sources: updated, persistedToDisk, ...(warning ? { warning } : {}) });
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: String(e?.message || e) });
@@ -1104,6 +1334,7 @@ export function createApiApp() {
           }
         } finally {
           ingestState.running = false;
+          clearIngestProgress();
         }
       });
       res.status(result.ok ? 200 : 207).json(result);
@@ -1152,7 +1383,19 @@ export function createApiApp() {
     try {
       await ensureDb();
       const cfgs = await listElectionSourceConfigs();
-      const summaries = await listCivixElectionSummaries();
+      let summaries = [];
+      if (process.env.CIVIX_CATALOG_LABELS === "1") {
+        try {
+          summaries = await Promise.race([
+            listCivixElectionSummaries(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error("Civix election list timed out")), 8_000),
+            ),
+          ]);
+        } catch (e) {
+          console.warn("Civix catalog labels skipped:", e?.message ?? e);
+        }
+      }
       const summaryById = new Map(summaries.map((s) => [s.civixElectionId, s]));
 
       /** Main dropdown: elections from Settings (respect `showInCatalog`), plus manual JSON uploads — not the full Civix list. */
@@ -1167,23 +1410,17 @@ export function createApiApp() {
         const num = Number(rawId);
         const isPureNumericId = Number.isFinite(num) && rawId === String(num);
 
-        if (isPureNumericId && cfg.usesCivixSos !== false) {
-          fromSettings.push({
-            routeId: `civix:${num}`,
-            catalogId: `civix:${num}`,
-            catalogLabel: `${labelBase} [Civix]`,
-            provider: "civix",
-            civixElectionId: num,
-          });
-        } else {
-          const enc = encodeURIComponent(rawId);
-          fromSettings.push({
-            routeId: `election:${enc}`,
-            catalogId: `election:${enc}`,
-            catalogLabel: `${labelBase} [County feeds]`,
-            provider: "manual",
-          });
-        }
+        const catalogId = catalogIdForSourceConfig(cfg);
+        fromSettings.push({
+          routeId: catalogId,
+          catalogId,
+          catalogLabel:
+            isPureNumericId && cfg.usesCivixSos !== false
+              ? `${labelBase} [Civix]`
+              : `${labelBase} [County feeds]`,
+          provider: isPureNumericId && cfg.usesCivixSos !== false ? "civix" : "manual",
+          ...(isPureNumericId && cfg.usesCivixSos !== false ? { civixElectionId: num } : {}),
+        });
       }
 
       const manualRows = await listManualElectionsMeta();
@@ -1197,7 +1434,7 @@ export function createApiApp() {
           manualId: e.id,
         })),
       ];
-      res.json({ entries });
+      res.json({ entries, defaultCatalogId: resolveDefaultCatalogId(cfgs) });
     } catch (e) {
       console.error(e);
       res.status(502).json({ error: String(e.message || e) });
@@ -1211,7 +1448,8 @@ export function createApiApp() {
       ? await fetchCivixElectionBundleWithOverrides(num, { countyInfoUrl })
       : await fetchCivixElectionBundle(num);
     const { election, county, sosCountyInfoUrlConfigured, sosCountyInfoUrlUsed } = bundle;
-    const merged = await mergeSd4CountyOverridesIntoCivix(num, election, county);
+    const mergedSd4 = await mergeSd4CountyOverridesIntoCivix(num, election, county);
+    const merged = await mergeLinkedCountyOverridesIntoCivix(num, mergedSd4.electionPayload, mergedSd4.countyDoc);
     return {
       provider: "civix",
       civixElectionId: num,
@@ -1391,6 +1629,409 @@ export function createApiApp() {
       console.error(e);
       res.status(500).json({ error: String(e?.message || e) });
     }
+  });
+
+  if (!isEvRosterEnabled()) {
+    app.use("/api/ev-roster", (_req, res) => {
+      res.status(503).json({
+        error:
+          "Early voting rosters are disabled (set EV_ROSTER_ENABLED=1 on the server to enable).",
+      });
+    });
+  } else {
+  /** Early voting rosters (Civix EVR) — separate from ENR election results. */
+  app.get("/api/ev-roster/configs", async (_req, res) => {
+    try {
+      await ensureDb();
+      const configs = await listEvRosterConfigs();
+      const { groupConfigsIntoRunoffs } = await import("./lib/evRosterRunoff.mjs");
+      res.json({ configs, runoffs: groupConfigsIntoRunoffs(configs) });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.put("/api/ev-roster/configs", async (req, res) => {
+    try {
+      await ensureDb();
+      const body = req.body ?? {};
+      const configs = await upsertEvRosterConfig({
+        evrElectionId: Number(body.evrElectionId),
+        party: body.party,
+        electionName: body.electionName,
+        electionDate: body.electionDate,
+        isEnabled: body.isEnabled,
+        notes: body.notes,
+      });
+      res.json({ configs });
+    } catch (e) {
+      console.error(e);
+      res.status(400).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/ev-roster/civix-elections", async (_req, res) => {
+    try {
+      const data = await listEvrElections();
+      res.json(data);
+    } catch (e) {
+      console.error(e);
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/ev-roster/page-url", (req, res) => {
+    try {
+      const electionId = Number(req.query.electionId);
+      const electionName = String(req.query.electionName ?? "");
+      const electionDate = String(req.query.electionDate ?? "");
+      const date = String(req.query.date ?? req.query.votingDate ?? "");
+      if (!electionId || !electionName || !electionDate || !date) {
+        return res.status(400).json({
+          error: "electionId, electionName, electionDate, and date (early voting day) are required",
+        });
+      }
+      res.json({
+        url: buildOfficialEarlyVotingTurnoutPageUrl({
+          date,
+          electionId,
+          electionDate,
+          electionName,
+          isCertified: String(req.query.isCertified ?? "false").toLowerCase() === "true",
+        }),
+      });
+    } catch (e) {
+      res.status(400).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/ev-roster/pulls", async (req, res) => {
+    try {
+      await ensureDb();
+      const evrElectionId = Number(req.query.evrElectionId);
+      if (!evrElectionId) return res.status(400).json({ error: "evrElectionId required" });
+      const configs = await listEvRosterConfigs();
+      const { runoffConfigsForElection } = await import("./lib/evRosterRunoff.mjs");
+      const runoffCfgs = runoffConfigsForElection(configs, evrElectionId);
+      const evrIds = runoffCfgs.map((c) => Number(c.evrElectionId));
+      let dates = await listEvRosterVoterDatesForElections(evrIds);
+      if (!dates.length) dates = await listEvRosterPullDatesForElections(evrIds);
+      res.json({ evrElectionId, evrElectionIds: evrIds, pulls: dates });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/ev-roster/summary", async (req, res) => {
+    try {
+      await ensureDb();
+      const evrElectionId = Number(req.query.evrElectionId);
+      if (!evrElectionId) return res.status(400).json({ error: "evrElectionId required" });
+
+      const configs = await listEvRosterConfigs();
+      const { runoffConfigsForElection, configsForPartyFilter, summaryDateRangeFromPullDates } = await import(
+        "./lib/evRosterRunoff.mjs"
+      );
+      const partyFilter = String(req.query.party ?? "ALL").toUpperCase();
+      const runoffAll = runoffConfigsForElection(configs, evrElectionId);
+      const runoffCfgs = configsForPartyFilter(runoffAll, partyFilter);
+      const evrIds = runoffCfgs.map((c) => Number(c.evrElectionId));
+      const runoffAllIds = runoffAll.map((c) => Number(c.evrElectionId));
+
+      let dateFrom = String(req.query.dateFrom ?? "").trim();
+      let dateTo = String(req.query.dateTo ?? "").trim();
+      const votingDate = String(req.query.votingDate ?? "").trim();
+
+      if (votingDate && !dateFrom && !dateTo) {
+        dateFrom = votingDate;
+        dateTo = votingDate;
+      }
+
+      if (!dateFrom || !dateTo) {
+        let pulls = await listEvRosterVoterDatesForElections(runoffAllIds);
+        if (!pulls.length) pulls = await listEvRosterPullDatesForElections(runoffAllIds);
+        const stored = pulls.map((p) => p.votingDate).filter(Boolean);
+        const defaults = summaryDateRangeFromPullDates(stored);
+        dateFrom = dateFrom || defaults.dateFrom;
+        dateTo = dateTo || defaults.dateTo;
+      }
+
+      if (!dateFrom || !dateTo) {
+        return res.json({ pull: null, counties: [], countyPullLog: [], dateFrom: "", dateTo: "", party: partyFilter });
+      }
+
+      if (!evrIds.length) {
+        return res.json({
+          pull: null,
+          counties: [],
+          countyPullLog: [],
+          dateFrom,
+          dateTo,
+          party: partyFilter,
+          message: `No ${partyFilter} election configured for this runoff.`,
+        });
+      }
+
+      const aggregated = await getEvRosterAggregatedSummary(evrIds, dateFrom, dateTo);
+      if (aggregated.counties?.length) {
+        return res.json({ ...aggregated, party: partyFilter });
+      }
+
+      let storedPulls = await listEvRosterVoterDatesForElections(runoffAllIds);
+      if (!storedPulls.length) storedPulls = await listEvRosterPullDatesForElections(runoffAllIds);
+      const hasStoredPulls = storedPulls.length > 0;
+
+      const cfg = runoffCfgs[0] ?? configs.find((c) => c.evrElectionId === evrElectionId);
+      if (!hasStoredPulls && partyFilter === "ALL" && cfg) {
+        try {
+          const { pullSosEarlyVotingRoster } = await import("./lib/evRoster.mjs");
+          const sos = await pullSosEarlyVotingRoster({
+            evrElectionId: cfg.evrElectionId,
+            electionName: cfg.electionName,
+            electionDate: cfg.electionDate,
+            votingDate: dateTo,
+            party: "",
+          });
+          return res.json({
+            pull: null,
+            counties: sos.countySummaries,
+            countyPullLog: [],
+            dateFrom,
+            dateTo,
+            party: partyFilter,
+            sosPreview: true,
+            message:
+              "Live SOS turnout preview — run Pull to save all parties and days through today.",
+          });
+        } catch (e) {
+          console.warn("SOS preview for summary failed:", e?.message ?? e);
+        }
+      }
+
+      res.json({ pull: null, counties: [], countyPullLog: [], dateFrom, dateTo, party: partyFilter });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/ev-roster/pull/progress", async (req, res) => {
+    const { getPullProgress, prunePullProgress } = await import("./lib/evRosterPullProgress.mjs");
+    prunePullProgress();
+    const jobId = String(req.query.jobId ?? "");
+    res.json(getPullProgress(jobId));
+  });
+
+  app.post("/api/ev-roster/pull", async (req, res) => {
+    try {
+      await ensureDb();
+      const { startEvRosterPullJob } = await import("./lib/evRosterPullJob.mjs");
+      const started = await startEvRosterPullJob(req.body ?? {});
+      res.json(started);
+    } catch (e) {
+      const msg = String(e?.message || e);
+      console.error("ev-roster pull start", e);
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.post("/api/ev-roster/county-confirm", async (req, res) => {
+    try {
+      await ensureDb();
+      const body = req.body ?? {};
+      const evrElectionId = Number(body.evrElectionId);
+      const votingDate = String(body.votingDate ?? body.date ?? "").trim();
+      const countyName = String(body.countyName ?? "").trim();
+      if (!evrElectionId || !votingDate || !countyName) {
+        return res.status(400).json({ error: "evrElectionId, votingDate, and countyName required" });
+      }
+      const statuses = await confirmEvRosterCountyPull(evrElectionId, votingDate, countyName);
+      const payload = await getEvRosterPullPayload(evrElectionId, votingDate);
+      res.json({ ok: true, statuses, summary: payload });
+    } catch (e) {
+      console.error("ev-roster county-confirm", e);
+      res.status(400).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/ev-roster/pull-scopes", (_req, res) => {
+    res.json({ scopes: EV_ROSTER_PULL_SCOPES });
+  });
+
+  app.get("/api/ev-roster/voters", async (req, res) => {
+    try {
+      await ensureDb();
+      const evrElectionId = Number(req.query.evrElectionId);
+      const votingDate = String(req.query.votingDate ?? "");
+      if (!evrElectionId || !votingDate) {
+        return res.status(400).json({ error: "evrElectionId and votingDate required" });
+      }
+      const countyParam = req.query.county;
+      const counties = req.query.counties
+        ? String(req.query.counties)
+            .split(",")
+            .map((c) => c.trim())
+            .filter(Boolean)
+        : Array.isArray(countyParam)
+          ? countyParam
+          : countyParam
+            ? [String(countyParam)]
+            : [];
+      const result = await listEvRosterVoters(evrElectionId, votingDate, {
+        limit: req.query.limit,
+        offset: req.query.offset,
+        counties,
+        q: req.query.q,
+      });
+      res.json({ evrElectionId, votingDate, ...result });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/ev-roster/export.csv", async (req, res) => {
+    try {
+      await ensureDb();
+      const evrElectionId = Number(req.query.evrElectionId);
+      const votingDate = String(req.query.votingDate ?? "");
+      if (!evrElectionId || !votingDate) {
+        return res.status(400).json({ error: "evrElectionId and votingDate required" });
+      }
+      const rows = await getEvRosterExportRows(evrElectionId, votingDate);
+      const csv = rows.length ? rosterRowsToCsv(rows) : "VUID,County,Party,Date,Method\r\n";
+      const configs = await listEvRosterConfigs();
+      const cfg = configs.find((c) => c.evrElectionId === evrElectionId);
+      const party = cfg?.party ?? "export";
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="ev-roster-${party}-${votingDate}.csv"`,
+      );
+      res.send(csv);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/ev-roster/handlers", (_req, res) => {
+    res.json({ handlers: EV_ROSTER_HANDLERS });
+  });
+
+  app.get("/api/ev-roster/source-options", (_req, res) => {
+    res.json(getSourceOptionsPayload());
+  });
+
+  app.get("/api/ev-roster/discovery-profiles", (_req, res) => {
+    res.json({ profiles: listEvRosterDiscoveryProfiles() });
+  });
+
+  app.get("/api/ev-roster/county-sources", async (req, res) => {
+    try {
+      await ensureDb();
+      const evrElectionId = Number(req.query.evrElectionId);
+      if (!evrElectionId) return res.status(400).json({ error: "evrElectionId required" });
+      const configs = await listEvRosterConfigs();
+      const cfg = configs.find((c) => c.evrElectionId === evrElectionId);
+      const { ensureKnownCountyEvRosterSources } = await import("./lib/evRosterCountySeed.mjs");
+      const sources = await ensureKnownCountyEvRosterSources(evrElectionId, cfg?.electionDate, cfg?.party, {
+        listFn: listEvRosterCountySources,
+        upsertFn: upsertEvRosterCountySource,
+        listConfigsFn: listEvRosterConfigs,
+      });
+      res.json({ evrElectionId, sources });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.put("/api/ev-roster/county-sources", async (req, res) => {
+    try {
+      await ensureDb();
+      const body = req.body ?? {};
+      const savedRow = {
+        id: body.id != null ? Number(body.id) : null,
+        evrElectionId: Number(body.evrElectionId),
+        countyKey: body.countyKey,
+        variantKey: body.variantKey,
+        sourceLabel: body.sourceLabel,
+        civixCountyName: body.civixCountyName,
+        civixCountyId: body.civixCountyId,
+        handlerKey: body.handlerKey,
+        hubPageUrl: body.hubPageUrl,
+        rosterUrl: body.rosterUrl,
+        votingMethodScope: body.votingMethodScope,
+        dateScope: body.dateScope,
+        fileFormat: body.fileFormat,
+        rosterPartyScope: body.rosterPartyScope,
+        discoveryProfileKey: body.discoveryProfileKey,
+        trainingNotes: body.trainingNotes,
+        isEnabled: body.isEnabled,
+      };
+      await upsertEvRosterCountySource(savedRow);
+      const { propagateCountySourceToSiblingElections } = await import("./lib/evRosterCountyMirror.mjs");
+      await propagateCountySourceToSiblingElections(savedRow, {
+        listFn: listEvRosterCountySources,
+        upsertFn: upsertEvRosterCountySource,
+        listConfigsFn: listEvRosterConfigs,
+      });
+      const sources = await listEvRosterCountySources(Number(body.evrElectionId));
+      res.json({ sources });
+    } catch (e) {
+      console.error(e);
+      res.status(400).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/ev-roster/discover", async (req, res) => {
+    try {
+      const body = req.body ?? {};
+      const { hubPageUrl, countyKey, html } = body;
+      if (!hubPageUrl || !countyKey) {
+        return res.status(400).json({ error: "hubPageUrl and countyKey required" });
+      }
+      if (!countyHasEvRosterDiscoveryProfile(countyKey)) {
+        return res.status(400).json({
+          error: `No EV roster discovery profile for "${countyKey}". Add one in server/lib/evRosterHubDiscovery.mjs.`,
+        });
+      }
+      const configs = await listEvRosterConfigs();
+      const cfg = configs.find((c) => c.evrElectionId === Number(body.evrElectionId));
+      const discoverAll = body.all === true || body.discoverAll === true;
+      const discoverOpts = {
+        countyKey,
+        html,
+        electionDate: body.electionDate ?? cfg?.electionDate,
+        reportCode: body.reportCode,
+      };
+      const result = discoverAll
+        ? await discoverEvRosterUrlsFromHub(String(hubPageUrl), discoverOpts)
+        : await discoverEvRosterUrlFromHub(String(hubPageUrl), {
+            ...discoverOpts,
+            methodScope: body.methodScope,
+            stageId: body.stageId,
+            rosterPartyScope: body.rosterPartyScope,
+            votingDate: body.votingDate,
+          });
+      res.json(result);
+    } catch (e) {
+      console.error(e);
+      res.status(502).json({ error: String(e?.message || e) });
+    }
+  });
+  }
+
+  app.use((req, res) => {
+    const path = String(req.path ?? req.url ?? "").split("?")[0];
+    if (path === "/api" || path.startsWith("/api/")) {
+      res.status(404).json({ error: `No API route for ${path}` });
+      return;
+    }
+    res.status(404).send("Not found");
   });
 
   return app;

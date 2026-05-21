@@ -2,6 +2,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import initSqlJs from "sql.js";
+import { resolveVoterActivityDate } from "./lib/evRosterVoterDates.mjs";
+import {
+  ensureEvRosterSummaryCacheSchemaSqlite,
+  loadSummaryRollupsFromCache,
+  rebuildEvRosterSummaryCache,
+} from "./lib/evRosterSummaryCache.mjs";
+import {
+  restoreElectionConfigsFromBackup,
+  applyDefaultCatalogFromBackup,
+  writeElectionConfigBackup,
+} from "./lib/electionConfigBackup.mjs";
+import {
+  restoreElectionFeedsFromBackup,
+  restoreSingleElectionFeedsFromBackup,
+  writeElectionFeedBackupForElection,
+} from "./lib/electionFeedConfigBackup.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Resolved via package exports: `"./dist/*": "./dist/*"`. */
@@ -19,6 +35,9 @@ let _db = null;
 let _init = null;
 let _dbMtimeMs = 0;
 let _activeDbPath = DB_PATH;
+let _dbReady = false;
+let _electionSourceColumnsEnsured = false;
+let _persistDebounceTimer = null;
 
 function isMalformedError(err) {
   return /malformed/i.test(String(err?.message ?? err));
@@ -48,16 +67,60 @@ function selectWritableDbPath(preferredPath) {
   }
 }
 
+const LARGE_DB_BYTES = 40 * 1024 * 1024;
+
 function readHealthyDbFromPath(SQL, dbPath) {
   if (!fs.existsSync(dbPath)) return null;
+  const st = fs.statSync(dbPath);
   const file = fs.readFileSync(dbPath);
   const db = new SQL.Database(file);
   if (!isDbHealthy(db)) return null;
+  const skipCounts = st.size >= LARGE_DB_BYTES;
   return {
     db,
     path: dbPath,
-    mtimeMs: fs.statSync(dbPath).mtimeMs,
+    mtimeMs: st.mtimeMs,
+    bytes: st.size,
+    evRosterVoters: skipCounts ? 0 : countTableRows(db, "ev_roster_voters"),
+    evRosterPulls: skipCounts ? 0 : countTableRows(db, "ev_roster_pulls"),
   };
+}
+
+function countTableRows(db, table) {
+  try {
+    const stmt = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`);
+    stmt.step();
+    const n = Number(stmt.getAsObject().n ?? 0);
+    stmt.free();
+    return n;
+  } catch {
+    return 0;
+  }
+}
+
+/** Prefer the snapshot that actually has roster data; break ties with newest mtime / file size. */
+function pickBestDbSnapshot(primary, recovery) {
+  if (!primary) return recovery;
+  if (!recovery) return primary;
+  const score = (s) =>
+    s.evRosterVoters * 1_000_000 +
+    s.evRosterPulls * 1_000 +
+    Number(s.bytes ?? 0) / 1024 +
+    s.mtimeMs / 1e6;
+  return score(recovery) > score(primary) ? recovery : primary;
+}
+
+/** Choose which on-disk file to open (only load one into memory). */
+function pickDbPathToOpen() {
+  const meta = (p) => {
+    if (!fs.existsSync(p)) return null;
+    const st = fs.statSync(p);
+    return { path: p, mtimeMs: st.mtimeMs, bytes: st.size, evRosterVoters: 0, evRosterPulls: 0 };
+  };
+  const primary = meta(DB_PATH);
+  const recovery = meta(RECOVERY_DB_PATH);
+  const picked = pickBestDbSnapshot(primary, recovery);
+  return picked?.path ?? DB_PATH;
 }
 
 /**
@@ -73,16 +136,19 @@ async function reloadFromDiskIfStale() {
     const recoveryMtime = fs.existsSync(RECOVERY_DB_PATH) ? fs.statSync(RECOVERY_DB_PATH).mtimeMs : 0;
     const newestDiskMtime = Math.max(primaryMtime, recoveryMtime);
     if (newestDiskMtime <= _dbMtimeMs) return;
-    const SQL = await initSqlJs({ wasmBinary: fs.readFileSync(WASM_PATH) });
-    const primary = readHealthyDbFromPath(SQL, DB_PATH);
-    const recovery = readHealthyDbFromPath(SQL, RECOVERY_DB_PATH);
-    const picked = primary || recovery;
-    if (picked) {
-      _db = picked.db;
-      _activeDbPath = picked.path;
-      _dbMtimeMs = picked.mtimeMs;
-      initSchema(_db);
+    const primaryBytes = fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH).size : 0;
+    if (primaryBytes >= LARGE_DB_BYTES) {
+      _dbMtimeMs = newestDiskMtime;
+      return;
     }
+    const SQL = await initSqlJs({ wasmBinary: fs.readFileSync(WASM_PATH) });
+      const picked = readHealthyDbFromPath(SQL, pickDbPathToOpen());
+      if (picked) {
+        _db = picked.db;
+        _activeDbPath = DB_PATH;
+        _dbMtimeMs = picked.mtimeMs;
+        initSchema(_db);
+      }
   } catch {
     /* keep current in-memory DB */
   }
@@ -90,7 +156,7 @@ async function reloadFromDiskIfStale() {
 
 async function recoverDatabaseInstance() {
   const SQL = await initSqlJs({ wasmBinary: fs.readFileSync(WASM_PATH) });
-  _activeDbPath = RECOVERY_DB_PATH;
+  _activeDbPath = DB_PATH;
   try {
     if (fs.existsSync(RECOVERY_DB_PATH)) {
       const file = fs.readFileSync(RECOVERY_DB_PATH);
@@ -108,12 +174,13 @@ async function recoverDatabaseInstance() {
   initSchema(_db);
   migrateLegacyJsonIfNeeded(_db);
   persistDb(_db);
+  _dbReady = true;
   return _db;
 }
 
-function persistDb(db) {
-  const targetPath = selectWritableDbPath(_activeDbPath);
-  _activeDbPath = targetPath;
+function persistDbNow(db) {
+  const targetPath = selectWritableDbPath(DB_PATH);
+  _activeDbPath = DB_PATH;
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   const data = db.export();
   fs.writeFileSync(targetPath, Buffer.from(data));
@@ -122,6 +189,51 @@ function persistDb(db) {
   } catch {
     _dbMtimeMs = 0;
   }
+}
+
+/** Full sql.js export needs ~2× file size RAM; avoid crashing the API process. */
+function persistDbNowSafe(db) {
+  try {
+    persistDbNow(db);
+  } catch (err) {
+    const msg = String(err?.message ?? err);
+    if (/allocation failed|out of memory|Array buffer/i.test(msg)) {
+      console.warn(
+        "[db] Skipped writing elections.db to disk (not enough memory for full export). " +
+          "Run with NODE_OPTIONS=--max-old-space-size=4096 or close other apps, then save again.",
+      );
+      return false;
+    }
+    throw err;
+  }
+  return true;
+}
+
+function persistDb(db) {
+  const bytes = fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH).size : 0;
+  if (bytes >= LARGE_DB_BYTES) {
+    clearTimeout(_persistDebounceTimer);
+    _persistDebounceTimer = setTimeout(() => {
+      _persistDebounceTimer = null;
+      if (_db) persistDbNowSafe(_db);
+    }, 8000);
+    return false;
+  }
+  return persistDbNowSafe(db);
+}
+
+/** Flush a pending large-db write immediately (e.g. after saving county feeds). */
+export function flushPendingDatabasePersist() {
+  if (_persistDebounceTimer) {
+    clearTimeout(_persistDebounceTimer);
+    _persistDebounceTimer = null;
+  }
+  if (!_db) return false;
+  return persistDbNowSafe(_db);
+}
+
+export function isDatabaseLoaded() {
+  return _dbReady && _db != null;
 }
 
 function initSchema(db) {
@@ -394,6 +506,37 @@ function initSchema(db) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_election_feed_sources_election ON election_feed_sources(election_id);
+    CREATE TABLE IF NOT EXISTS county_sos_race_links (
+      election_id TEXT NOT NULL,
+      county_key TEXT NOT NULL,
+      county_contest_name TEXT NOT NULL,
+      sos_race_id TEXT NOT NULL,
+      sos_race_name TEXT,
+      link_type TEXT NOT NULL DEFAULT 'manual',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (election_id, county_key, county_contest_name)
+    );
+    CREATE TABLE IF NOT EXISTS county_sos_manual_votes (
+      election_id TEXT NOT NULL,
+      county_key TEXT NOT NULL,
+      sos_race_id TEXT NOT NULL,
+      sos_candidate_id TEXT NOT NULL,
+      choice_name TEXT NOT NULL,
+      party_name TEXT,
+      early_votes INTEGER NOT NULL DEFAULT 0,
+      election_day_votes INTEGER NOT NULL DEFAULT 0,
+      total_votes INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (election_id, county_key, sos_race_id, sos_candidate_id)
+    );
+    CREATE TABLE IF NOT EXISTS county_sos_race_vote_source (
+      election_id TEXT NOT NULL,
+      county_key TEXT NOT NULL,
+      sos_race_id TEXT NOT NULL,
+      vote_source TEXT NOT NULL DEFAULT 'sos',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (election_id, county_key, sos_race_id)
+    );
   `);
   db.run(
     `INSERT OR IGNORE INTO data_sources (id, kind, display_name, notes)
@@ -453,6 +596,245 @@ function initSchema(db) {
   ensureCountyResultsColumns(db);
   ensureElectionSourceConfigColumns(db);
   ensureElectionFeedSourcesHubColumn(db);
+  ensureEvRosterSchema(db);
+  ensureCountyRaceMappingTables(db);
+}
+
+function ensureEvRosterSchema(db) {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS ev_roster_configs (
+      evr_election_id INTEGER PRIMARY KEY,
+      party TEXT NOT NULL,
+      election_name TEXT NOT NULL,
+      election_date TEXT NOT NULL,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS ev_roster_pulls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      evr_election_id INTEGER NOT NULL,
+      voting_date TEXT NOT NULL,
+      hub_page_url TEXT,
+      sos_turnout_url TEXT,
+      sos_roster_url TEXT,
+      statewide_voter_count INTEGER NOT NULL DEFAULT 0,
+      pulled_at TEXT NOT NULL DEFAULT (datetime('now')),
+      ok INTEGER NOT NULL DEFAULT 1,
+      message TEXT NOT NULL DEFAULT '',
+      UNIQUE(evr_election_id, voting_date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ev_roster_pulls_election ON ev_roster_pulls(evr_election_id, voting_date DESC);
+    CREATE TABLE IF NOT EXISTS ev_roster_county_summary (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pull_id INTEGER NOT NULL,
+      county_name TEXT NOT NULL,
+      county_id INTEGER,
+      registered_voters INTEGER NOT NULL DEFAULT 0,
+      in_person_votes_on_date INTEGER NOT NULL DEFAULT 0,
+      total_in_person_votes_for_election INTEGER NOT NULL DEFAULT 0,
+      total_mail_votes_for_election INTEGER NOT NULL DEFAULT 0,
+      cumulative_total INTEGER NOT NULL DEFAULT 0,
+      sos_voter_count INTEGER NOT NULL DEFAULT 0,
+      county_voter_count INTEGER NOT NULL DEFAULT 0,
+      chosen_source TEXT NOT NULL DEFAULT 'sos',
+      chosen_voter_count INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (pull_id) REFERENCES ev_roster_pulls(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_ev_roster_county_pull ON ev_roster_county_summary(pull_id, county_name);
+    CREATE TABLE IF NOT EXISTS ev_roster_voters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      evr_election_id INTEGER NOT NULL,
+      voting_date TEXT NOT NULL,
+      county_name TEXT NOT NULL,
+      vuid TEXT NOT NULL,
+      voter_name TEXT,
+      voting_method TEXT,
+      precinct TEXT,
+      source TEXT NOT NULL DEFAULT 'sos',
+      UNIQUE(evr_election_id, voting_date, vuid)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ev_roster_voters_lookup ON ev_roster_voters(evr_election_id, voting_date, county_name);
+    CREATE TABLE IF NOT EXISTS ev_roster_county_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      evr_election_id INTEGER NOT NULL,
+      county_key TEXT NOT NULL,
+      variant_key TEXT NOT NULL DEFAULT 'sos-default',
+      source_label TEXT NOT NULL DEFAULT '',
+      civix_county_name TEXT NOT NULL,
+      civix_county_id INTEGER,
+      handler_key TEXT NOT NULL DEFAULT 'civix_sos_county_slice',
+      hub_page_url TEXT NOT NULL DEFAULT '',
+      roster_url TEXT NOT NULL DEFAULT '',
+      voting_method_scope TEXT NOT NULL DEFAULT 'ALL',
+      date_scope TEXT NOT NULL DEFAULT 'SINGLE_DAY',
+      file_format TEXT NOT NULL DEFAULT 'auto',
+      discovery_profile_key TEXT,
+      training_notes TEXT,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      last_pull_ok INTEGER,
+      last_pull_message TEXT,
+      last_pull_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(evr_election_id, county_key, variant_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ev_roster_county_sources_election ON ev_roster_county_sources(evr_election_id);
+    CREATE TABLE IF NOT EXISTS ev_roster_county_pull_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pull_id INTEGER NOT NULL,
+      county_key TEXT NOT NULL,
+      county_name TEXT NOT NULL,
+      handler_key TEXT NOT NULL,
+      ok INTEGER NOT NULL,
+      voter_count INTEGER NOT NULL DEFAULT 0,
+      source_url TEXT,
+      message TEXT NOT NULL DEFAULT '',
+      FOREIGN KEY (pull_id) REFERENCES ev_roster_pulls(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_ev_roster_county_pull_log ON ev_roster_county_pull_log(pull_id, county_key);
+  `);
+  db.run(
+    `INSERT OR IGNORE INTO ev_roster_configs (evr_election_id, party, election_name, election_date, notes)
+     VALUES (58315, 'REP', '2026 REPUBLICAN PRIMARY RUNOFF ELECTION', '05/26/2026', 'Civix EVR — statewide roster + county totals')`,
+  );
+  db.run(
+    `INSERT OR IGNORE INTO ev_roster_configs (evr_election_id, party, election_name, election_date, notes)
+     VALUES (58314, 'DEM', '2026 DEMOCRATIC PRIMARY RUNOFF ELECTION', '05/26/2026', 'Civix EVR — statewide roster + county totals')`,
+  );
+  ensureEvRosterVoterColumns(db);
+  ensureEvRosterVoterCountyUnique(db);
+  ensureEvRosterCountySourceVariantSchema(db);
+  ensureEvRosterRosterPartyScopeColumn(db);
+  ensureEvRosterCountyPullStatusTable(db);
+  ensureEvRosterSummaryCacheSchemaSqlite(db);
+}
+
+function ensureEvRosterCountyPullStatusTable(db) {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS ev_roster_county_pull_status (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      evr_election_id INTEGER NOT NULL,
+      voting_date TEXT NOT NULL,
+      county_name TEXT NOT NULL,
+      county_key TEXT,
+      last_pull_ok INTEGER,
+      last_pull_at TEXT,
+      last_pull_message TEXT,
+      voter_count INTEGER NOT NULL DEFAULT 0,
+      confirmed_at TEXT,
+      UNIQUE(evr_election_id, voting_date, county_name)
+    )
+  `);
+  db.run(
+    `CREATE INDEX IF NOT EXISTS idx_ev_roster_county_pull_status ON ev_roster_county_pull_status(evr_election_id, voting_date)`,
+  );
+}
+
+/** Allow the same VUID on different counties (incremental county pulls must not steal rows). */
+function ensureEvRosterVoterCountyUnique(db) {
+  const row = db.exec(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ev_roster_voters'`)[0]
+    ?.values?.[0]?.[0];
+  const ddl = String(row ?? "");
+  if (!ddl || (ddl.includes("county_name") && /UNIQUE\s*\([^)]*county_name/i.test(ddl))) return;
+
+  db.run(`
+    CREATE TABLE ev_roster_voters_mig (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      evr_election_id INTEGER NOT NULL,
+      voting_date TEXT NOT NULL,
+      county_name TEXT NOT NULL,
+      vuid TEXT NOT NULL,
+      voter_name TEXT,
+      voting_method TEXT,
+      precinct TEXT,
+      source TEXT NOT NULL DEFAULT 'sos',
+      party TEXT,
+      method_code TEXT,
+      UNIQUE(evr_election_id, voting_date, county_name, vuid)
+    )
+  `);
+  db.run(`
+    INSERT INTO ev_roster_voters_mig
+      (id, evr_election_id, voting_date, county_name, vuid, voter_name, voting_method, precinct, source, party, method_code)
+    SELECT id, evr_election_id, voting_date, county_name, vuid, voter_name, voting_method, precinct, source, party, method_code
+    FROM ev_roster_voters
+  `);
+  db.run(`DROP TABLE ev_roster_voters`);
+  db.run(`ALTER TABLE ev_roster_voters_mig RENAME TO ev_roster_voters`);
+  db.run(
+    `CREATE INDEX IF NOT EXISTS idx_ev_roster_voters_lookup ON ev_roster_voters(evr_election_id, voting_date, county_name)`,
+  );
+}
+
+function ensureEvRosterRosterPartyScopeColumn(db) {
+  const cols = db.exec(`PRAGMA table_info(ev_roster_county_sources)`)[0]?.values?.map((r) => r[1]) ?? [];
+  if (!cols.length || cols.includes("roster_party_scope")) return;
+  db.run(
+    `ALTER TABLE ev_roster_county_sources ADD COLUMN roster_party_scope TEXT NOT NULL DEFAULT 'COMBINED'`,
+  );
+}
+
+function ensureEvRosterCountySourceVariantSchema(db) {
+  const cols = db.exec(`PRAGMA table_info(ev_roster_county_sources)`)[0]?.values?.map((r) => r[1]) ?? [];
+  if (!cols.length) return;
+  if (cols.includes("variant_key")) return;
+
+  db.run(`
+    CREATE TABLE ev_roster_county_sources_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      evr_election_id INTEGER NOT NULL,
+      county_key TEXT NOT NULL,
+      variant_key TEXT NOT NULL DEFAULT 'sos-default',
+      source_label TEXT NOT NULL DEFAULT 'SOS default',
+      civix_county_name TEXT NOT NULL,
+      civix_county_id INTEGER,
+      handler_key TEXT NOT NULL DEFAULT 'civix_sos_county_slice',
+      hub_page_url TEXT NOT NULL DEFAULT '',
+      roster_url TEXT NOT NULL DEFAULT '',
+      voting_method_scope TEXT NOT NULL DEFAULT 'ALL',
+      date_scope TEXT NOT NULL DEFAULT 'SINGLE_DAY',
+      file_format TEXT NOT NULL DEFAULT 'auto',
+      discovery_profile_key TEXT,
+      training_notes TEXT,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      last_pull_ok INTEGER,
+      last_pull_message TEXT,
+      last_pull_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(evr_election_id, county_key, variant_key)
+    )
+  `);
+  db.run(`
+    INSERT INTO ev_roster_county_sources_new
+      (id, evr_election_id, county_key, variant_key, source_label, civix_county_name, civix_county_id,
+       handler_key, hub_page_url, roster_url, voting_method_scope, date_scope, file_format,
+       discovery_profile_key, training_notes, is_enabled, last_pull_ok, last_pull_message, last_pull_at, created_at, updated_at)
+    SELECT id, evr_election_id, county_key, 'sos-default', 'SOS default', civix_county_name, civix_county_id,
+       handler_key, hub_page_url, roster_url, 'ALL', 'SINGLE_DAY', 'auto',
+       discovery_profile_key, training_notes, is_enabled, last_pull_ok, last_pull_message, last_pull_at, created_at, updated_at
+    FROM ev_roster_county_sources
+  `);
+  db.run(`DROP TABLE ev_roster_county_sources`);
+  db.run(`ALTER TABLE ev_roster_county_sources_new RENAME TO ev_roster_county_sources`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_ev_roster_county_sources_election ON ev_roster_county_sources(evr_election_id)`);
+}
+
+function ensureEvRosterVoterColumns(db) {
+  const cols = db.exec(`PRAGMA table_info(ev_roster_voters)`)[0]?.values?.map((r) => r[1]) ?? [];
+  if (!cols.includes("party")) db.run(`ALTER TABLE ev_roster_voters ADD COLUMN party TEXT`);
+  if (!cols.includes("method_code")) db.run(`ALTER TABLE ev_roster_voters ADD COLUMN method_code TEXT`);
+  if (!cols.includes("reporting_date")) {
+    db.run(`ALTER TABLE ev_roster_voters ADD COLUMN reporting_date TEXT`);
+    db.run(`UPDATE ev_roster_voters SET reporting_date = voting_date WHERE reporting_date IS NULL OR reporting_date = ''`);
+  }
+  const pullCols = db.exec(`PRAGMA table_info(ev_roster_pulls)`)[0]?.values?.map((r) => r[1]) ?? [];
+  if (!pullCols.includes("raw_record_count")) db.run(`ALTER TABLE ev_roster_pulls ADD COLUMN raw_record_count INTEGER NOT NULL DEFAULT 0`);
+  if (!pullCols.includes("deduped_voter_count")) {
+    db.run(`ALTER TABLE ev_roster_pulls ADD COLUMN deduped_voter_count INTEGER NOT NULL DEFAULT 0`);
+  }
 }
 
 function ensureElectionFeedSourcesHubColumn(db) {
@@ -522,6 +904,7 @@ function migrateCountyPreferJsonToFeedsSqlite(db) {
 }
 
 function ensureElectionSourceConfigColumns(db) {
+  if (_electionSourceColumnsEnsured) return;
   try {
     const r = db.exec(`PRAGMA table_info(election_source_configs)`);
     const cols = r?.[0]?.values ?? [];
@@ -534,12 +917,26 @@ function ensureElectionSourceConfigColumns(db) {
       db.run(`ALTER TABLE election_source_configs ADD COLUMN show_in_catalog INTEGER NOT NULL DEFAULT 1`);
       persistDb(db);
     }
+    if (!names.includes("is_default_catalog")) {
+      db.run(`ALTER TABLE election_source_configs ADD COLUMN is_default_catalog INTEGER NOT NULL DEFAULT 0`);
+      db.run(`UPDATE election_source_configs SET is_default_catalog = 1 WHERE election_id = '56181'`);
+      const marked = db.exec(`SELECT COUNT(*) AS n FROM election_source_configs WHERE is_default_catalog = 1`);
+      const n = Number(marked?.[0]?.values?.[0]?.[0] ?? 0);
+      if (n === 0) {
+        db.run(
+          `UPDATE election_source_configs SET is_default_catalog = 1
+           WHERE election_id = (SELECT election_id FROM election_source_configs ORDER BY election_id LIMIT 1)`,
+        );
+      }
+      persistDb(db);
+    }
     if (!names.includes("county_prefer_over_sos_json")) {
       db.run(`ALTER TABLE election_source_configs ADD COLUMN county_prefer_over_sos_json TEXT NOT NULL DEFAULT '[]'`);
       persistDb(db);
     }
+    _electionSourceColumnsEnsured = true;
   } catch {
-    /* ignore */
+    _electionSourceColumnsEnsured = true;
   }
 }
 
@@ -569,6 +966,41 @@ function seedIngestVendorsSqlite(db) {
       "enr",
       "dallas_pdf",
       "Dallas County Votes: Electionware 'Summary Results Report' PDF (Final Election Night). Imports all contests in the file; layout differs from Harris / Montgomery / Chambers PDFs.",
+    ],
+    [
+      "collin-pdf",
+      "Collin County (Electionware EV summary PDF)",
+      "enr",
+      "collin_electionware_pdf",
+      "Collin County Electionware early-voting summary PDF (Mail + Early Voting columns). Example: collincountytx.gov/.../early-voting-summary-report.pdf. Imports all contests in the file.",
+    ],
+    [
+      "cameron-pdf",
+      "Cameron County (results / reconciliation PDF)",
+      "enr",
+      "cameron_pdf",
+      "Cameron County PDFs: Electionware summary (all contests) when posted, or SOS Form 12-1 preliminary reconciliation (P26-*-reconciliation-REP/DEM.pdf) for turnout totals only — not per-candidate SD4 from reconciliation alone.",
+    ],
+    [
+      "hays-pdf",
+      "Hays County (eGovlink cumulative PDF)",
+      "enr",
+      "hays_egovlink_cumulative_pdf",
+      "Hays County official cumulative results PDF on egovlink.com (Absentee + Early + Election Day columns). Example: …/Cumulative Results - Democratic Party - official.pdf",
+    ],
+    [
+      "mclennan-pdf",
+      "McLennan County (CivicPlus cumulative PDF)",
+      "enr",
+      "mclennan_civicplus_cumulative_pdf",
+      "McLennan County official cumulative PDF on tx-mclennancounty.civicplus.com (Absentee + Early + Election Day). Separate DEM/REP PDFs.",
+    ],
+    [
+      "ellis-enr-html",
+      "Ellis County (livevoterturnout ENR HTML)",
+      "enr",
+      "ellis_livevoterturnout_html",
+      "Ellis County Election Night Results on livevoterturnout.com — paste Index URL (e.g. …/ellistxenr/9/en/Index_9.html). Sums all precinct tables to county totals.",
     ],
     ["other-vendor", "Other / custom (no ingest yet)", "other", "unimplemented", "Document the URL; automated ingest can be added later."],
   ];
@@ -623,6 +1055,36 @@ function syncIngestVendorMetadataSqlite(db) {
       "enr",
       "Dallas County Votes: Electionware 'Summary Results Report' PDF (Final Election Night). Imports all contests in the file; layout differs from Harris / Montgomery / Chambers PDFs.",
     ],
+    [
+      "collin-pdf",
+      "Collin County (Electionware EV summary PDF)",
+      "enr",
+      "Collin County Electionware early-voting summary PDF (Mail + Early Voting). Imports all contests in the file.",
+    ],
+    [
+      "cameron-pdf",
+      "Cameron County (results / reconciliation PDF)",
+      "enr",
+      "Cameron County PDFs: Electionware summary when posted, or SOS preliminary reconciliation (P26-*-reconciliation-*.pdf) for turnout only.",
+    ],
+    [
+      "hays-pdf",
+      "Hays County (eGovlink cumulative PDF)",
+      "enr",
+      "Hays egovlink.com cumulative results PDF (official). Imports all contests; separate DEM/REP PDFs per party.",
+    ],
+    [
+      "mclennan-pdf",
+      "McLennan County (CivicPlus cumulative PDF)",
+      "enr",
+      "McLennan CivicPlus cumulative PDF (official). Imports all contests; separate DEM/REP PDFs per party.",
+    ],
+    [
+      "ellis-enr-html",
+      "Ellis County (livevoterturnout ENR HTML)",
+      "enr",
+      "Ellis livevoterturnout.com ENR Index page — imports all contests (precinct tables summed to county).",
+    ],
     ["harris-pdf", "Harris Votes (PDF cumulative)", "enr", "Harris cumulative PDF layout (distinct line format from Montgomery/Chambers)."],
   ];
   const u = db.prepare(
@@ -666,13 +1128,14 @@ function ensureCountyResultsColumns(db) {
   }
 }
 
+/** @returns {boolean} true if rows were imported from legacy JSON */
 function migrateLegacyJsonIfNeeded(db) {
   const cStmt = db.prepare("SELECT COUNT(*) AS c FROM manual_elections");
   cStmt.step();
   const count = Number(cStmt.getAsObject().c);
   cStmt.free();
-  if (count > 0) return;
-  if (!fs.existsSync(LEGACY_MANIFEST)) return;
+  if (count > 0) return false;
+  if (!fs.existsSync(LEGACY_MANIFEST)) return false;
 
   const manifest = JSON.parse(fs.readFileSync(LEGACY_MANIFEST, "utf8"));
   const ins = db.prepare(
@@ -695,12 +1158,14 @@ function migrateLegacyJsonIfNeeded(db) {
     /* ignore */
   }
   persistDb(db);
+  return true;
 }
 
 export async function ensureDb() {
-  if (_db) {
+  if (_db && _dbReady) {
     try {
       if (!isDbHealthy(_db)) {
+        _dbReady = false;
         return await recoverDatabaseInstance();
       }
       await reloadFromDiskIfStale();
@@ -716,18 +1181,26 @@ export async function ensureDb() {
   _init = (async () => {
     const wasmBinary = fs.readFileSync(WASM_PATH);
     const SQL = await initSqlJs({ wasmBinary });
+    let picked = null;
+    let consolidatedFromRecovery = false;
     try {
-      // Prefer the primary DB file users edit directly; use recovery only when needed.
-      const primary = readHealthyDbFromPath(SQL, DB_PATH);
-      const recovery = readHealthyDbFromPath(SQL, RECOVERY_DB_PATH);
-      const picked = primary || recovery;
+      const openPath = pickDbPathToOpen();
+      consolidatedFromRecovery = openPath !== DB_PATH;
+      picked = readHealthyDbFromPath(SQL, openPath);
       if (picked) {
         _db = picked.db;
-        _activeDbPath = picked.path;
+        _activeDbPath = DB_PATH;
         _dbMtimeMs = picked.mtimeMs;
+        if (consolidatedFromRecovery) {
+          console.warn(
+            `Using EV roster data from ${path.basename(picked.path)} (${(picked.bytes / 1024 / 1024).toFixed(1)} MB); consolidating into elections.db`,
+          );
+        } else if (picked.bytes >= LARGE_DB_BYTES) {
+          console.log(`Opened ${path.basename(openPath)} (${(picked.bytes / 1024 / 1024).toFixed(1)} MB)`);
+        }
       } else {
         _db = new SQL.Database();
-        _activeDbPath = selectWritableDbPath(DB_PATH);
+        _activeDbPath = DB_PATH;
         _dbMtimeMs = 0;
       }
     } catch (err) {
@@ -736,8 +1209,27 @@ export async function ensureDb() {
       return await recoverDatabaseInstance();
     }
     initSchema(_db);
-    migrateLegacyJsonIfNeeded(_db);
-    persistDb(_db);
+    const legacyMigrated = migrateLegacyJsonIfNeeded(_db);
+    const restoredConfigs = restoreElectionConfigsFromBackup(_db);
+    const appliedDefault = applyDefaultCatalogFromBackup(_db);
+    const restoredFeeds = restoreElectionFeedsFromBackup(_db);
+    if (restoredFeeds > 0) {
+      console.warn(`Restored ${restoredFeeds} county feed row(s) from election-feed-configs.json`);
+      persistDb(_db);
+      flushPendingDatabasePersist();
+    }
+    if (restoredConfigs > 0) {
+      console.log(`Restored ${restoredConfigs} election(s) from election-source-configs.json backup`);
+      persistDb(_db);
+    }
+    if (appliedDefault) {
+      console.log("Applied home default election from election-source-configs.json backup");
+      persistDb(_db);
+    }
+    if (legacyMigrated || consolidatedFromRecovery || !picked) {
+      persistDb(_db);
+    }
+    _dbReady = true;
     return _db;
   })();
   return _init;
@@ -1145,6 +1637,212 @@ export async function getSd4MergePreferCountyFeedNameSet(electionId = "56181") {
   return set;
 }
 
+function ensureCountyRaceMappingTables(db) {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS county_sos_race_links (
+      election_id TEXT NOT NULL,
+      county_key TEXT NOT NULL,
+      county_contest_name TEXT NOT NULL,
+      sos_race_id TEXT NOT NULL,
+      sos_race_name TEXT,
+      link_type TEXT NOT NULL DEFAULT 'manual',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (election_id, county_key, county_contest_name)
+    );
+    CREATE TABLE IF NOT EXISTS county_sos_manual_votes (
+      election_id TEXT NOT NULL,
+      county_key TEXT NOT NULL,
+      sos_race_id TEXT NOT NULL,
+      sos_candidate_id TEXT NOT NULL,
+      choice_name TEXT NOT NULL,
+      party_name TEXT,
+      early_votes INTEGER NOT NULL DEFAULT 0,
+      election_day_votes INTEGER NOT NULL DEFAULT 0,
+      total_votes INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (election_id, county_key, sos_race_id, sos_candidate_id)
+    );
+    CREATE TABLE IF NOT EXISTS county_sos_race_vote_source (
+      election_id TEXT NOT NULL,
+      county_key TEXT NOT NULL,
+      sos_race_id TEXT NOT NULL,
+      vote_source TEXT NOT NULL DEFAULT 'sos',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (election_id, county_key, sos_race_id)
+    );
+  `);
+}
+
+export async function listCountySosRaceLinks(electionId) {
+  const db = await ensureDb();
+  ensureCountyRaceMappingTables(db);
+  const stmt = db.prepare(
+    `SELECT county_key AS countyKey, county_contest_name AS countyContestName, sos_race_id AS sosRaceId,
+            sos_race_name AS sosRaceName, link_type AS linkType, updated_at AS updatedAt
+     FROM county_sos_race_links WHERE election_id = ? ORDER BY county_key, county_contest_name`,
+  );
+  stmt.bind([String(electionId)]);
+  const out = [];
+  while (stmt.step()) {
+    const r = stmt.getAsObject();
+    out.push({
+      countyKey: String(r.countyKey ?? ""),
+      countyContestName: String(r.countyContestName ?? ""),
+      sosRaceId: String(r.sosRaceId ?? ""),
+      sosRaceName: String(r.sosRaceName ?? ""),
+      linkType: String(r.linkType ?? "manual"),
+      updatedAt: String(r.updatedAt ?? ""),
+    });
+  }
+  stmt.free();
+  return out;
+}
+
+export async function upsertCountySosRaceLink(electionId, link) {
+  const db = await ensureDb();
+  ensureCountyRaceMappingTables(db);
+  db.run(
+    `INSERT INTO county_sos_race_links (election_id, county_key, county_contest_name, sos_race_id, sos_race_name, link_type, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(election_id, county_key, county_contest_name) DO UPDATE SET
+       sos_race_id = excluded.sos_race_id,
+       sos_race_name = excluded.sos_race_name,
+       link_type = excluded.link_type,
+       updated_at = datetime('now')`,
+    [
+      String(electionId),
+      String(link.countyKey ?? "").toLowerCase().trim(),
+      String(link.countyContestName ?? "").trim(),
+      String(link.sosRaceId ?? "").trim(),
+      String(link.sosRaceName ?? "").trim(),
+      String(link.linkType ?? "manual"),
+    ],
+  );
+  persistDb(db);
+}
+
+export async function deleteCountySosRaceLink(electionId, countyKey, countyContestName) {
+  const db = await ensureDb();
+  ensureCountyRaceMappingTables(db);
+  db.run(
+    `DELETE FROM county_sos_race_links WHERE election_id = ? AND county_key = ? AND county_contest_name = ?`,
+    [String(electionId), String(countyKey).toLowerCase().trim(), String(countyContestName).trim()],
+  );
+  persistDb(db);
+}
+
+export async function listCountySosManualVotes(electionId) {
+  const db = await ensureDb();
+  ensureCountyRaceMappingTables(db);
+  const stmt = db.prepare(
+    `SELECT county_key AS countyKey, sos_race_id AS sosRaceId, sos_candidate_id AS sosCandidateId,
+            choice_name AS choiceName, party_name AS partyName, early_votes AS earlyVotes,
+            election_day_votes AS electionDayVotes, total_votes AS totalVotes, updated_at AS updatedAt
+     FROM county_sos_manual_votes WHERE election_id = ? ORDER BY county_key, sos_race_id, sos_candidate_id`,
+  );
+  stmt.bind([String(electionId)]);
+  const out = [];
+  while (stmt.step()) {
+    const r = stmt.getAsObject();
+    out.push({
+      countyKey: String(r.countyKey ?? ""),
+      sosRaceId: String(r.sosRaceId ?? ""),
+      sosCandidateId: String(r.sosCandidateId ?? ""),
+      choiceName: String(r.choiceName ?? ""),
+      partyName: String(r.partyName ?? ""),
+      earlyVotes: Number(r.earlyVotes ?? 0),
+      electionDayVotes: Number(r.electionDayVotes ?? 0),
+      totalVotes: Number(r.totalVotes ?? 0),
+      updatedAt: String(r.updatedAt ?? ""),
+    });
+  }
+  stmt.free();
+  return out;
+}
+
+export async function upsertCountySosManualVote(electionId, row) {
+  const db = await ensureDb();
+  ensureCountyRaceMappingTables(db);
+  db.run(
+    `INSERT INTO county_sos_manual_votes
+       (election_id, county_key, sos_race_id, sos_candidate_id, choice_name, party_name, early_votes, election_day_votes, total_votes, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(election_id, county_key, sos_race_id, sos_candidate_id) DO UPDATE SET
+       choice_name = excluded.choice_name,
+       party_name = excluded.party_name,
+       early_votes = excluded.early_votes,
+       election_day_votes = excluded.election_day_votes,
+       total_votes = excluded.total_votes,
+       updated_at = datetime('now')`,
+    [
+      String(electionId),
+      String(row.countyKey ?? "").toLowerCase().trim(),
+      String(row.sosRaceId ?? "").trim(),
+      String(row.sosCandidateId ?? "").trim(),
+      String(row.choiceName ?? "").trim(),
+      String(row.partyName ?? "").trim(),
+      Number(row.earlyVotes ?? 0),
+      Number(row.electionDayVotes ?? 0),
+      Number(row.totalVotes ?? 0),
+    ],
+  );
+  persistDb(db);
+}
+
+export async function listCountySosRaceVoteSources(electionId) {
+  const db = await ensureDb();
+  ensureCountyRaceMappingTables(db);
+  const stmt = db.prepare(
+    `SELECT county_key AS countyKey, sos_race_id AS sosRaceId, vote_source AS voteSource, updated_at AS updatedAt
+     FROM county_sos_race_vote_source WHERE election_id = ?`,
+  );
+  stmt.bind([String(electionId)]);
+  const out = [];
+  while (stmt.step()) {
+    const r = stmt.getAsObject();
+    out.push({
+      countyKey: String(r.countyKey ?? ""),
+      sosRaceId: String(r.sosRaceId ?? ""),
+      voteSource: String(r.voteSource ?? "sos"),
+      updatedAt: String(r.updatedAt ?? ""),
+    });
+  }
+  stmt.free();
+  return out;
+}
+
+export async function upsertCountySosRaceVoteSource(electionId, row) {
+  const db = await ensureDb();
+  ensureCountyRaceMappingTables(db);
+  const src = String(row.voteSource ?? "sos").toLowerCase();
+  if (!["sos", "county_feed", "manual"].includes(src)) {
+    throw new Error("voteSource must be sos, county_feed, or manual");
+  }
+  db.run(
+    `INSERT INTO county_sos_race_vote_source (election_id, county_key, sos_race_id, vote_source, updated_at)
+     VALUES (?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(election_id, county_key, sos_race_id) DO UPDATE SET
+       vote_source = excluded.vote_source,
+       updated_at = datetime('now')`,
+    [String(electionId), String(row.countyKey ?? "").toLowerCase().trim(), String(row.sosRaceId ?? "").trim(), src],
+  );
+  persistDb(db);
+}
+
+/** Civix county label (uppercase) → county_key slug for mapping UI and merge. */
+export async function buildCivixNameToCountyKeyMap(electionId) {
+  const db = await ensureDb();
+  const feeds = await listElectionFeedSources(electionId);
+  const map = {};
+  for (const f of feeds) {
+    const slug = String(f.countyKey ?? "").trim().toLowerCase();
+    if (!slug) continue;
+    const civix = civixCountyLabelForSlug(db, electionId, slug);
+    map[civix] = slug;
+  }
+  return map;
+}
+
 export async function listIngestVendors() {
   const db = await ensureDb();
   const stmt = db.prepare(
@@ -1197,6 +1895,14 @@ export async function listElectionFeedSources(electionId) {
     });
   }
   stmt.free();
+  if (out.length === 0) {
+    try {
+      const n = restoreSingleElectionFeedsFromBackup(db, String(electionId));
+      if (n > 0) return listElectionFeedSources(electionId);
+    } catch (e) {
+      console.warn("election feed backup restore failed:", e?.message ?? e);
+    }
+  }
   return out;
 }
 
@@ -1275,7 +1981,13 @@ export async function replaceElectionFeedSourcesForElection(electionId, sources)
     ]);
   }
   ins.free();
+  try {
+    writeElectionFeedBackupForElection(eid, sources);
+  } catch (e) {
+    console.warn("election feed backup write failed:", e?.message ?? e);
+  }
   persistDb(db);
+  flushPendingDatabasePersist();
   return listElectionFeedSources(eid);
 }
 
@@ -1427,12 +2139,12 @@ export async function listElectionSourceConfigs() {
   ensureElectionSourceConfigColumns(db);
   const stmt = db.prepare(
     `SELECT election_id AS electionId, label, is_enabled AS isEnabled, auto_refresh_enabled AS autoRefreshEnabled,
-            uses_civix_sos AS usesCivixSos, show_in_catalog AS showInCatalog,
+            uses_civix_sos AS usesCivixSos, show_in_catalog AS showInCatalog, is_default_catalog AS isDefaultCatalog,
             sos_countyinfo_url AS sosCountyInfoUrl, harris_source_url AS harrisSourceUrl, galveston_source_url AS galvestonSourceUrl,
             jefferson_source_url AS jeffersonSourceUrl, montgomery_source_url AS montgomerySourceUrl, chambers_source_url AS chambersSourceUrl,
             updated_at AS updatedAt
      FROM election_source_configs
-     ORDER BY election_id`,
+     ORDER BY is_default_catalog DESC, election_id`,
   );
   const rows = [];
   while (stmt.step()) {
@@ -1444,6 +2156,7 @@ export async function listElectionSourceConfigs() {
       autoRefreshEnabled: !!row.autoRefreshEnabled,
       usesCivixSos: row.usesCivixSos == null ? true : !!row.usesCivixSos,
       showInCatalog: row.showInCatalog == null ? true : !!row.showInCatalog,
+      isDefaultCatalog: !!row.isDefaultCatalog,
       sosCountyInfoUrl: String(row.sosCountyInfoUrl ?? ""),
       harrisSourceUrl: String(row.harrisSourceUrl ?? ""),
       galvestonSourceUrl: String(row.galvestonSourceUrl ?? ""),
@@ -1462,7 +2175,7 @@ export async function getElectionSourceConfig(electionId) {
   ensureElectionSourceConfigColumns(db);
   const stmt = db.prepare(
     `SELECT election_id AS electionId, label, is_enabled AS isEnabled, auto_refresh_enabled AS autoRefreshEnabled,
-            uses_civix_sos AS usesCivixSos, show_in_catalog AS showInCatalog,
+            uses_civix_sos AS usesCivixSos, show_in_catalog AS showInCatalog, is_default_catalog AS isDefaultCatalog,
             sos_countyinfo_url AS sosCountyInfoUrl, harris_source_url AS harrisSourceUrl, galveston_source_url AS galvestonSourceUrl,
             jefferson_source_url AS jeffersonSourceUrl, montgomery_source_url AS montgomerySourceUrl, chambers_source_url AS chambersSourceUrl
      FROM election_source_configs
@@ -1482,6 +2195,7 @@ export async function getElectionSourceConfig(electionId) {
     autoRefreshEnabled: !!row.autoRefreshEnabled,
     usesCivixSos: row.usesCivixSos == null ? true : !!row.usesCivixSos,
     showInCatalog: row.showInCatalog == null ? true : !!row.showInCatalog,
+    isDefaultCatalog: !!row.isDefaultCatalog,
     sosCountyInfoUrl: String(row.sosCountyInfoUrl ?? ""),
     harrisSourceUrl: String(row.harrisSourceUrl ?? ""),
     galvestonSourceUrl: String(row.galvestonSourceUrl ?? ""),
@@ -1546,6 +2260,37 @@ export async function upsertElectionSourceConfig({
     ],
   );
   persistDb(db);
+  const saved = await getElectionSourceConfig(id);
+  try {
+    writeElectionConfigBackup(await listElectionSourceConfigs());
+  } catch (e) {
+    console.warn("election config backup write failed:", e?.message ?? e);
+  }
+  return saved;
+}
+
+/** Mark one election as the default home-page / ingest selection; clears the flag on all others. */
+export async function setDefaultElectionCatalog(electionId) {
+  const db = await ensureDb();
+  ensureElectionSourceConfigColumns(db);
+  const id = String(electionId ?? "").trim();
+  if (!id) throw new Error("electionId is required");
+  const exists = db.prepare(`SELECT 1 FROM election_source_configs WHERE election_id = ? LIMIT 1`);
+  exists.bind([id]);
+  const ok = exists.step();
+  exists.free();
+  if (!ok) throw new Error(`Election ${id} not found`);
+  db.run(`UPDATE election_source_configs SET is_default_catalog = 0`);
+  db.run(`UPDATE election_source_configs SET is_default_catalog = 1, updated_at = datetime('now') WHERE election_id = ?`, [
+    id,
+  ]);
+  persistDb(db);
+  flushPendingDatabasePersist();
+  try {
+    writeElectionConfigBackup(await listElectionSourceConfigs());
+  } catch (e) {
+    console.warn("election config backup write failed:", e?.message ?? e);
+  }
   return getElectionSourceConfig(id);
 }
 
@@ -1665,4 +2410,1064 @@ export async function getSourceImportLogPayload({ recentLimit = 200 } = {}) {
   latestStmt.free();
 
   return { entries, latestBySource };
+}
+
+export async function listEvRosterConfigs() {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const stmt = db.prepare(
+    `SELECT evr_election_id AS evrElectionId, party, election_name AS electionName, election_date AS electionDate,
+            is_enabled AS isEnabled, notes, updated_at AS updatedAt
+     FROM ev_roster_configs ORDER BY party, evr_election_id`,
+  );
+  const rows = [];
+  while (stmt.step()) {
+    const r = stmt.getAsObject();
+    rows.push({
+      evrElectionId: Number(r.evrElectionId),
+      party: String(r.party ?? ""),
+      electionName: String(r.electionName ?? ""),
+      electionDate: String(r.electionDate ?? ""),
+      isEnabled: !!r.isEnabled,
+      notes: r.notes ? String(r.notes) : null,
+      updatedAt: String(r.updatedAt ?? ""),
+    });
+  }
+  stmt.free();
+  return rows;
+}
+
+export async function upsertEvRosterConfig({ evrElectionId, party, electionName, electionDate, isEnabled, notes }) {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  db.run(
+    `INSERT INTO ev_roster_configs (evr_election_id, party, election_name, election_date, is_enabled, notes, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(evr_election_id) DO UPDATE SET
+       party = excluded.party,
+       election_name = excluded.election_name,
+       election_date = excluded.election_date,
+       is_enabled = excluded.is_enabled,
+       notes = excluded.notes,
+       updated_at = datetime('now')`,
+    [
+      Number(evrElectionId),
+      String(party ?? "").slice(0, 16),
+      String(electionName ?? "").slice(0, 512),
+      String(electionDate ?? "").slice(0, 32),
+      isEnabled === false ? 0 : 1,
+      notes != null ? String(notes).slice(0, 2000) : null,
+    ],
+  );
+  persistDb(db);
+  return listEvRosterConfigs();
+}
+
+export async function getConfirmedEvRosterCountyNames(evrElectionId, votingDate) {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const stmt = db.prepare(
+    `SELECT county_name AS countyName FROM ev_roster_county_pull_status
+     WHERE evr_election_id = ? AND voting_date = ? AND confirmed_at IS NOT NULL`,
+  );
+  stmt.bind([Number(evrElectionId), String(votingDate ?? "").trim()]);
+  const names = new Set();
+  while (stmt.step()) names.add(String(stmt.getAsObject().countyName ?? "").toUpperCase());
+  stmt.free();
+  return names;
+}
+
+export async function listEvRosterCountyPullStatuses(evrElectionId, votingDate) {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const stmt = db.prepare(
+    `SELECT county_name AS countyName, county_key AS countyKey, last_pull_ok AS lastPullOk,
+            last_pull_at AS lastPullAt, last_pull_message AS lastPullMessage, voter_count AS voterCount,
+            confirmed_at AS confirmedAt
+     FROM ev_roster_county_pull_status
+     WHERE evr_election_id = ? AND voting_date = ?`,
+  );
+  stmt.bind([Number(evrElectionId), String(votingDate ?? "").trim()]);
+  const rows = [];
+  while (stmt.step()) {
+    const r = stmt.getAsObject();
+    rows.push({
+      countyName: String(r.countyName ?? ""),
+      countyKey: r.countyKey != null ? String(r.countyKey) : null,
+      lastPullOk: r.lastPullOk == null ? null : !!r.lastPullOk,
+      lastPullAt: r.lastPullAt ? String(r.lastPullAt) : null,
+      lastPullMessage: r.lastPullMessage ? String(r.lastPullMessage) : null,
+      voterCount: Number(r.voterCount ?? 0),
+      confirmedAt: r.confirmedAt ? String(r.confirmedAt) : null,
+    });
+  }
+  stmt.free();
+  return rows;
+}
+
+export async function recordEvRosterCountyPullResults(evrElectionId, votingDate, countyPullLog) {
+  const { aggregateCountyPullResults } = await import("./lib/evRosterCountyStatus.mjs");
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const eid = Number(evrElectionId);
+  const vDate = String(votingDate ?? "").trim();
+  const now = new Date().toISOString();
+  const upsert = db.prepare(
+    `INSERT INTO ev_roster_county_pull_status
+      (evr_election_id, voting_date, county_name, county_key, last_pull_ok, last_pull_at, last_pull_message, voter_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(evr_election_id, voting_date, county_name) DO UPDATE SET
+      county_key = COALESCE(excluded.county_key, county_key),
+      last_pull_ok = excluded.last_pull_ok,
+      last_pull_at = excluded.last_pull_at,
+      last_pull_message = excluded.last_pull_message,
+      voter_count = excluded.voter_count`,
+  );
+  for (const row of aggregateCountyPullResults(countyPullLog)) {
+    upsert.run([
+      eid,
+      vDate,
+      row.countyName,
+      row.countyKey || null,
+      row.lastPullOk ? 1 : 0,
+      now,
+      row.messages.join(" | ").slice(0, 4000) || null,
+      Number(row.voterCount ?? 0),
+    ]);
+  }
+  upsert.free();
+  persistDb(db);
+}
+
+export async function confirmEvRosterCountyPull(evrElectionId, votingDate, countyName) {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const eid = Number(evrElectionId);
+  const vDate = String(votingDate ?? "").trim();
+  const name = String(countyName ?? "").toUpperCase();
+  const check = db.prepare(
+    `SELECT last_pull_ok AS lastPullOk FROM ev_roster_county_pull_status
+     WHERE evr_election_id = ? AND voting_date = ? AND county_name = ?`,
+  );
+  check.bind([eid, vDate, name]);
+  if (!check.step()) {
+    check.free();
+    throw new Error(`No county pull recorded for ${name} on this date — pull the county first.`);
+  }
+  if (!check.getAsObject().lastPullOk) {
+    check.free();
+    throw new Error(`Latest pull for ${name} did not succeed — fix sources and pull again before confirming.`);
+  }
+  check.free();
+  db.run(
+    `UPDATE ev_roster_county_pull_status SET confirmed_at = datetime('now')
+     WHERE evr_election_id = ? AND voting_date = ? AND county_name = ?`,
+    [eid, vDate, name],
+  );
+  persistDb(db);
+  return listEvRosterCountyPullStatuses(eid, vDate);
+}
+
+/** Remove all stored pulls, voters, summaries, and per-county pull status (keeps configs & county sources). */
+export async function clearEvRosterPullData() {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const count = (table) => {
+    const stmt = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`);
+    stmt.step();
+    const n = Number(stmt.getAsObject().n ?? 0);
+    stmt.free();
+    return n;
+  };
+  const before = {
+    voters: count("ev_roster_voters"),
+    pulls: count("ev_roster_pulls"),
+  };
+  db.run("DELETE FROM ev_roster_county_pull_log");
+  db.run("DELETE FROM ev_roster_county_summary");
+  db.run("DELETE FROM ev_roster_county_pull_status");
+  db.run("DELETE FROM ev_roster_voters");
+  db.run("DELETE FROM ev_roster_pulls");
+  db.run("DELETE FROM ev_roster_activity_cache");
+  db.run("DELETE FROM ev_roster_registered_cache");
+  persistDb(db);
+  return { cleared: before, remaining: { voters: 0, pulls: 0 } };
+}
+
+export async function saveEvRosterPull(payload, options = {}) {
+  if (options?.merge) return mergeEvRosterPull(payload);
+  const {
+    evrElectionId,
+    votingDate,
+    hubPageUrl,
+    sosTurnoutUrl,
+    sosRosterUrl,
+    statewideVoterCount,
+    rawRecordCount,
+    dedupedVoterCount,
+    ok,
+    message,
+    countySummaries,
+    voters,
+    countyPullLog,
+  } = payload;
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const eid = Number(evrElectionId);
+  const vDate = String(votingDate ?? "").trim();
+  const locked = await getConfirmedEvRosterCountyNames(eid, vDate);
+  const { filterSummariesForLocked, filterVotersForLocked } = await import("./lib/evRosterCountyStatus.mjs");
+  let preservedSummaries = [];
+  if (locked.size) {
+    const existing = await getEvRosterPullPayload(eid, vDate);
+    preservedSummaries = (existing?.counties ?? []).filter((c) =>
+      locked.has(String(c.countyName ?? "").toUpperCase()),
+    );
+  }
+  const summariesToWrite = [
+    ...filterSummariesForLocked(countySummaries, locked),
+    ...preservedSummaries,
+  ];
+  const votersToWrite = filterVotersForLocked(voters, locked);
+  db.run(`DELETE FROM ev_roster_pulls WHERE evr_election_id = ? AND voting_date = ?`, [eid, vDate]);
+  db.run(
+    `INSERT INTO ev_roster_pulls
+      (evr_election_id, voting_date, hub_page_url, sos_turnout_url, sos_roster_url, statewide_voter_count,
+       raw_record_count, deduped_voter_count, ok, message)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      eid,
+      vDate,
+      hubPageUrl ?? null,
+      sosTurnoutUrl ?? null,
+      sosRosterUrl ?? null,
+      Number(statewideVoterCount ?? 0),
+      Number(rawRecordCount ?? 0),
+      Number(dedupedVoterCount ?? 0),
+      ok === false ? 0 : 1,
+      String(message ?? "").slice(0, 4000),
+    ],
+  );
+  const pullId = db.exec(`SELECT last_insert_rowid() AS id`)[0]?.values?.[0]?.[0];
+  const insCounty = db.prepare(
+    `INSERT INTO ev_roster_county_summary
+      (pull_id, county_name, county_id, registered_voters, in_person_votes_on_date, total_in_person_votes_for_election,
+       total_mail_votes_for_election, cumulative_total, sos_voter_count, county_voter_count, chosen_source, chosen_voter_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const c of summariesToWrite) {
+    insCounty.run([
+      pullId,
+      String(c.countyName ?? "").slice(0, 128),
+      c.countyId != null ? Number(c.countyId) : null,
+      Number(c.registeredVoters ?? 0),
+      Number(c.inPersonVotesOnDate ?? 0),
+      Number(c.totalInPersonVotesForElection ?? 0),
+      Number(c.totalMailVotesForElection ?? 0),
+      Number(c.cumulativeTotal ?? 0),
+      Number(c.sosVoterCount ?? 0),
+      Number(c.countyVoterCount ?? 0),
+      String(c.chosenSource ?? "sos").slice(0, 32),
+      Number(c.chosenVoterCount ?? 0),
+    ]);
+  }
+  insCounty.free();
+  if (locked.size) {
+    const placeholders = [...locked].map(() => "?").join(", ");
+    db.run(
+      `DELETE FROM ev_roster_voters WHERE evr_election_id = ? AND COALESCE(reporting_date, voting_date) = ? AND county_name NOT IN (${placeholders})`,
+      [eid, vDate, ...locked],
+    );
+  } else {
+    db.run(
+      `DELETE FROM ev_roster_voters WHERE evr_election_id = ? AND COALESCE(reporting_date, voting_date) = ?`,
+      [eid, vDate],
+    );
+  }
+  const insVoter = db.prepare(
+    `INSERT OR REPLACE INTO ev_roster_voters
+      (evr_election_id, voting_date, reporting_date, county_name, vuid, voter_name, voting_method, method_code, party, precinct, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const v of votersToWrite) {
+    const activityDate = resolveVoterActivityDate(v, vDate);
+    insVoter.run([
+      eid,
+      activityDate,
+      vDate,
+      String(v.countyName ?? v.county ?? "").slice(0, 128),
+      String(v.vuid ?? "").slice(0, 32),
+      v.voterName != null ? String(v.voterName).slice(0, 256) : null,
+      v.votingMethod != null ? String(v.votingMethod).slice(0, 64) : null,
+      v.methodCode != null ? String(v.methodCode).slice(0, 8) : null,
+      v.party != null ? String(v.party).slice(0, 16) : null,
+      v.precinct != null ? String(v.precinct).slice(0, 64) : null,
+      String(v.sourceKey ?? v.source ?? "sos").slice(0, 32),
+    ]);
+  }
+  insVoter.free();
+  const insLog = db.prepare(
+    `INSERT INTO ev_roster_county_pull_log
+      (pull_id, county_key, county_name, handler_key, ok, voter_count, source_url, message)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const log of countyPullLog ?? []) {
+    insLog.run([
+      pullId,
+      String(log.countyKey ?? "").slice(0, 64),
+      String(log.countyName ?? "").slice(0, 128),
+      String(log.handlerKey ?? "").slice(0, 64),
+      log.ok === false ? 0 : 1,
+      Number(log.voterCount ?? 0),
+      log.sourceUrl ?? null,
+      String(log.message ?? "").slice(0, 2000),
+    ]);
+  }
+  insLog.free();
+  await rebuildEvRosterSummaryCache(eid, { db });
+  await rebuildEvRosterSummaryCache(eid, { db });
+  persistDb(db);
+  return getEvRosterPullPayload(eid, vDate);
+}
+
+/**
+ * One row per VUID per runoff election — keep earliest voting_date (then lowest id).
+ * @returns {Promise<{ removed: number, distinctVuids: number }>}
+ */
+export async function dedupeEvRosterVotersKeepOldestDate(evrElectionId) {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const eid = Number(evrElectionId);
+
+  const beforeStmt = db.prepare(`SELECT COUNT(*) AS n FROM ev_roster_voters WHERE evr_election_id = ?`);
+  beforeStmt.bind([eid]);
+  beforeStmt.step();
+  const before = Number(beforeStmt.getAsObject().n ?? 0);
+  beforeStmt.free();
+
+  db.run(
+    `DELETE FROM ev_roster_voters
+     WHERE evr_election_id = ?
+     AND id NOT IN (
+       SELECT id FROM (
+         SELECT id,
+           ROW_NUMBER() OVER (PARTITION BY vuid ORDER BY voting_date ASC, id ASC) AS rn
+         FROM ev_roster_voters
+         WHERE evr_election_id = ?
+       ) ranked WHERE rn = 1
+     )`,
+    [eid, eid],
+  );
+
+  const afterStmt = db.prepare(`SELECT COUNT(*) AS n FROM ev_roster_voters WHERE evr_election_id = ?`);
+  afterStmt.bind([eid]);
+  afterStmt.step();
+  const after = Number(afterStmt.getAsObject().n ?? 0);
+  afterStmt.free();
+
+  const distinctStmt = db.prepare(
+    `SELECT COUNT(DISTINCT vuid) AS n FROM ev_roster_voters WHERE evr_election_id = ?`,
+  );
+  distinctStmt.bind([eid]);
+  distinctStmt.step();
+  const distinctVuids = Number(distinctStmt.getAsObject().n ?? 0);
+  distinctStmt.free();
+
+  db.run(
+    `UPDATE ev_roster_pulls SET deduped_voter_count = (
+       SELECT COUNT(*) FROM ev_roster_voters v
+       WHERE v.evr_election_id = ev_roster_pulls.evr_election_id
+         AND v.voting_date = ev_roster_pulls.voting_date
+     )
+     WHERE evr_election_id = ?`,
+    [eid],
+  );
+
+  await rebuildEvRosterSummaryCache(eid, { db });
+  persistDb(db);
+  return { removed: Math.max(0, before - after), distinctVuids };
+}
+
+/** Merge voters for counties in this pull into an existing voting-date pull (single-county / incremental). */
+export async function mergeEvRosterPull({
+  evrElectionId,
+  votingDate,
+  hubPageUrl,
+  sosTurnoutUrl,
+  sosRosterUrl,
+  statewideVoterCount,
+  rawRecordCount,
+  dedupedVoterCount,
+  ok,
+  message,
+  countySummaries,
+  voters,
+  countyPullLog,
+}) {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const eid = Number(evrElectionId);
+  const vDate = String(votingDate ?? "").trim();
+  const locked = await getConfirmedEvRosterCountyNames(eid, vDate);
+  const { filterSummariesForLocked, filterVotersForLocked } = await import("./lib/evRosterCountyStatus.mjs");
+  const countySummariesWritable = filterSummariesForLocked(countySummaries, locked);
+  const votersWritable = filterVotersForLocked(voters, locked);
+
+  let pullId = null;
+  const findPull = db.prepare(
+    `SELECT id FROM ev_roster_pulls WHERE evr_election_id = ? AND voting_date = ? LIMIT 1`,
+  );
+  findPull.bind([eid, vDate]);
+  if (findPull.step()) pullId = Number(findPull.getAsObject().id);
+  findPull.free();
+
+  if (pullId == null) {
+    db.run(
+      `INSERT INTO ev_roster_pulls
+        (evr_election_id, voting_date, hub_page_url, sos_turnout_url, sos_roster_url, statewide_voter_count,
+         raw_record_count, deduped_voter_count, ok, message)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        eid,
+        vDate,
+        hubPageUrl ?? null,
+        sosTurnoutUrl ?? null,
+        sosRosterUrl ?? null,
+        Number(statewideVoterCount ?? 0),
+        0,
+        0,
+        1,
+        String(message ?? "Merged county pull").slice(0, 4000),
+      ],
+    );
+    pullId = db.exec(`SELECT last_insert_rowid() AS id`)[0]?.values?.[0]?.[0];
+  }
+
+  const voterCountyNames = [
+    ...new Set(
+      (votersWritable ?? []).map((v) => String(v.countyName ?? v.county ?? "").toUpperCase()).filter(Boolean),
+    ),
+  ];
+  for (const name of voterCountyNames) {
+    db.run(
+      `DELETE FROM ev_roster_voters WHERE evr_election_id = ? AND COALESCE(reporting_date, voting_date) = ? AND county_name = ?`,
+      [eid, vDate, name],
+    );
+  }
+
+  const summaryCountyNames = [
+    ...new Set(
+      (countySummariesWritable ?? []).map((c) => String(c.countyName ?? "").toUpperCase()).filter(Boolean),
+    ),
+  ];
+  for (const name of summaryCountyNames) {
+    db.run(`DELETE FROM ev_roster_county_summary WHERE pull_id = ? AND county_name = ?`, [pullId, name]);
+  }
+
+  const insCounty = db.prepare(
+    `INSERT INTO ev_roster_county_summary
+      (pull_id, county_name, county_id, registered_voters, in_person_votes_on_date, total_in_person_votes_for_election,
+       total_mail_votes_for_election, cumulative_total, sos_voter_count, county_voter_count, chosen_source, chosen_voter_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const c of countySummariesWritable) {
+    insCounty.run([
+      pullId,
+      String(c.countyName ?? "").slice(0, 128),
+      c.countyId != null ? Number(c.countyId) : null,
+      Number(c.registeredVoters ?? 0),
+      Number(c.inPersonVotesOnDate ?? 0),
+      Number(c.totalInPersonVotesForElection ?? 0),
+      Number(c.totalMailVotesForElection ?? 0),
+      Number(c.cumulativeTotal ?? 0),
+      Number(c.sosVoterCount ?? 0),
+      Number(c.countyVoterCount ?? 0),
+      String(c.chosenSource ?? "county").slice(0, 32),
+      Number(c.chosenVoterCount ?? 0),
+    ]);
+  }
+  insCounty.free();
+
+  const insVoter = db.prepare(
+    `INSERT OR REPLACE INTO ev_roster_voters
+      (evr_election_id, voting_date, reporting_date, county_name, vuid, voter_name, voting_method, method_code, party, precinct, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const v of votersWritable) {
+    const activityDate = resolveVoterActivityDate(v, vDate);
+    insVoter.run([
+      eid,
+      activityDate,
+      vDate,
+      String(v.countyName ?? v.county ?? "").slice(0, 128),
+      String(v.vuid ?? "").slice(0, 32),
+      v.voterName != null ? String(v.voterName).slice(0, 256) : null,
+      v.votingMethod != null ? String(v.votingMethod).slice(0, 64) : null,
+      v.methodCode != null ? String(v.methodCode).slice(0, 8) : null,
+      v.party != null ? String(v.party).slice(0, 16) : null,
+      v.precinct != null ? String(v.precinct).slice(0, 64) : null,
+      String(v.sourceKey ?? v.source ?? "county").slice(0, 64),
+    ]);
+  }
+  insVoter.free();
+
+  const insLog = db.prepare(
+    `INSERT INTO ev_roster_county_pull_log
+      (pull_id, county_key, county_name, handler_key, ok, voter_count, source_url, message)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const log of countyPullLog ?? []) {
+    insLog.run([
+      pullId,
+      String(log.countyKey ?? "").slice(0, 64),
+      String(log.countyName ?? "").slice(0, 128),
+      String(log.handlerKey ?? "").slice(0, 64),
+      log.ok === false ? 0 : 1,
+      Number(log.voterCount ?? 0),
+      log.sourceUrl ?? null,
+      String(log.message ?? "").slice(0, 2000),
+    ]);
+  }
+  insLog.free();
+
+  const countStmt = db.prepare(
+    `SELECT COUNT(*) AS n FROM ev_roster_voters WHERE evr_election_id = ? AND voting_date = ?`,
+  );
+  countStmt.bind([eid, vDate]);
+  countStmt.step();
+  const totalVoters = Number(countStmt.getAsObject().n ?? 0);
+  countStmt.free();
+
+  await dedupeEvRosterVotersKeepOldestDate(eid);
+
+  const countAfterDedup = db.prepare(
+    `SELECT COUNT(*) AS n FROM ev_roster_voters WHERE evr_election_id = ? AND voting_date = ?`,
+  );
+  countAfterDedup.bind([eid, vDate]);
+  countAfterDedup.step();
+  const totalVotersAfterDedup = Number(countAfterDedup.getAsObject().n ?? 0);
+  countAfterDedup.free();
+
+  db.run(
+    `UPDATE ev_roster_pulls SET
+      raw_record_count = COALESCE(raw_record_count, 0) + ?,
+      deduped_voter_count = ?,
+      message = ?,
+      pulled_at = datetime('now'),
+      ok = ?
+     WHERE id = ?`,
+    [
+      Number(rawRecordCount ?? 0),
+      totalVotersAfterDedup,
+      String(message ?? "").slice(0, 4000),
+      ok === false ? 0 : 1,
+      pullId,
+    ],
+  );
+  await rebuildEvRosterSummaryCache(eid, { db });
+  persistDb(db);
+  return getEvRosterPullPayload(eid, vDate);
+}
+
+export async function rebuildEvRosterSummaryCacheForElection(evrElectionId) {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  return rebuildEvRosterSummaryCache(Number(evrElectionId), { db });
+}
+
+export async function listEvRosterVoters(evrElectionId, votingDate, options = {}) {
+  const { normalizeVoterCountyFilter } = await import("./lib/evRosterVoters.mjs");
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const eid = Number(evrElectionId);
+  const vDate = String(votingDate ?? "").trim();
+  const limit = Math.min(Math.max(Number(options.limit) || 500, 1), 5000);
+  const offset = Math.max(Number(options.offset) || 0, 0);
+  const countyList = normalizeVoterCountyFilter(options.counties, options.county);
+  const q = options.q ? String(options.q).trim() : "";
+
+  let where = `WHERE evr_election_id = ? AND voting_date = ?`;
+  const params = [eid, vDate];
+  if (countyList.length) {
+    where += ` AND county_name IN (${countyList.map(() => "?").join(", ")})`;
+    params.push(...countyList);
+  }
+  if (q) {
+    where += ` AND (vuid LIKE ? OR county_name LIKE ? OR party LIKE ?)`;
+    const like = `%${q}%`;
+    params.push(like, like, like);
+  }
+
+  const countStmt = db.prepare(`SELECT COUNT(*) AS n FROM ev_roster_voters ${where}`);
+  countStmt.bind(params);
+  countStmt.step();
+  const total = Number(countStmt.getAsObject().n ?? 0);
+  countStmt.free();
+
+  const stmt = db.prepare(
+    `SELECT vuid, party, voting_date AS votingDate, county_name AS countyName,
+            COALESCE(method_code, 'EV') AS methodCode
+     FROM ev_roster_voters ${where}
+     ORDER BY county_name, vuid
+     LIMIT ? OFFSET ?`,
+  );
+  stmt.bind([...params, limit, offset]);
+  const rows = [];
+  while (stmt.step()) {
+    const r = stmt.getAsObject();
+    rows.push({
+      vuid: String(r.vuid ?? ""),
+      party: String(r.party ?? ""),
+      votingDate: String(r.votingDate ?? ""),
+      countyName: String(r.countyName ?? ""),
+      methodCode: String(r.methodCode ?? "EV"),
+    });
+  }
+  stmt.free();
+  return { total, limit, offset, rows };
+}
+
+export async function listEvRosterPullDates(evrElectionId) {
+  return listEvRosterPullDatesForElections([Number(evrElectionId)]);
+}
+
+export async function listEvRosterPullDatesForElections(evrElectionIds) {
+  const ids = [...new Set((evrElectionIds ?? []).map(Number).filter(Boolean))];
+  if (!ids.length) return [];
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const placeholders = ids.map(() => "?").join(", ");
+  const stmt = db.prepare(
+    `SELECT voting_date AS votingDate, MAX(pulled_at) AS pulledAt,
+            SUM(statewide_voter_count) AS statewideVoterCount, MIN(ok) AS okMin, MAX(message) AS message
+     FROM ev_roster_pulls WHERE evr_election_id IN (${placeholders})
+     GROUP BY voting_date ORDER BY voting_date DESC`,
+  );
+  stmt.bind(ids);
+  const rows = [];
+  while (stmt.step()) {
+    const r = stmt.getAsObject();
+    rows.push({
+      votingDate: String(r.votingDate ?? ""),
+      pulledAt: String(r.pulledAt ?? ""),
+      statewideVoterCount: Number(r.statewideVoterCount ?? 0),
+      ok: r.okMin == null ? true : !!r.okMin,
+      message: String(r.message ?? ""),
+    });
+  }
+  stmt.free();
+  return rows;
+}
+
+/** Distinct activity dates on stored voter rows (county summary date filter). */
+export async function listEvRosterVoterDatesForElections(evrElectionIds) {
+  const ids = [...new Set((evrElectionIds ?? []).map(Number).filter(Boolean))];
+  if (!ids.length) return [];
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const placeholders = ids.map(() => "?").join(", ");
+  const stmt = db.prepare(
+    `SELECT voting_date AS votingDate, COUNT(DISTINCT vuid) AS voterCount
+     FROM ev_roster_voters WHERE evr_election_id IN (${placeholders})
+     GROUP BY voting_date ORDER BY voting_date DESC`,
+  );
+  stmt.bind(ids);
+  const rows = [];
+  while (stmt.step()) {
+    const r = stmt.getAsObject();
+    rows.push({
+      votingDate: String(r.votingDate ?? ""),
+      pulledAt: "",
+      statewideVoterCount: Number(r.voterCount ?? 0),
+      ok: true,
+      message: "",
+    });
+  }
+  stmt.free();
+  return rows;
+}
+
+export async function getEvRosterAggregatedSummary(evrElectionIds, dateFrom, dateTo) {
+  const { countiesFromVoterActivityInRange, computeSummaryTotals } = await import(
+    "./lib/evRosterAggregateSummary.mjs"
+  );
+  const ids = [...new Set((evrElectionIds ?? []).map(Number).filter(Boolean))];
+  const from = String(dateFrom ?? "").trim();
+  const to = String(dateTo ?? "").trim();
+  if (!ids.length || !from || !to) {
+    return { pull: null, counties: [], dateFrom: from, dateTo: to, countyPullLog: [] };
+  }
+
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+
+  const {
+    rosterByCounty,
+    methodByCounty,
+    evInPersonDayByCounty,
+    registeredByCounty,
+    statewideDistinct,
+    storedVoterCount,
+  } = await loadSummaryRollupsFromCache(ids, from, to, { db });
+
+  const ph = ids.map(() => "?").join(", ");
+  const statusStmt = db.prepare(
+    `SELECT county_name AS countyName, county_key AS countyKey, voting_date AS votingDate,
+            last_pull_ok AS lastPullOk, last_pull_at AS lastPullAt, last_pull_message AS lastPullMessage,
+            voter_count AS voterCount, confirmed_at AS confirmedAt
+     FROM ev_roster_county_pull_status
+     WHERE evr_election_id IN (${ph})`,
+  );
+  statusStmt.bind(ids);
+  /** @type {Map<string, object>} */
+  const statusByCounty = new Map();
+  while (statusStmt.step()) {
+    const s = statusStmt.getAsObject();
+    const county = String(s.countyName ?? "").toUpperCase();
+    const vDate = String(s.votingDate ?? "");
+    const prev = statusByCounty.get(county);
+    if (!prev || vDate >= String(prev.votingDate ?? "")) {
+      statusByCounty.set(county, {
+        votingDate: vDate,
+        lastPullOk: s.lastPullOk == null ? null : !!s.lastPullOk,
+        lastPullAt: s.lastPullAt ? String(s.lastPullAt) : null,
+        lastPullMessage: s.lastPullMessage ? String(s.lastPullMessage) : null,
+        voterCount: Number(s.voterCount ?? 0),
+        confirmedAt: s.confirmedAt ? String(s.confirmedAt) : null,
+      });
+    }
+  }
+  statusStmt.free();
+
+  const counties = countiesFromVoterActivityInRange({
+    rosterByCounty,
+    methodByCounty,
+    evInPersonDayByCounty,
+    registeredByCounty,
+    statusByCounty,
+  });
+
+  const summaryTotals = computeSummaryTotals(
+    { registeredByCounty, evInPersonDayByCounty },
+    0,
+    statewideDistinct,
+  );
+  summaryTotals.cumulativeTotal = storedVoterCount || summaryTotals.cumulativeTotal;
+  summaryTotals.chosenVoterCount = storedVoterCount;
+
+  const pullStmt = db.prepare(
+    `SELECT MAX(pulled_at) AS pulledAt, MIN(ok) AS okMin FROM ev_roster_pulls WHERE evr_election_id IN (${ph})`,
+  );
+  pullStmt.bind(ids);
+  pullStmt.step();
+  const pullAgg = pullStmt.getAsObject();
+  pullStmt.free();
+
+  return {
+    dateFrom: from,
+    dateTo: to,
+    pull: {
+      evrElectionIds: ids,
+      votingDate: `${from}..${to}`,
+      pulledAt: String(pullAgg.pulledAt ?? ""),
+      ok: pullAgg.okMin == null ? true : !!pullAgg.okMin,
+      storedVoterCount,
+      dedupedVoterCount: storedVoterCount,
+      message: `Voter activity ${from} through ${to}`,
+    },
+    counties,
+    countyPullLog: [],
+    summaryTotals,
+  };
+}
+
+export async function getEvRosterPullPayload(evrElectionId, votingDate) {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const eid = Number(evrElectionId);
+  const vDate = String(votingDate ?? "").trim();
+  const pullStmt = db.prepare(
+    `SELECT id, evr_election_id AS evrElectionId, voting_date AS votingDate, hub_page_url AS hubPageUrl,
+            sos_turnout_url AS sosTurnoutUrl, sos_roster_url AS sosRosterUrl, statewide_voter_count AS statewideVoterCount,
+            raw_record_count AS rawRecordCount, deduped_voter_count AS dedupedVoterCount,
+            pulled_at AS pulledAt, ok, message
+     FROM ev_roster_pulls WHERE evr_election_id = ? AND voting_date = ? LIMIT 1`,
+  );
+  pullStmt.bind([eid, vDate]);
+  if (!pullStmt.step()) {
+    pullStmt.free();
+    return null;
+  }
+  const pull = pullStmt.getAsObject();
+  pullStmt.free();
+  const pullId = Number(pull.id);
+  const countyStmt = db.prepare(
+    `SELECT county_name AS countyName, county_id AS countyId, registered_voters AS registeredVoters,
+            in_person_votes_on_date AS inPersonVotesOnDate, total_in_person_votes_for_election AS totalInPersonVotesForElection,
+            total_mail_votes_for_election AS totalMailVotesForElection, cumulative_total AS cumulativeTotal,
+            sos_voter_count AS sosVoterCount, county_voter_count AS countyVoterCount,
+            chosen_source AS chosenSource, chosen_voter_count AS chosenVoterCount
+     FROM ev_roster_county_summary WHERE pull_id = ? ORDER BY county_name`,
+  );
+  countyStmt.bind([pullId]);
+  const pullStatuses = await listEvRosterCountyPullStatuses(eid, vDate);
+  const statusByCounty = new Map(pullStatuses.map((s) => [String(s.countyName).toUpperCase(), s]));
+  const counties = [];
+  while (countyStmt.step()) {
+    const r = countyStmt.getAsObject();
+    const countyName = String(r.countyName ?? "");
+    const st = statusByCounty.get(countyName.toUpperCase());
+    counties.push({
+      countyName,
+      countyId: r.countyId != null ? Number(r.countyId) : null,
+      registeredVoters: Number(r.registeredVoters ?? 0),
+      inPersonVotesOnDate: Number(r.inPersonVotesOnDate ?? 0),
+      totalInPersonVotesForElection: Number(r.totalInPersonVotesForElection ?? 0),
+      totalMailVotesForElection: Number(r.totalMailVotesForElection ?? 0),
+      cumulativeTotal: Number(r.cumulativeTotal ?? 0),
+      sosVoterCount: Number(r.sosVoterCount ?? 0),
+      countyVoterCount: Number(r.countyVoterCount ?? 0),
+      chosenSource: String(r.chosenSource ?? "sos"),
+      chosenVoterCount: Number(r.chosenVoterCount ?? 0),
+      pullStatus: st
+        ? {
+            lastPullOk: st.lastPullOk,
+            lastPullAt: st.lastPullAt,
+            lastPullMessage: st.lastPullMessage,
+            voterCount: st.voterCount,
+            confirmedAt: st.confirmedAt,
+          }
+        : null,
+    });
+  }
+  countyStmt.free();
+  const countStmt = db.prepare(
+    `SELECT COUNT(*) AS n FROM ev_roster_voters WHERE evr_election_id = ? AND voting_date = ?`,
+  );
+  countStmt.bind([eid, vDate]);
+  countStmt.step();
+  const storedVoterCount = Number(countStmt.getAsObject().n ?? 0);
+  countStmt.free();
+  return {
+    pull: {
+      evrElectionId: eid,
+      votingDate: String(pull.votingDate ?? ""),
+      hubPageUrl: pull.hubPageUrl ? String(pull.hubPageUrl) : null,
+      sosTurnoutUrl: pull.sosTurnoutUrl ? String(pull.sosTurnoutUrl) : null,
+      sosRosterUrl: pull.sosRosterUrl ? String(pull.sosRosterUrl) : null,
+      statewideVoterCount: Number(pull.statewideVoterCount ?? 0),
+      rawRecordCount: Number(pull.rawRecordCount ?? 0),
+      dedupedVoterCount: Number(pull.dedupedVoterCount ?? 0),
+      pulledAt: String(pull.pulledAt ?? ""),
+      ok: !!pull.ok,
+      message: String(pull.message ?? ""),
+      storedVoterCount,
+    },
+    counties,
+    countyPullLog: await getEvRosterCountyPullLog(eid, vDate),
+  };
+}
+
+export async function listEvRosterCountySources(evrElectionId) {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const stmt = db.prepare(
+    `SELECT id, evr_election_id AS evrElectionId, county_key AS countyKey, variant_key AS variantKey,
+            source_label AS sourceLabel, civix_county_name AS civixCountyName, civix_county_id AS civixCountyId,
+            handler_key AS handlerKey, hub_page_url AS hubPageUrl, roster_url AS rosterUrl,
+            voting_method_scope AS votingMethodScope, date_scope AS dateScope, file_format AS fileFormat,
+            roster_party_scope AS rosterPartyScope,
+            discovery_profile_key AS discoveryProfileKey, training_notes AS trainingNotes,
+            is_enabled AS isEnabled, last_pull_ok AS lastPullOk, last_pull_message AS lastPullMessage, last_pull_at AS lastPullAt
+     FROM ev_roster_county_sources WHERE evr_election_id = ? ORDER BY civix_county_name, variant_key`,
+  );
+  stmt.bind([Number(evrElectionId)]);
+  const rows = [];
+  while (stmt.step()) {
+    const r = stmt.getAsObject();
+    rows.push({
+      id: Number(r.id),
+      evrElectionId: Number(r.evrElectionId),
+      countyKey: String(r.countyKey ?? ""),
+      variantKey: String(r.variantKey ?? "sos-default"),
+      sourceLabel: String(r.sourceLabel ?? ""),
+      civixCountyName: String(r.civixCountyName ?? ""),
+      civixCountyId: r.civixCountyId != null ? Number(r.civixCountyId) : null,
+      handlerKey: String(r.handlerKey ?? "civix_sos_county_slice"),
+      hubPageUrl: String(r.hubPageUrl ?? ""),
+      rosterUrl: String(r.rosterUrl ?? ""),
+      votingMethodScope: String(r.votingMethodScope ?? "ALL"),
+      dateScope: String(r.dateScope ?? "SINGLE_DAY"),
+      fileFormat: String(r.fileFormat ?? "auto"),
+      rosterPartyScope: String(r.rosterPartyScope ?? "COMBINED"),
+      discoveryProfileKey: r.discoveryProfileKey ? String(r.discoveryProfileKey) : null,
+      trainingNotes: r.trainingNotes ? String(r.trainingNotes) : null,
+      isEnabled: !!r.isEnabled,
+      lastPullOk: r.lastPullOk == null ? null : !!r.lastPullOk,
+      lastPullMessage: r.lastPullMessage ? String(r.lastPullMessage) : null,
+      lastPullAt: r.lastPullAt ? String(r.lastPullAt) : null,
+    });
+  }
+  stmt.free();
+  return rows;
+}
+
+export async function upsertEvRosterCountySource(row) {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const variantKey = String(row.variantKey ?? "custom").slice(0, 64);
+  const params = [
+    Number(row.evrElectionId),
+    String(row.countyKey ?? "").slice(0, 64),
+    variantKey,
+    String(row.sourceLabel ?? "").slice(0, 256),
+    String(row.civixCountyName ?? "").slice(0, 128),
+    row.civixCountyId != null ? Number(row.civixCountyId) : null,
+    String(row.handlerKey ?? "generic_file_url").slice(0, 64),
+    String(row.hubPageUrl ?? "").slice(0, 2048),
+    String(row.rosterUrl ?? "").slice(0, 2048),
+    String(row.votingMethodScope ?? "ALL").slice(0, 16),
+    String(row.dateScope ?? "SINGLE_DAY").slice(0, 32),
+    String(row.fileFormat ?? "auto").slice(0, 16),
+    String(row.rosterPartyScope ?? "COMBINED").slice(0, 16),
+    row.discoveryProfileKey != null ? String(row.discoveryProfileKey).slice(0, 64) : null,
+    row.trainingNotes != null ? String(row.trainingNotes).slice(0, 4000) : null,
+    row.isEnabled === false ? 0 : 1,
+  ];
+  if (row.id != null) {
+    db.run(
+      `UPDATE ev_roster_county_sources SET
+        source_label = ?, civix_county_name = ?, civix_county_id = COALESCE(?, civix_county_id),
+        handler_key = ?, hub_page_url = ?, roster_url = ?,
+        voting_method_scope = ?, date_scope = ?, file_format = ?, roster_party_scope = ?,
+        discovery_profile_key = ?, training_notes = ?, is_enabled = ?, updated_at = datetime('now')
+       WHERE id = ?`,
+      [
+        params[3],
+        params[4],
+        params[5],
+        params[6],
+        params[7],
+        params[8],
+        params[9],
+        params[10],
+        params[11],
+        params[12],
+        params[13],
+        params[14],
+        params[15],
+        Number(row.id),
+      ],
+    );
+  } else {
+    db.run(
+      `INSERT INTO ev_roster_county_sources
+        (evr_election_id, county_key, variant_key, source_label, civix_county_name, civix_county_id, handler_key,
+         hub_page_url, roster_url, voting_method_scope, date_scope, file_format, roster_party_scope,
+         discovery_profile_key, training_notes, is_enabled, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(evr_election_id, county_key, variant_key) DO UPDATE SET
+         source_label = excluded.source_label,
+         civix_county_name = excluded.civix_county_name,
+         civix_county_id = COALESCE(excluded.civix_county_id, civix_county_id),
+         handler_key = excluded.handler_key,
+         hub_page_url = excluded.hub_page_url,
+         roster_url = excluded.roster_url,
+         voting_method_scope = excluded.voting_method_scope,
+         date_scope = excluded.date_scope,
+         file_format = excluded.file_format,
+         roster_party_scope = excluded.roster_party_scope,
+         discovery_profile_key = excluded.discovery_profile_key,
+         training_notes = excluded.training_notes,
+         is_enabled = excluded.is_enabled,
+         updated_at = datetime('now')`,
+      params,
+    );
+  }
+  persistDb(db);
+}
+
+export async function syncEvRosterCountySourcesFromTurnout(evrElectionId, counties) {
+  const { civixCountyNameToKey } = await import("./lib/texasCountyKeys.mjs");
+  for (const c of counties ?? []) {
+    const name = String(c.name ?? c.countyName ?? "").toUpperCase();
+    if (!name || name === "TOTAL") continue;
+    const countyKey = civixCountyNameToKey(name);
+    await upsertEvRosterCountySource({
+      evrElectionId,
+      countyKey,
+      variantKey: "sos-default",
+      sourceLabel: "SOS default",
+      civixCountyName: name,
+      civixCountyId: c.id ?? c.countyId ?? null,
+      handlerKey: "civix_sos_county_slice",
+      hubPageUrl: "",
+      rosterUrl: "",
+      votingMethodScope: "ALL",
+      dateScope: "SINGLE_DAY",
+      fileFormat: "auto",
+      isEnabled: true,
+    });
+  }
+  return listEvRosterCountySources(evrElectionId);
+}
+
+export async function getEvRosterExportRows(evrElectionId, votingDate) {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const stmt = db.prepare(
+    `SELECT vuid, party, voting_date AS votingDate, county_name AS countyName,
+            COALESCE(method_code, 'EV') AS methodCode
+     FROM ev_roster_voters WHERE evr_election_id = ? AND voting_date = ? ORDER BY county_name, vuid`,
+  );
+  stmt.bind([Number(evrElectionId), String(votingDate ?? "").trim()]);
+  const rows = [];
+  while (stmt.step()) {
+    const r = stmt.getAsObject();
+    rows.push({
+      vuid: String(r.vuid ?? ""),
+      party: String(r.party ?? ""),
+      votingDate: String(r.votingDate ?? ""),
+      countyName: String(r.countyName ?? ""),
+      methodCode: String(r.methodCode ?? "EV"),
+    });
+  }
+  stmt.free();
+  return rows;
+}
+
+export async function getEvRosterCountyPullLog(evrElectionId, votingDate) {
+  const db = await ensureDb();
+  ensureEvRosterSchema(db);
+  const pullStmt = db.prepare(
+    `SELECT id FROM ev_roster_pulls WHERE evr_election_id = ? AND voting_date = ? LIMIT 1`,
+  );
+  pullStmt.bind([Number(evrElectionId), String(votingDate ?? "").trim()]);
+  if (!pullStmt.step()) {
+    pullStmt.free();
+    return [];
+  }
+  const pullId = Number(pullStmt.getAsObject().id);
+  pullStmt.free();
+  const stmt = db.prepare(
+    `SELECT county_key AS countyKey, county_name AS countyName, handler_key AS handlerKey, ok,
+            voter_count AS voterCount, source_url AS sourceUrl, message
+     FROM ev_roster_county_pull_log WHERE pull_id = ? ORDER BY county_name`,
+  );
+  stmt.bind([pullId]);
+  const rows = [];
+  while (stmt.step()) {
+    const r = stmt.getAsObject();
+    rows.push({
+      countyKey: String(r.countyKey ?? ""),
+      countyName: String(r.countyName ?? ""),
+      handlerKey: String(r.handlerKey ?? ""),
+      ok: !!r.ok,
+      voterCount: Number(r.voterCount ?? 0),
+      sourceUrl: r.sourceUrl ? String(r.sourceUrl) : null,
+      message: String(r.message ?? ""),
+    });
+  }
+  stmt.free();
+  return rows;
 }

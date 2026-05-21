@@ -1,10 +1,17 @@
 import dns from "node:dns";
 import { createApiApp } from "./createApiApp.mjs";
+import { ensureDb, getDbInfo } from "./db.mjs";
 
 /** Prefer A records — avoids broken IPv6 routes that make Node fetch fail while browsers work (Windows). */
 dns.setDefaultResultOrder("ipv4first");
 
 const PORT = Number(process.env.PORT || 3847);
+
+const t0 = Date.now();
+console.log("Loading database…");
+await ensureDb();
+console.log(`Database ready in ${((Date.now() - t0) / 1000).toFixed(1)}s`, getDbInfo());
+
 const app = createApiApp();
 
 app.listen(PORT, () => {

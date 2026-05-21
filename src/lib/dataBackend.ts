@@ -11,18 +11,45 @@ export interface ElectionOption {
 }
 
 export async function probeBackend(): Promise<boolean> {
-  try {
-    const r = await fetch("/api/health", { cache: "no-store" });
-    return r.ok;
-  } catch {
-    return false;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 12_000);
+      const r = await fetch("/api/health", { cache: "no-store", signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!r.ok) {
+        await sleep(1500);
+        continue;
+      }
+      try {
+        const body = (await r.json()) as { databaseReady?: boolean };
+        if (body.databaseReady !== false) return true;
+      } catch {
+        return true;
+      }
+    } catch {
+      /* retry */
+    }
+    await sleep(1500);
   }
+  return false;
 }
 
-export async function fetchCatalogFromBackend(): Promise<ElectionOption[]> {
-  const r = await fetch("/api/catalog", { cache: "no-store" });
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function fetchCatalogFromBackend(): Promise<{
+  options: ElectionOption[];
+  defaultCatalogId: string | null;
+}> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60_000);
+  const r = await fetch("/api/catalog", { cache: "no-store", signal: ctrl.signal });
+  clearTimeout(timer);
   if (!r.ok) throw new Error(`Catalog HTTP ${r.status}`);
   const j = (await r.json()) as {
+    defaultCatalogId?: string | null;
     entries: Array<{
       catalogId: string;
       catalogLabel: string;
@@ -30,12 +57,23 @@ export async function fetchCatalogFromBackend(): Promise<ElectionOption[]> {
       civixElectionId?: number;
     }>;
   };
-  return j.entries.map((e) => ({
-    catalogId: e.catalogId,
-    catalogLabel: e.catalogLabel,
-    provider: e.provider,
-    civixElectionId: e.civixElectionId,
-  }));
+  return {
+    defaultCatalogId: j.defaultCatalogId ?? null,
+    options: j.entries.map((e) => ({
+      catalogId: e.catalogId,
+      catalogLabel: e.catalogLabel,
+      provider: e.provider,
+      civixElectionId: e.civixElectionId,
+    })),
+  };
+}
+
+export async function setDefaultElectionCatalog(electionId: string): Promise<ElectionSourceConfig> {
+  const r = await fetch(`/api/election-source-configs/${encodeURIComponent(electionId)}/set-default`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json() as Promise<ElectionSourceConfig>;
 }
 
 export function civixListToOptions(items: CivixElectionListItem[]): ElectionOption[] {
@@ -126,6 +164,8 @@ export interface ElectionSourceConfig {
   usesCivixSos: boolean;
   /** When false, election is hidden from the main page dropdown (Settings → Elections). Default true when omitted. */
   showInCatalog?: boolean;
+  /** When true, this election is pre-selected on the home page and in Settings ingest controls. */
+  isDefaultCatalog?: boolean;
   sosCountyInfoUrl: string;
   harrisSourceUrl: string;
   galvestonSourceUrl: string;
@@ -270,14 +310,24 @@ export async function saveElectionFeedSources(
       "countyKey" | "vendorId" | "sourceUrl" | "hubPageUrl" | "isEnabled" | "civixCountyName" | "preferOverSos"
     >
   >,
-): Promise<{ sources: ElectionFeedSourceRow[] }> {
+): Promise<{ sources: ElectionFeedSourceRow[]; persistedToDisk?: boolean; warning?: string }> {
   const r = await fetch(`/api/election-feed-sources/${encodeURIComponent(electionId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sources }),
   });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json() as Promise<{ sources: ElectionFeedSourceRow[] }>;
+  const j = (await r.json().catch(() => ({}))) as {
+    sources?: ElectionFeedSourceRow[];
+    error?: string;
+    warning?: string;
+    persistedToDisk?: boolean;
+  };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return {
+    sources: j.sources ?? [],
+    persistedToDisk: j.persistedToDisk,
+    warning: j.warning,
+  };
 }
 
 export interface DiscoverCountyFeedUrlResult {
@@ -289,6 +339,134 @@ export interface DiscoverCountyFeedUrlResult {
 }
 
 /** Match preferred results links on a county election hub page (server fetch or optional pasted HTML for WAF-blocked sites). */
+export type CountyVoteSource = "sos" | "county_feed" | "manual";
+
+export interface CountyRaceMappingPayload {
+  electionId?: string;
+  sosRaces: Array<{
+    id: string;
+    name: string;
+    candidateCount: number;
+    candidates: Array<{ id: string; name: string; party: string }>;
+  }>;
+  links: Array<{
+    countyKey: string;
+    countyContestName: string;
+    sosRaceId: string;
+    sosRaceName: string;
+    linkType: string;
+    updatedAt: string;
+  }>;
+  manualVotes: Array<{
+    countyKey: string;
+    sosRaceId: string;
+    sosCandidateId: string;
+    choiceName: string;
+    partyName: string;
+    earlyVotes: number;
+    electionDayVotes: number;
+    totalVotes: number;
+    updatedAt: string;
+  }>;
+  voteSources: Array<{
+    countyKey: string;
+    sosRaceId: string;
+    voteSource: CountyVoteSource;
+    updatedAt: string;
+  }>;
+  unlinked: Array<{
+    countyKey: string;
+    civixCountyName: string;
+    contestName: string;
+    choiceName: string;
+    partyName: string;
+    earlyVotes: number;
+    electionDayVotes: number;
+    totalVotes: number;
+    percentOfVotes: string;
+    suggestedSosRaceId: string;
+    suggestedSosRaceName: string;
+    suggestedScore: number;
+  }>;
+  linkedCountyRows: unknown[];
+  note?: string;
+}
+
+export async function fetchCountyRaceMapping(electionId: string): Promise<CountyRaceMappingPayload> {
+  const r = await fetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping`, { cache: "no-store" });
+  const j = (await r.json().catch(() => ({}))) as CountyRaceMappingPayload & { error?: string };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+
+export async function saveCountyRaceLink(
+  electionId: string,
+  link: {
+    countyKey: string;
+    countyContestName: string;
+    sosRaceId: string;
+    sosRaceName: string;
+    linkType?: string;
+  },
+): Promise<void> {
+  const r = await fetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/link`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ link }),
+  });
+  const j = (await r.json().catch(() => ({}))) as { error?: string };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+}
+
+export async function deleteCountyRaceLink(
+  electionId: string,
+  countyKey: string,
+  countyContestName: string,
+): Promise<void> {
+  const r = await fetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/link`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ countyKey, countyContestName }),
+  });
+  const j = (await r.json().catch(() => ({}))) as { error?: string };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+}
+
+export async function saveCountyRaceManualVote(
+  electionId: string,
+  row: {
+    countyKey: string;
+    sosRaceId: string;
+    sosCandidateId: string;
+    choiceName: string;
+    partyName: string;
+    earlyVotes: number;
+    electionDayVotes: number;
+    totalVotes: number;
+  },
+): Promise<void> {
+  const r = await fetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/manual-vote`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ row }),
+  });
+  const j = (await r.json().catch(() => ({}))) as { error?: string };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+}
+
+export async function saveCountyRaceVoteSource(
+  electionId: string,
+  row: { countyKey: string; sosRaceId: string; voteSource: CountyVoteSource },
+): Promise<void> {
+  const r = await fetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/vote-source`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ row }),
+  });
+  const j = (await r.json().catch(() => ({}))) as { error?: string };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+}
+
 export async function discoverCountyFeedUrl(body: {
   hubUrl: string;
   countyKey: string;
@@ -322,12 +500,23 @@ export async function createElectionSourceConfig(body: {
   return r.json() as Promise<ElectionSourceConfig>;
 }
 
+export interface IngestProgress {
+  electionId?: string;
+  phase?: string;
+  detail?: string;
+  step?: number;
+  totalSteps?: number;
+  countyKey?: string;
+  updatedAt?: number;
+}
+
 export interface IngestStatus {
   autoRefreshEnabled: boolean;
   autoRefreshIntervalSec: number;
   lastRunEndTime: number | null;
   nextRunAt: number | null;
   running: boolean;
+  progress: IngestProgress | null;
   lastResult: unknown;
 }
 
@@ -335,6 +524,24 @@ export async function fetchIngestStatus(): Promise<IngestStatus> {
   const r = await fetch("/api/ingest/status", { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json() as Promise<IngestStatus>;
+}
+
+/** Poll ingest status while a refresh is running (e.g. during force one-time update). */
+export function startIngestStatusPoll(onStatus: (status: IngestStatus) => void, intervalMs = 400): () => void {
+  let alive = true;
+  const tick = async () => {
+    if (!alive) return;
+    try {
+      onStatus(await fetchIngestStatus());
+    } catch {
+      /* ignore transient poll errors */
+    }
+    if (alive) window.setTimeout(tick, intervalMs);
+  };
+  void tick();
+  return () => {
+    alive = false;
+  };
 }
 
 export interface ImportLogEntry {

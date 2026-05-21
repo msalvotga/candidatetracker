@@ -12,9 +12,23 @@ function electionApiDevPlugin() {
       const { createApiApp } = await import("./server/createApiApp.mjs");
       const api = createApiApp();
       server.middlewares.use((req, res, next) => {
-        const url = req.url ?? "";
-        if (url === "/api" || url.startsWith("/api/")) {
-          void api(req, res, next);
+        const pathname = (req.url ?? "").split("?")[0] ?? "";
+        if (pathname === "/api" || pathname.startsWith("/api/")) {
+          api(req, res, (err: unknown) => {
+            if (err) {
+              if (!res.headersSent) {
+                res.statusCode = 500;
+                res.setHeader("Content-Type", "application/json; charset=utf-8");
+                res.end(JSON.stringify({ error: String((err as Error)?.message ?? err) }));
+              }
+              return;
+            }
+            if (!res.headersSent) {
+              res.statusCode = 404;
+              res.setHeader("Content-Type", "application/json; charset=utf-8");
+              res.end(JSON.stringify({ error: `No API route for ${pathname}` }));
+            }
+          });
           return;
         }
         next();
@@ -23,15 +37,27 @@ function electionApiDevPlugin() {
   };
 }
 
-export default defineConfig({
-  plugins: [react(), electionApiDevPlugin()],
-  server: {
-    proxy: {
-      "/api-ivis-system": {
-        target: "https://goelect.txelections.civixapps.com",
-        changeOrigin: true,
-        secure: true,
+/** `vite --mode proxy` (used by dev:all): one API on :3847 — avoid a second in-process DB. */
+export default defineConfig(({ mode }) => {
+  const proxyApiToServer = mode === "proxy";
+  return {
+    plugins: [react(), ...(proxyApiToServer ? [] : [electionApiDevPlugin()])],
+    server: {
+      proxy: {
+        ...(proxyApiToServer
+          ? {
+              "/api": {
+                target: "http://127.0.0.1:3847",
+                changeOrigin: true,
+              },
+            }
+          : {}),
+        "/api-ivis-system": {
+          target: "https://goelect.txelections.civixapps.com",
+          changeOrigin: true,
+          secure: true,
+        },
       },
     },
-  },
+  };
 });
