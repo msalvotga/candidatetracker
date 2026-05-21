@@ -51,6 +51,45 @@ function bindParams(text, params) {
   return { pgText, values };
 }
 
+/** @param {string} key */
+function snakeToCamel(key) {
+  return key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+/**
+ * PostgreSQL lowercases unquoted SELECT aliases (electionId → electionid).
+ * Rebuild camelCase keys using AS aliases from the query text.
+ * @param {string} text
+ */
+function buildAliasMap(text) {
+  /** @type {Map<string, string>} */
+  const map = new Map();
+  const re = /\bAS\s+"([^"]+)"|\bAS\s+([A-Za-z_][A-Za-z0-9_]*)/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const alias = m[1] ?? m[2];
+    map.set(alias.toLowerCase(), alias);
+  }
+  return map;
+}
+
+/**
+ * @param {Record<string, unknown>[]} rows
+ * @param {Map<string, string>} aliasMap
+ */
+function mapPgRows(rows, aliasMap) {
+  return rows.map((row) => {
+    /** @type {Record<string, unknown>} */
+    const out = {};
+    for (const [k, v] of Object.entries(row)) {
+      const lower = k.toLowerCase();
+      const key = aliasMap.get(lower) ?? (k.includes("_") ? snakeToCamel(k) : k);
+      out[key] = v;
+    }
+    return out;
+  });
+}
+
 /**
  * @param {pg.Pool | pg.PoolClient} executor
  * @param {string} text
@@ -59,7 +98,9 @@ function bindParams(text, params) {
 export async function pgQuery(executor, text, params = {}) {
   const { pgText, values } = bindParams(text, params);
   const result = await executor.query(pgText, values);
-  return { rows: result.rows, recordset: result.rows, rowCount: result.rowCount };
+  const aliasMap = buildAliasMap(pgText);
+  const rows = mapPgRows(result.rows, aliasMap);
+  return { rows, recordset: rows, rowCount: result.rowCount };
 }
 
 class PgRequest {
