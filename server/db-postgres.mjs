@@ -1,884 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import sql from "mssql";
+import { createCompatPool, getDatabaseUrl, runSchemaSql, sql } from "./lib/pgPool.mjs";
 import { resolveVoterActivityDate } from "./lib/evRosterVoterDates.mjs";
 import {
-  EV_ROSTER_SUMMARY_CACHE_DDL_MSSQL,
+  EV_ROSTER_SUMMARY_CACHE_DDL_POSTGRES,
   loadSummaryRollupsFromCache,
   rebuildEvRosterSummaryCache,
 } from "./lib/evRosterSummaryCache.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LEGACY_MANIFEST = path.join(__dirname, "data", "manual-manifest.json");
-const LEGACY_MANUAL_DIR = path.join(__dirname, "data", "manual");
+export const DATA_DIR = path.join(__dirname, "data");
+const LEGACY_MANIFEST = path.join(DATA_DIR, "manual-manifest.json");
+const LEGACY_MANUAL_DIR = path.join(DATA_DIR, "manual");
 
-/** @type {import('mssql').ConnectionPool | null} */
+/** @type {ReturnType<typeof createCompatPool> | null} */
 let _pool = null;
-/** @type {Promise<import('mssql').ConnectionPool> | null} */
+/** @type {Promise<ReturnType<typeof createCompatPool>> | null} */
 let _init = null;
-
-function buildConfig() {
-  const server = process.env.MSSQL_SERVER?.trim();
-  if (!server) throw new Error("MSSQL_SERVER is required for SQL Server mode");
-  const database = process.env.MSSQL_DATABASE?.trim() || "electionnighttracker";
-  const user = process.env.MSSQL_USER?.trim();
-  const password = process.env.MSSQL_PASSWORD ?? "";
-  const encrypt = process.env.MSSQL_ENCRYPT !== "false";
-  const trustServerCertificate = process.env.MSSQL_TRUST_CERT !== "false";
-
-  /** @type {import('mssql').config} */
-  const config = {
-    server,
-    database,
-    options: {
-      encrypt,
-      trustServerCertificate,
-    },
-    pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
-  };
-
-  if (!user) {
-    throw new Error(
-      "MSSQL_USER is required. The default Node driver (tedious) does not support Windows integrated auth; " +
-        "create a SQL login in SSMS (Security → Logins) and set MSSQL_USER / MSSQL_PASSWORD, or use the " +
-        "mssql/msnodesqlv8 driver with trustedConnection (not wired in this project yet).",
-    );
-  }
-  config.user = user;
-  config.password = password;
-
-  return { config };
-}
-
-const SCHEMA_SQL = `
-IF OBJECT_ID(N'dbo.data_sources', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.data_sources (
-    id NVARCHAR(128) NOT NULL CONSTRAINT PK_data_sources PRIMARY KEY,
-    kind NVARCHAR(64) NOT NULL,
-    display_name NVARCHAR(256) NOT NULL,
-    notes NVARCHAR(MAX) NULL,
-    created_at DATETIME2 NOT NULL CONSTRAINT DF_data_sources_created DEFAULT (SYSUTCDATETIME()),
-    updated_at DATETIME2 NOT NULL CONSTRAINT DF_data_sources_updated DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF OBJECT_ID(N'dbo.manual_elections', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.manual_elections (
-    id NVARCHAR(128) NOT NULL CONSTRAINT PK_manual_elections PRIMARY KEY,
-    label NVARCHAR(512) NOT NULL,
-    data_json NVARCHAR(MAX) NOT NULL,
-    source_id NVARCHAR(128) NOT NULL CONSTRAINT DF_manual_elections_source DEFAULT (N'manual-default'),
-    created_at DATETIME2 NOT NULL CONSTRAINT DF_manual_elections_created DEFAULT (SYSUTCDATETIME()),
-    updated_at DATETIME2 NOT NULL CONSTRAINT DF_manual_elections_updated DEFAULT (SYSUTCDATETIME()),
-    CONSTRAINT FK_manual_elections_data_sources FOREIGN KEY (source_id) REFERENCES dbo.data_sources (id)
-  );
-END;
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_manual_elections_updated' AND object_id = OBJECT_ID(N'dbo.manual_elections'))
-  CREATE INDEX idx_manual_elections_updated ON dbo.manual_elections (updated_at);
-
-IF OBJECT_ID(N'dbo.election_snapshots', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.election_snapshots (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_election_snapshots PRIMARY KEY,
-    provider NVARCHAR(64) NOT NULL,
-    external_id NVARCHAR(256) NOT NULL,
-    label NVARCHAR(512) NULL,
-    payload_json NVARCHAR(MAX) NOT NULL,
-    fetched_at DATETIME2 NOT NULL CONSTRAINT DF_election_snapshots_fetched DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_snapshots_provider_ext' AND object_id = OBJECT_ID(N'dbo.election_snapshots'))
-  CREATE INDEX idx_snapshots_provider_ext ON dbo.election_snapshots (provider, external_id);
-
-IF OBJECT_ID(N'dbo.sos_results', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.sos_results (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_sos_results PRIMARY KEY,
-    provider NVARCHAR(64) NOT NULL CONSTRAINT DF_sos_results_provider DEFAULT (N'sos-civix'),
-    election_id NVARCHAR(128) NOT NULL,
-    election_label NVARCHAR(512) NULL,
-    payload_json NVARCHAR(MAX) NOT NULL,
-    fetched_at DATETIME2 NOT NULL CONSTRAINT DF_sos_results_fetched DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sos_results_election' AND object_id = OBJECT_ID(N'dbo.sos_results'))
-  CREATE INDEX idx_sos_results_election ON dbo.sos_results (election_id, fetched_at DESC);
-
-IF OBJECT_ID(N'dbo.sos_candidate_results', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.sos_candidate_results (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_sos_candidate_results PRIMARY KEY,
-    election_id NVARCHAR(128) NOT NULL,
-    election_label NVARCHAR(512) NULL,
-    contest_name NVARCHAR(512) NOT NULL,
-    choice_name NVARCHAR(512) NOT NULL,
-    party_name NVARCHAR(64) NULL,
-    early_votes BIGINT NOT NULL CONSTRAINT DF_sos_candidate_early DEFAULT (0),
-    election_day_votes BIGINT NOT NULL CONSTRAINT DF_sos_candidate_ed DEFAULT (0),
-    total_votes BIGINT NOT NULL CONSTRAINT DF_sos_candidate_total DEFAULT (0),
-    percent_of_votes NVARCHAR(64) NULL,
-    precinct_total INT NOT NULL CONSTRAINT DF_sos_candidate_pt DEFAULT (0),
-    precinct_reporting INT NOT NULL CONSTRAINT DF_sos_candidate_pr DEFAULT (0),
-    source_url NVARCHAR(1024) NULL,
-    payload_json NVARCHAR(MAX) NULL,
-    fetched_at DATETIME2 NOT NULL CONSTRAINT DF_sos_candidate_fetched DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sos_candidate_results_fetch' AND object_id = OBJECT_ID(N'dbo.sos_candidate_results'))
-  CREATE INDEX idx_sos_candidate_results_fetch ON dbo.sos_candidate_results (election_id, fetched_at DESC);
-
-IF OBJECT_ID(N'dbo.sos_county_results', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.sos_county_results (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_sos_county_results PRIMARY KEY,
-    election_id NVARCHAR(128) NOT NULL,
-    election_label NVARCHAR(512) NULL,
-    county_name NVARCHAR(128) NOT NULL,
-    contest_name NVARCHAR(512) NOT NULL,
-    choice_name NVARCHAR(512) NOT NULL,
-    party_name NVARCHAR(64) NULL,
-    early_votes BIGINT NOT NULL CONSTRAINT DF_sos_county_early DEFAULT (0),
-    election_day_votes BIGINT NOT NULL CONSTRAINT DF_sos_county_ed DEFAULT (0),
-    total_votes BIGINT NOT NULL CONSTRAINT DF_sos_county_total DEFAULT (0),
-    percent_of_votes NVARCHAR(64) NULL,
-    precinct_total INT NOT NULL CONSTRAINT DF_sos_county_pt DEFAULT (0),
-    precinct_reporting INT NOT NULL CONSTRAINT DF_sos_county_pr DEFAULT (0),
-    source_url NVARCHAR(1024) NULL,
-    payload_json NVARCHAR(MAX) NULL,
-    fetched_at DATETIME2 NOT NULL CONSTRAINT DF_sos_county_fetched DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_sos_county_results_fetch' AND object_id = OBJECT_ID(N'dbo.sos_county_results'))
-  CREATE INDEX idx_sos_county_results_fetch ON dbo.sos_county_results (election_id, county_name, fetched_at DESC);
-
-IF OBJECT_ID(N'dbo.county_results', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.county_results (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_county_results PRIMARY KEY,
-    election_id NVARCHAR(128) NOT NULL CONSTRAINT DF_county_results_election DEFAULT (N'56181'),
-    county_id NVARCHAR(64) NOT NULL,
-    contest_name NVARCHAR(512) NOT NULL,
-    choice_name NVARCHAR(512) NOT NULL,
-    party_name NVARCHAR(64) NULL,
-    early_votes BIGINT NOT NULL CONSTRAINT DF_county_results_early DEFAULT (0),
-    election_day_votes BIGINT NOT NULL CONSTRAINT DF_county_results_ed DEFAULT (0),
-    total_votes BIGINT NOT NULL CONSTRAINT DF_county_results_total DEFAULT (0),
-    percent_of_votes NVARCHAR(64) NULL,
-    registered_voters BIGINT NOT NULL CONSTRAINT DF_county_results_rv DEFAULT (0),
-    ballots_cast BIGINT NOT NULL CONSTRAINT DF_county_results_bc DEFAULT (0),
-    precinct_total INT NOT NULL CONSTRAINT DF_county_results_pt DEFAULT (0),
-    precinct_reporting INT NOT NULL CONSTRAINT DF_county_results_pr DEFAULT (0),
-    over_votes BIGINT NOT NULL CONSTRAINT DF_county_results_ov DEFAULT (0),
-    under_votes BIGINT NOT NULL CONSTRAINT DF_county_results_uv DEFAULT (0),
-    line_number INT NULL,
-    source_url NVARCHAR(1024) NULL,
-    payload_json NVARCHAR(MAX) NULL,
-    fetched_at DATETIME2 NOT NULL CONSTRAINT DF_county_results_fetched DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF COL_LENGTH(N'dbo.county_results', N'election_id') IS NULL
-BEGIN
-  ALTER TABLE dbo.county_results ADD election_id NVARCHAR(128) NOT NULL CONSTRAINT DF_county_results_election_late DEFAULT (N'56181');
-END;
-
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.county_results') AND name = N'curr_in')
-BEGIN
-  -- no-op: legacy column removed
-END;
-
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.county_results') AND name = N'old_in')
-BEGIN
-  -- no-op: legacy column removed
-END;
-
-IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.county_results') AND name = N'curr_in')
-BEGIN
-  DECLARE @df_curr NVARCHAR(128);
-  SELECT @df_curr = dc.name
-  FROM sys.default_constraints dc
-  JOIN sys.columns c ON c.default_object_id = dc.object_id
-  WHERE dc.parent_object_id = OBJECT_ID(N'dbo.county_results') AND c.name = N'curr_in';
-  IF @df_curr IS NOT NULL EXEC(N'ALTER TABLE dbo.county_results DROP CONSTRAINT ' + QUOTENAME(@df_curr) + N';');
-  ALTER TABLE dbo.county_results DROP COLUMN curr_in;
-END;
-
-IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.county_results') AND name = N'old_in')
-BEGIN
-  DECLARE @df_old NVARCHAR(128);
-  SELECT @df_old = dc.name
-  FROM sys.default_constraints dc
-  JOIN sys.columns c ON c.default_object_id = dc.object_id
-  WHERE dc.parent_object_id = OBJECT_ID(N'dbo.county_results') AND c.name = N'old_in';
-  IF @df_old IS NOT NULL EXEC(N'ALTER TABLE dbo.county_results DROP CONSTRAINT ' + QUOTENAME(@df_old) + N';');
-  ALTER TABLE dbo.county_results DROP COLUMN old_in;
-END;
-
-IF OBJECT_ID(N'dbo.county_harris_results', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.county_harris_results (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_county_harris_results PRIMARY KEY,
-    contest_name NVARCHAR(512) NOT NULL,
-    choice_name NVARCHAR(512) NOT NULL,
-    party_name NVARCHAR(64) NULL,
-    early_votes BIGINT NOT NULL CONSTRAINT DF_county_harris_early DEFAULT (0),
-    election_day_votes BIGINT NOT NULL CONSTRAINT DF_county_harris_ed DEFAULT (0),
-    total_votes BIGINT NOT NULL CONSTRAINT DF_county_harris_total DEFAULT (0),
-    percent_of_votes NVARCHAR(64) NULL,
-    registered_voters BIGINT NOT NULL CONSTRAINT DF_county_harris_rv DEFAULT (0),
-    ballots_cast BIGINT NOT NULL CONSTRAINT DF_county_harris_bc DEFAULT (0),
-    precinct_total INT NOT NULL CONSTRAINT DF_county_harris_pt DEFAULT (0),
-    precinct_reporting INT NOT NULL CONSTRAINT DF_county_harris_pr DEFAULT (0),
-    over_votes BIGINT NOT NULL CONSTRAINT DF_county_harris_ov DEFAULT (0),
-    under_votes BIGINT NOT NULL CONSTRAINT DF_county_harris_uv DEFAULT (0),
-    line_number INT NULL,
-    source_url NVARCHAR(1024) NULL,
-    payload_json NVARCHAR(MAX) NULL,
-    fetched_at DATETIME2 NOT NULL CONSTRAINT DF_county_harris_fetched DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF OBJECT_ID(N'dbo.county_galveston_results', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.county_galveston_results (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_county_galveston_results PRIMARY KEY,
-    contest_name NVARCHAR(512) NOT NULL,
-    choice_name NVARCHAR(512) NOT NULL,
-    party_name NVARCHAR(64) NULL,
-    early_votes BIGINT NOT NULL CONSTRAINT DF_county_galveston_early DEFAULT (0),
-    election_day_votes BIGINT NOT NULL CONSTRAINT DF_county_galveston_ed DEFAULT (0),
-    total_votes BIGINT NOT NULL CONSTRAINT DF_county_galveston_total DEFAULT (0),
-    percent_of_votes NVARCHAR(64) NULL,
-    registered_voters BIGINT NOT NULL CONSTRAINT DF_county_galveston_rv DEFAULT (0),
-    ballots_cast BIGINT NOT NULL CONSTRAINT DF_county_galveston_bc DEFAULT (0),
-    precinct_total INT NOT NULL CONSTRAINT DF_county_galveston_pt DEFAULT (0),
-    precinct_reporting INT NOT NULL CONSTRAINT DF_county_galveston_pr DEFAULT (0),
-    over_votes BIGINT NOT NULL CONSTRAINT DF_county_galveston_ov DEFAULT (0),
-    under_votes BIGINT NOT NULL CONSTRAINT DF_county_galveston_uv DEFAULT (0),
-    line_number INT NULL,
-    source_url NVARCHAR(1024) NULL,
-    payload_json NVARCHAR(MAX) NULL,
-    fetched_at DATETIME2 NOT NULL CONSTRAINT DF_county_galveston_fetched DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF OBJECT_ID(N'dbo.county_jefferson_results', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.county_jefferson_results (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_county_jefferson_results PRIMARY KEY,
-    contest_name NVARCHAR(512) NOT NULL,
-    choice_name NVARCHAR(512) NOT NULL,
-    party_name NVARCHAR(64) NULL,
-    early_votes BIGINT NOT NULL CONSTRAINT DF_county_jefferson_early DEFAULT (0),
-    election_day_votes BIGINT NOT NULL CONSTRAINT DF_county_jefferson_ed DEFAULT (0),
-    total_votes BIGINT NOT NULL CONSTRAINT DF_county_jefferson_total DEFAULT (0),
-    percent_of_votes NVARCHAR(64) NULL,
-    registered_voters BIGINT NOT NULL CONSTRAINT DF_county_jefferson_rv DEFAULT (0),
-    ballots_cast BIGINT NOT NULL CONSTRAINT DF_county_jefferson_bc DEFAULT (0),
-    precinct_total INT NOT NULL CONSTRAINT DF_county_jefferson_pt DEFAULT (0),
-    precinct_reporting INT NOT NULL CONSTRAINT DF_county_jefferson_pr DEFAULT (0),
-    over_votes BIGINT NOT NULL CONSTRAINT DF_county_jefferson_ov DEFAULT (0),
-    under_votes BIGINT NOT NULL CONSTRAINT DF_county_jefferson_uv DEFAULT (0),
-    line_number INT NULL,
-    source_url NVARCHAR(1024) NULL,
-    payload_json NVARCHAR(MAX) NULL,
-    fetched_at DATETIME2 NOT NULL CONSTRAINT DF_county_jefferson_fetched DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF OBJECT_ID(N'dbo.county_chambers_results', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.county_chambers_results (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_county_chambers_results PRIMARY KEY,
-    contest_name NVARCHAR(512) NOT NULL,
-    choice_name NVARCHAR(512) NOT NULL,
-    party_name NVARCHAR(64) NULL,
-    early_votes BIGINT NOT NULL CONSTRAINT DF_county_chambers_early DEFAULT (0),
-    election_day_votes BIGINT NOT NULL CONSTRAINT DF_county_chambers_ed DEFAULT (0),
-    total_votes BIGINT NOT NULL CONSTRAINT DF_county_chambers_total DEFAULT (0),
-    percent_of_votes NVARCHAR(64) NULL,
-    registered_voters BIGINT NOT NULL CONSTRAINT DF_county_chambers_rv DEFAULT (0),
-    ballots_cast BIGINT NOT NULL CONSTRAINT DF_county_chambers_bc DEFAULT (0),
-    precinct_total INT NOT NULL CONSTRAINT DF_county_chambers_pt DEFAULT (0),
-    precinct_reporting INT NOT NULL CONSTRAINT DF_county_chambers_pr DEFAULT (0),
-    over_votes BIGINT NOT NULL CONSTRAINT DF_county_chambers_ov DEFAULT (0),
-    under_votes BIGINT NOT NULL CONSTRAINT DF_county_chambers_uv DEFAULT (0),
-    line_number INT NULL,
-    source_url NVARCHAR(1024) NULL,
-    payload_json NVARCHAR(MAX) NULL,
-    fetched_at DATETIME2 NOT NULL CONSTRAINT DF_county_chambers_fetched DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF OBJECT_ID(N'dbo.county_montgomery_results', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.county_montgomery_results (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_county_montgomery_results PRIMARY KEY,
-    contest_name NVARCHAR(512) NOT NULL,
-    choice_name NVARCHAR(512) NOT NULL,
-    party_name NVARCHAR(64) NULL,
-    early_votes BIGINT NOT NULL CONSTRAINT DF_county_montgomery_early DEFAULT (0),
-    election_day_votes BIGINT NOT NULL CONSTRAINT DF_county_montgomery_ed DEFAULT (0),
-    total_votes BIGINT NOT NULL CONSTRAINT DF_county_montgomery_total DEFAULT (0),
-    percent_of_votes NVARCHAR(64) NULL,
-    registered_voters BIGINT NOT NULL CONSTRAINT DF_county_montgomery_rv DEFAULT (0),
-    ballots_cast BIGINT NOT NULL CONSTRAINT DF_county_montgomery_bc DEFAULT (0),
-    precinct_total INT NOT NULL CONSTRAINT DF_county_montgomery_pt DEFAULT (0),
-    precinct_reporting INT NOT NULL CONSTRAINT DF_county_montgomery_pr DEFAULT (0),
-    over_votes BIGINT NOT NULL CONSTRAINT DF_county_montgomery_ov DEFAULT (0),
-    under_votes BIGINT NOT NULL CONSTRAINT DF_county_montgomery_uv DEFAULT (0),
-    line_number INT NULL,
-    source_url NVARCHAR(1024) NULL,
-    payload_json NVARCHAR(MAX) NULL,
-    fetched_at DATETIME2 NOT NULL CONSTRAINT DF_county_montgomery_fetched DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF OBJECT_ID(N'dbo.app_settings', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.app_settings (
-    setting_key NVARCHAR(128) NOT NULL CONSTRAINT PK_app_settings PRIMARY KEY,
-    value_json NVARCHAR(MAX) NOT NULL,
-    updated_at DATETIME2 NOT NULL CONSTRAINT DF_app_settings_updated DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF OBJECT_ID(N'dbo.source_import_log', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.source_import_log (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_source_import_log PRIMARY KEY,
-    source_key NVARCHAR(64) NOT NULL,
-    ok BIT NOT NULL,
-    message NVARCHAR(MAX) NOT NULL,
-    occurred_at DATETIME2 NOT NULL CONSTRAINT DF_source_import_log_occurred DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF OBJECT_ID(N'dbo.election_source_configs', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.election_source_configs (
-    election_id NVARCHAR(128) NOT NULL CONSTRAINT PK_election_source_configs PRIMARY KEY,
-    label NVARCHAR(256) NOT NULL,
-    is_enabled BIT NOT NULL CONSTRAINT DF_election_source_enabled DEFAULT (1),
-    auto_refresh_enabled BIT NOT NULL CONSTRAINT DF_election_source_auto DEFAULT (1),
-    sos_countyinfo_url NVARCHAR(2048) NULL,
-    harris_source_url NVARCHAR(2048) NULL,
-    galveston_source_url NVARCHAR(2048) NULL,
-    jefferson_source_url NVARCHAR(2048) NULL,
-    montgomery_source_url NVARCHAR(2048) NULL,
-    chambers_source_url NVARCHAR(2048) NULL,
-    created_at DATETIME2 NOT NULL CONSTRAINT DF_election_source_created DEFAULT (SYSUTCDATETIME()),
-    updated_at DATETIME2 NOT NULL CONSTRAINT DF_election_source_updated DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF OBJECT_ID(N'dbo.ingest_vendors', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.ingest_vendors (
-    id NVARCHAR(64) NOT NULL CONSTRAINT PK_ingest_vendors PRIMARY KEY,
-    display_name NVARCHAR(256) NOT NULL,
-    vendor_tier NVARCHAR(32) NOT NULL CONSTRAINT DF_ingest_vendors_tier DEFAULT (N'other'),
-    handler_key NVARCHAR(64) NOT NULL,
-    notes NVARCHAR(MAX) NULL,
-    created_at DATETIME2 NOT NULL CONSTRAINT DF_ingest_vendors_created DEFAULT (SYSUTCDATETIME()),
-    updated_at DATETIME2 NOT NULL CONSTRAINT DF_ingest_vendors_updated DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF OBJECT_ID(N'dbo.election_feed_sources', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.election_feed_sources (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_election_feed_sources PRIMARY KEY,
-    election_id NVARCHAR(128) NOT NULL,
-    scope NVARCHAR(32) NOT NULL CONSTRAINT DF_election_feed_scope DEFAULT (N'county'),
-    county_key NVARCHAR(64) NOT NULL CONSTRAINT DF_election_feed_county DEFAULT (N''),
-    civix_county_name NVARCHAR(128) NULL,
-    vendor_id NVARCHAR(64) NOT NULL,
-    source_url NVARCHAR(2048) NOT NULL CONSTRAINT DF_election_feed_url DEFAULT (N''),
-    hub_page_url NVARCHAR(2048) NOT NULL CONSTRAINT DF_election_feed_hub DEFAULT (N''),
-    is_enabled BIT NOT NULL CONSTRAINT DF_election_feed_enabled DEFAULT (1),
-    sort_order INT NOT NULL CONSTRAINT DF_election_feed_sort DEFAULT (0),
-    created_at DATETIME2 NOT NULL CONSTRAINT DF_election_feed_created DEFAULT (SYSUTCDATETIME()),
-    updated_at DATETIME2 NOT NULL CONSTRAINT DF_election_feed_updated DEFAULT (SYSUTCDATETIME())
-  );
-  CREATE INDEX idx_election_feed_sources_election ON dbo.election_feed_sources (election_id);
-END;
-
-IF COL_LENGTH(N'dbo.election_feed_sources', N'hub_page_url') IS NULL
-BEGIN
-  ALTER TABLE dbo.election_feed_sources ADD hub_page_url NVARCHAR(2048) NOT NULL CONSTRAINT DF_election_feed_hub_mig DEFAULT (N'');
-END;
-
-IF COL_LENGTH(N'dbo.election_feed_sources', N'prefer_over_sos') IS NULL
-BEGIN
-  ALTER TABLE dbo.election_feed_sources ADD prefer_over_sos BIT NOT NULL CONSTRAINT DF_election_feed_prefer_sos DEFAULT (0);
-END;
-
-IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'civix-sos')
-  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
-  VALUES (N'civix-sos', N'Texas SOS / Civix ENR', N'enr', N'civix_sos', N'Civix applies only to statewide SOS (election + countyInfo). County feeds use county vendors.');
-IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'harris-pdf')
-  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
-  VALUES (N'harris-pdf', N'Harris Votes (PDF cumulative)', N'enr', N'harris_pdf', N'');
-IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'clarity-enr-summary-zip')
-  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
-  VALUES (N'clarity-enr-summary-zip', N'Clarity ENR (summary.zip)', N'enr', N'clarity_enr_summary_zip', N'ElectionSystems Clarity: summary.zip for any county URL. Imports all contests; align races when combining totals.');
-IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'montgomery-pdf')
-  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
-  VALUES (N'montgomery-pdf', N'Montgomery-style results PDF', N'other', N'montgomery_pdf', N'');
-IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'montgomery-eresults-html')
-  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
-  VALUES (
-    N'montgomery-eresults-html',
-    N'Montgomery County eResults (live HTML)',
-    N'enr',
-    N'montgomery_eresults_html',
-    N'Live ASP.NET eResults page. Paste the browser results URL — not the cumulative PDF.'
-  );
-IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'chambers-pdf')
-  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
-  VALUES (N'chambers-pdf', N'Chambers-style results PDF', N'other', N'chambers_pdf', N'');
-IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'dallas-pdf')
-  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
-  VALUES (
-    N'dallas-pdf',
-    N'Dallas County (Electionware summary PDF)',
-    N'enr',
-    N'dallas_pdf',
-    N'Dallas County Votes: Electionware Summary Results Report PDF. Imports all contests; layout differs from Harris / Montgomery / Chambers.'
-  );
-IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'collin-pdf')
-  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
-  VALUES (
-    N'collin-pdf',
-    N'Collin County (Electionware EV summary PDF)',
-    N'enr',
-    N'collin_electionware_pdf',
-    N'Collin County Electionware early-voting summary PDF (Mail + Early Voting). Imports all contests in the file.'
-  );
-IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'cameron-pdf')
-  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
-  VALUES (
-    N'cameron-pdf',
-    N'Cameron County (results / reconciliation PDF)',
-    N'enr',
-    N'cameron_pdf',
-    N'Cameron County: Electionware summary PDFs (all contests) or SOS preliminary reconciliation P26 PDFs (turnout only).'
-  );
-IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'hays-pdf')
-  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
-  VALUES (
-    N'hays-pdf',
-    N'Hays County (eGovlink cumulative PDF)',
-    N'enr',
-    N'hays_egovlink_cumulative_pdf',
-    N'Hays County official cumulative results PDF on egovlink.com (Absentee + Early + Election Day). Imports all contests in the file.'
-  );
-IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'mclennan-pdf')
-  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
-  VALUES (
-    N'mclennan-pdf',
-    N'McLennan County (CivicPlus cumulative PDF)',
-    N'enr',
-    N'mclennan_civicplus_cumulative_pdf',
-    N'McLennan County official cumulative PDF on CivicPlus (Absentee + Early + Election Day). Imports all contests in the file.'
-  );
-IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'ellis-enr-html')
-  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
-  VALUES (
-    N'ellis-enr-html',
-    N'Ellis County (livevoterturnout ENR HTML)',
-    N'enr',
-    N'ellis_livevoterturnout_html',
-    N'Ellis County ENR on livevoterturnout.com — Index HTML URL; sums precinct results to county-wide contest totals.'
-  );
-IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'other-vendor')
-  INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
-  VALUES (N'other-vendor', N'Other / custom (no ingest yet)', N'other', N'unimplemented', N'');
-
-IF OBJECT_ID(N'dbo.county_sos_race_links', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.county_sos_race_links (
-    election_id NVARCHAR(128) NOT NULL,
-    county_key NVARCHAR(64) NOT NULL,
-    county_contest_name NVARCHAR(512) NOT NULL,
-    sos_race_id NVARCHAR(64) NOT NULL,
-    sos_race_name NVARCHAR(512) NULL,
-    link_type NVARCHAR(32) NOT NULL CONSTRAINT DF_county_sos_race_links_type DEFAULT (N'manual'),
-    updated_at DATETIME2 NOT NULL CONSTRAINT DF_county_sos_race_links_updated DEFAULT (SYSUTCDATETIME()),
-    CONSTRAINT PK_county_sos_race_links PRIMARY KEY (election_id, county_key, county_contest_name)
-  );
-END;
-IF OBJECT_ID(N'dbo.county_sos_manual_votes', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.county_sos_manual_votes (
-    election_id NVARCHAR(128) NOT NULL,
-    county_key NVARCHAR(64) NOT NULL,
-    sos_race_id NVARCHAR(64) NOT NULL,
-    sos_candidate_id NVARCHAR(64) NOT NULL,
-    choice_name NVARCHAR(512) NOT NULL,
-    party_name NVARCHAR(64) NULL,
-    early_votes BIGINT NOT NULL CONSTRAINT DF_county_sos_manual_early DEFAULT (0),
-    election_day_votes BIGINT NOT NULL CONSTRAINT DF_county_sos_manual_ed DEFAULT (0),
-    total_votes BIGINT NOT NULL CONSTRAINT DF_county_sos_manual_total DEFAULT (0),
-    updated_at DATETIME2 NOT NULL CONSTRAINT DF_county_sos_manual_updated DEFAULT (SYSUTCDATETIME()),
-    CONSTRAINT PK_county_sos_manual_votes PRIMARY KEY (election_id, county_key, sos_race_id, sos_candidate_id)
-  );
-END;
-IF OBJECT_ID(N'dbo.county_sos_race_vote_source', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.county_sos_race_vote_source (
-    election_id NVARCHAR(128) NOT NULL,
-    county_key NVARCHAR(64) NOT NULL,
-    sos_race_id NVARCHAR(64) NOT NULL,
-    vote_source NVARCHAR(32) NOT NULL CONSTRAINT DF_county_sos_race_vote_source DEFAULT (N'sos'),
-    updated_at DATETIME2 NOT NULL CONSTRAINT DF_county_sos_race_vote_source_updated DEFAULT (SYSUTCDATETIME()),
-    CONSTRAINT PK_county_sos_race_vote_source PRIMARY KEY (election_id, county_key, sos_race_id)
-  );
-END;
-
-IF OBJECT_ID(N'dbo.vote_update_history', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.vote_update_history (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_vote_update_history PRIMARY KEY,
-    election_id NVARCHAR(128) NOT NULL,
-    source_key NVARCHAR(128) NOT NULL,
-    contest_name NVARCHAR(512) NOT NULL,
-    choice_name NVARCHAR(512) NOT NULL,
-    party_name NVARCHAR(64) NULL,
-    early_votes BIGINT NOT NULL CONSTRAINT DF_vote_update_history_early DEFAULT (0),
-    election_day_votes BIGINT NOT NULL CONSTRAINT DF_vote_update_history_ed DEFAULT (0),
-    total_votes BIGINT NOT NULL CONSTRAINT DF_vote_update_history_total DEFAULT (0),
-    percent_of_votes NVARCHAR(64) NULL,
-    captured_at DATETIME2 NOT NULL CONSTRAINT DF_vote_update_history_captured DEFAULT (SYSUTCDATETIME())
-  );
-END;
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_vote_update_history_lookup' AND object_id = OBJECT_ID(N'dbo.vote_update_history'))
-  CREATE INDEX idx_vote_update_history_lookup ON dbo.vote_update_history (election_id, source_key, contest_name, choice_name, party_name, captured_at DESC);
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_source_import_log_key_occurred' AND object_id = OBJECT_ID(N'dbo.source_import_log'))
-  CREATE INDEX idx_source_import_log_key_occurred ON dbo.source_import_log (source_key, occurred_at DESC);
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_county_harris_results_fetch' AND object_id = OBJECT_ID(N'dbo.county_harris_results'))
-  CREATE INDEX idx_county_harris_results_fetch ON dbo.county_harris_results (fetched_at DESC);
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_county_galveston_results_fetch' AND object_id = OBJECT_ID(N'dbo.county_galveston_results'))
-  CREATE INDEX idx_county_galveston_results_fetch ON dbo.county_galveston_results (fetched_at DESC);
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_county_jefferson_results_fetch' AND object_id = OBJECT_ID(N'dbo.county_jefferson_results'))
-  CREATE INDEX idx_county_jefferson_results_fetch ON dbo.county_jefferson_results (fetched_at DESC);
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_county_chambers_results_fetch' AND object_id = OBJECT_ID(N'dbo.county_chambers_results'))
-  CREATE INDEX idx_county_chambers_results_fetch ON dbo.county_chambers_results (fetched_at DESC);
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_county_montgomery_results_fetch' AND object_id = OBJECT_ID(N'dbo.county_montgomery_results'))
-  CREATE INDEX idx_county_montgomery_results_fetch ON dbo.county_montgomery_results (fetched_at DESC);
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_county_results_fetch' AND object_id = OBJECT_ID(N'dbo.county_results'))
-  CREATE INDEX idx_county_results_fetch ON dbo.county_results (county_id, fetched_at DESC);
-
-IF NOT EXISTS (SELECT 1 FROM dbo.data_sources WHERE id = N'manual-default')
-BEGIN
-  INSERT INTO dbo.data_sources (id, kind, display_name, notes)
-  VALUES (N'manual-default', N'manual_json', N'Manual JSON upload', N'Rows in manual_elections');
-END;
-
-IF NOT EXISTS (SELECT 1 FROM dbo.data_sources WHERE id = N'sos-civix')
-BEGIN
-  INSERT INTO dbo.data_sources (id, kind, display_name, notes)
-  VALUES (N'sos-civix', N'sos', N'Texas SOS Civix ENR', N'Live SOS results from Civix ENR');
-END;
-
-IF NOT EXISTS (SELECT 1 FROM dbo.data_sources WHERE id = N'county-harrisvotes')
-BEGIN
-  INSERT INTO dbo.data_sources (id, kind, display_name, notes)
-  VALUES (N'county-harrisvotes', N'county', N'Harris Votes', N'County-level JSON feed from app.harrisvotes.com/appfiles.harrisvotes.com');
-END;
-
-IF NOT EXISTS (SELECT 1 FROM dbo.data_sources WHERE id = N'county-galveston-clarity')
-BEGIN
-  INSERT INTO dbo.data_sources (id, kind, display_name, notes)
-  VALUES (N'county-galveston-clarity', N'county', N'Galveston Clarity', N'summary.zip -> summary.csv parsed for county race results');
-END;
-
-IF NOT EXISTS (SELECT 1 FROM dbo.data_sources WHERE id = N'county-jefferson-clarity')
-BEGIN
-  INSERT INTO dbo.data_sources (id, kind, display_name, notes)
-  VALUES (N'county-jefferson-clarity', N'county', N'Jefferson Clarity', N'summary.zip -> summary.csv parsed for county race results');
-END;
-
-IF NOT EXISTS (SELECT 1 FROM dbo.data_sources WHERE id = N'county-chambers')
-BEGIN
-  INSERT INTO dbo.data_sources (id, kind, display_name, notes)
-  VALUES (N'county-chambers', N'county', N'Chambers County', N'County table provisioned; pull logic pending');
-END;
-
-IF NOT EXISTS (SELECT 1 FROM dbo.data_sources WHERE id = N'county-montgomery')
-BEGIN
-  INSERT INTO dbo.data_sources (id, kind, display_name, notes)
-  VALUES (N'county-montgomery', N'county', N'Montgomery County', N'County table provisioned; pull logic pending');
-END;
-
-IF NOT EXISTS (SELECT 1 FROM dbo.app_settings WHERE setting_key = N'disable_auto_ingest')
-BEGIN
-  INSERT INTO dbo.app_settings (setting_key, value_json) VALUES (N'disable_auto_ingest', N'false');
-END;
-IF NOT EXISTS (SELECT 1 FROM dbo.app_settings WHERE setting_key = N'auto_refresh_enabled')
-BEGIN
-  INSERT INTO dbo.app_settings (setting_key, value_json) VALUES (N'auto_refresh_enabled', N'false');
-END;
-IF NOT EXISTS (SELECT 1 FROM dbo.app_settings WHERE setting_key = N'auto_refresh_interval_sec')
-BEGIN
-  INSERT INTO dbo.app_settings (setting_key, value_json) VALUES (N'auto_refresh_interval_sec', N'60');
-END;
-IF NOT EXISTS (SELECT 1 FROM dbo.app_settings WHERE setting_key = N'display_time_zone')
-BEGIN
-  INSERT INTO dbo.app_settings (setting_key, value_json) VALUES (N'display_time_zone', N'America/Chicago');
-END;
-IF NOT EXISTS (SELECT 1 FROM dbo.app_settings WHERE setting_key = N'sos_countyinfo_url')
-BEGIN
-  INSERT INTO dbo.app_settings (setting_key, value_json) VALUES (N'sos_countyinfo_url', N'');
-END;
-IF NOT EXISTS (SELECT 1 FROM dbo.app_settings WHERE setting_key = N'harris_source_url')
-BEGIN
-  INSERT INTO dbo.app_settings (setting_key, value_json) VALUES (N'harris_source_url', N'');
-END;
-IF NOT EXISTS (SELECT 1 FROM dbo.app_settings WHERE setting_key = N'galveston_source_url')
-BEGIN
-  INSERT INTO dbo.app_settings (setting_key, value_json) VALUES (N'galveston_source_url', N'');
-END;
-IF NOT EXISTS (SELECT 1 FROM dbo.app_settings WHERE setting_key = N'jefferson_source_url')
-BEGIN
-  INSERT INTO dbo.app_settings (setting_key, value_json) VALUES (N'jefferson_source_url', N'');
-END;
-IF NOT EXISTS (SELECT 1 FROM dbo.app_settings WHERE setting_key = N'montgomery_source_url')
-BEGIN
-  INSERT INTO dbo.app_settings (setting_key, value_json) VALUES (N'montgomery_source_url', N'');
-END;
-IF NOT EXISTS (SELECT 1 FROM dbo.app_settings WHERE setting_key = N'chambers_source_url')
-BEGIN
-  INSERT INTO dbo.app_settings (setting_key, value_json) VALUES (N'chambers_source_url', N'');
-END;
-
-IF NOT EXISTS (SELECT 1 FROM dbo.election_source_configs WHERE election_id = N'56181')
-BEGIN
-  INSERT INTO dbo.election_source_configs
-    (election_id, label, is_enabled, auto_refresh_enabled, sos_countyinfo_url, harris_source_url, galveston_source_url, jefferson_source_url, montgomery_source_url, chambers_source_url)
-  VALUES
-    (N'56181', N'May 2, 2026 Special Election', 1, 1, N'', N'', N'', N'', N'', N'');
-END;
-
-IF COL_LENGTH(N'dbo.election_source_configs', N'uses_civix_sos') IS NULL
-BEGIN
-  ALTER TABLE dbo.election_source_configs ADD uses_civix_sos BIT NOT NULL CONSTRAINT DF_election_source_uses_sos DEFAULT (1);
-END;
-
-IF COL_LENGTH(N'dbo.election_source_configs', N'show_in_catalog') IS NULL
-BEGIN
-  ALTER TABLE dbo.election_source_configs ADD show_in_catalog BIT NOT NULL CONSTRAINT DF_election_source_show_catalog DEFAULT (1);
-END;
-
-IF COL_LENGTH(N'dbo.election_source_configs', N'is_default_catalog') IS NULL
-BEGIN
-  ALTER TABLE dbo.election_source_configs ADD is_default_catalog BIT NOT NULL CONSTRAINT DF_election_source_default_catalog DEFAULT (0);
-  UPDATE dbo.election_source_configs SET is_default_catalog = 1 WHERE election_id = N'56181';
-  IF @@ROWCOUNT = 0
-    UPDATE t SET is_default_catalog = 1
-    FROM (
-      SELECT TOP (1) election_id FROM dbo.election_source_configs ORDER BY election_id
-    ) x
-    INNER JOIN dbo.election_source_configs t ON t.election_id = x.election_id;
-END;
-
-IF COL_LENGTH(N'dbo.election_source_configs', N'county_prefer_over_sos_json') IS NULL
-BEGIN
-  ALTER TABLE dbo.election_source_configs ADD county_prefer_over_sos_json NVARCHAR(MAX) NOT NULL CONSTRAINT DF_election_source_prefer_county DEFAULT (N'[]');
-END;
-
-IF OBJECT_ID(N'dbo.ev_roster_configs', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.ev_roster_configs (
-    evr_election_id INT NOT NULL CONSTRAINT PK_ev_roster_configs PRIMARY KEY,
-    party NVARCHAR(16) NOT NULL,
-    election_name NVARCHAR(512) NOT NULL,
-    election_date NVARCHAR(32) NOT NULL,
-    is_enabled BIT NOT NULL CONSTRAINT DF_ev_roster_enabled DEFAULT (1),
-    notes NVARCHAR(MAX) NULL,
-    created_at DATETIME2 NOT NULL CONSTRAINT DF_ev_roster_cfg_created DEFAULT (SYSUTCDATETIME()),
-    updated_at DATETIME2 NOT NULL CONSTRAINT DF_ev_roster_cfg_updated DEFAULT (SYSUTCDATETIME())
-  );
-END;
-
-IF OBJECT_ID(N'dbo.ev_roster_pulls', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.ev_roster_pulls (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_ev_roster_pulls PRIMARY KEY,
-    evr_election_id INT NOT NULL,
-    voting_date NVARCHAR(16) NOT NULL,
-    hub_page_url NVARCHAR(2048) NULL,
-    sos_turnout_url NVARCHAR(2048) NULL,
-    sos_roster_url NVARCHAR(2048) NULL,
-    statewide_voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_pull_voters DEFAULT (0),
-    pulled_at DATETIME2 NOT NULL CONSTRAINT DF_ev_roster_pull_at DEFAULT (SYSUTCDATETIME()),
-    ok BIT NOT NULL CONSTRAINT DF_ev_roster_pull_ok DEFAULT (1),
-    message NVARCHAR(MAX) NOT NULL CONSTRAINT DF_ev_roster_pull_msg DEFAULT (N''),
-    CONSTRAINT UQ_ev_roster_pull UNIQUE (evr_election_id, voting_date)
-  );
-  CREATE INDEX idx_ev_roster_pulls_election ON dbo.ev_roster_pulls (evr_election_id, voting_date DESC);
-END;
-
-IF OBJECT_ID(N'dbo.ev_roster_county_summary', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.ev_roster_county_summary (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_ev_roster_county_summary PRIMARY KEY,
-    pull_id INT NOT NULL,
-    county_name NVARCHAR(128) NOT NULL,
-    county_id INT NULL,
-    registered_voters BIGINT NOT NULL CONSTRAINT DF_ev_roster_reg DEFAULT (0),
-    in_person_votes_on_date BIGINT NOT NULL CONSTRAINT DF_ev_roster_ip_day DEFAULT (0),
-    total_in_person_votes_for_election BIGINT NOT NULL CONSTRAINT DF_ev_roster_ip_cum DEFAULT (0),
-    total_mail_votes_for_election BIGINT NOT NULL CONSTRAINT DF_ev_roster_mail DEFAULT (0),
-    cumulative_total BIGINT NOT NULL CONSTRAINT DF_ev_roster_cum DEFAULT (0),
-    sos_voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_sos_v DEFAULT (0),
-    county_voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_cty_v DEFAULT (0),
-    chosen_source NVARCHAR(32) NOT NULL CONSTRAINT DF_ev_roster_chosen DEFAULT (N'sos'),
-    chosen_voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_chosen_v DEFAULT (0),
-    CONSTRAINT FK_ev_roster_county_pull FOREIGN KEY (pull_id) REFERENCES dbo.ev_roster_pulls (id) ON DELETE CASCADE
-  );
-  CREATE INDEX idx_ev_roster_county_pull ON dbo.ev_roster_county_summary (pull_id, county_name);
-END;
-
-IF OBJECT_ID(N'dbo.ev_roster_voters', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.ev_roster_voters (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_ev_roster_voters PRIMARY KEY,
-    evr_election_id INT NOT NULL,
-    voting_date NVARCHAR(16) NOT NULL,
-    county_name NVARCHAR(128) NOT NULL,
-    vuid NVARCHAR(32) NOT NULL,
-    voter_name NVARCHAR(256) NULL,
-    voting_method NVARCHAR(64) NULL,
-    precinct NVARCHAR(64) NULL,
-    source NVARCHAR(32) NOT NULL CONSTRAINT DF_ev_roster_voter_src DEFAULT (N'sos'),
-    CONSTRAINT UQ_ev_roster_voter UNIQUE (evr_election_id, voting_date, vuid)
-  );
-  CREATE INDEX idx_ev_roster_voters_lookup ON dbo.ev_roster_voters (evr_election_id, voting_date, county_name);
-END;
-
-IF NOT EXISTS (SELECT 1 FROM dbo.ev_roster_configs WHERE evr_election_id = 58315)
-  INSERT INTO dbo.ev_roster_configs (evr_election_id, party, election_name, election_date, notes)
-  VALUES (58315, N'REP', N'2026 REPUBLICAN PRIMARY RUNOFF ELECTION', N'05/26/2026', N'Civix EVR — statewide roster + county totals');
-IF NOT EXISTS (SELECT 1 FROM dbo.ev_roster_configs WHERE evr_election_id = 58314)
-  INSERT INTO dbo.ev_roster_configs (evr_election_id, party, election_name, election_date, notes)
-  VALUES (58314, N'DEM', N'2026 DEMOCRATIC PRIMARY RUNOFF ELECTION', N'05/26/2026', N'Civix EVR — statewide roster + county totals');
-
-IF OBJECT_ID(N'dbo.ev_roster_county_sources', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.ev_roster_county_sources (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_ev_roster_county_sources PRIMARY KEY,
-    evr_election_id INT NOT NULL,
-    county_key NVARCHAR(64) NOT NULL,
-    variant_key NVARCHAR(64) NOT NULL CONSTRAINT DF_ev_roster_variant DEFAULT (N'sos-default'),
-    source_label NVARCHAR(256) NOT NULL CONSTRAINT DF_ev_roster_src_label DEFAULT (N'SOS default'),
-    civix_county_name NVARCHAR(128) NOT NULL,
-    civix_county_id INT NULL,
-    handler_key NVARCHAR(64) NOT NULL CONSTRAINT DF_ev_roster_handler DEFAULT (N'civix_sos_county_slice'),
-    hub_page_url NVARCHAR(2048) NOT NULL CONSTRAINT DF_ev_roster_hub DEFAULT (N''),
-    roster_url NVARCHAR(2048) NOT NULL CONSTRAINT DF_ev_roster_roster_url DEFAULT (N''),
-    voting_method_scope NVARCHAR(16) NOT NULL CONSTRAINT DF_ev_roster_method_scope DEFAULT (N'ALL'),
-    date_scope NVARCHAR(32) NOT NULL CONSTRAINT DF_ev_roster_date_scope DEFAULT (N'SINGLE_DAY'),
-    file_format NVARCHAR(16) NOT NULL CONSTRAINT DF_ev_roster_file_fmt DEFAULT (N'auto'),
-    discovery_profile_key NVARCHAR(64) NULL,
-    training_notes NVARCHAR(MAX) NULL,
-    is_enabled BIT NOT NULL CONSTRAINT DF_ev_roster_county_enabled DEFAULT (1),
-    last_pull_ok BIT NULL,
-    last_pull_message NVARCHAR(MAX) NULL,
-    last_pull_at DATETIME2 NULL,
-    created_at DATETIME2 NOT NULL CONSTRAINT DF_ev_roster_cty_created DEFAULT (SYSUTCDATETIME()),
-    updated_at DATETIME2 NOT NULL CONSTRAINT DF_ev_roster_cty_updated DEFAULT (SYSUTCDATETIME()),
-    CONSTRAINT UQ_ev_roster_county_variant UNIQUE (evr_election_id, county_key, variant_key)
-  );
-END;
-
-IF OBJECT_ID(N'dbo.ev_roster_county_pull_log', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.ev_roster_county_pull_log (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_ev_roster_county_pull_log PRIMARY KEY,
-    pull_id INT NOT NULL,
-    county_key NVARCHAR(64) NOT NULL,
-    county_name NVARCHAR(128) NOT NULL,
-    handler_key NVARCHAR(64) NOT NULL,
-    ok BIT NOT NULL,
-    voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_log_v DEFAULT (0),
-    source_url NVARCHAR(2048) NULL,
-    message NVARCHAR(MAX) NOT NULL CONSTRAINT DF_ev_roster_log_msg DEFAULT (N''),
-    CONSTRAINT FK_ev_roster_log_pull FOREIGN KEY (pull_id) REFERENCES dbo.ev_roster_pulls (id) ON DELETE CASCADE
-  );
-END;
-
-IF COL_LENGTH(N'dbo.ev_roster_voters', N'party') IS NULL
-  ALTER TABLE dbo.ev_roster_voters ADD party NVARCHAR(16) NULL;
-IF COL_LENGTH(N'dbo.ev_roster_voters', N'method_code') IS NULL
-  ALTER TABLE dbo.ev_roster_voters ADD method_code NVARCHAR(8) NULL;
-IF COL_LENGTH(N'dbo.ev_roster_voters', N'reporting_date') IS NULL
-BEGIN
-  ALTER TABLE dbo.ev_roster_voters ADD reporting_date NVARCHAR(16) NULL;
-  UPDATE dbo.ev_roster_voters SET reporting_date = voting_date WHERE reporting_date IS NULL;
-END;
-IF COL_LENGTH(N'dbo.ev_roster_pulls', N'raw_record_count') IS NULL
-  ALTER TABLE dbo.ev_roster_pulls ADD raw_record_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_raw DEFAULT (0);
-IF COL_LENGTH(N'dbo.ev_roster_pulls', N'deduped_voter_count') IS NULL
-  ALTER TABLE dbo.ev_roster_pulls ADD deduped_voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_dedup DEFAULT (0);
-
-IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'variant_key') IS NULL
-  ALTER TABLE dbo.ev_roster_county_sources ADD variant_key NVARCHAR(64) NOT NULL CONSTRAINT DF_ev_roster_variant DEFAULT (N'sos-default');
-IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'source_label') IS NULL
-  ALTER TABLE dbo.ev_roster_county_sources ADD source_label NVARCHAR(256) NOT NULL CONSTRAINT DF_ev_roster_src_label DEFAULT (N'SOS default');
-IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'voting_method_scope') IS NULL
-  ALTER TABLE dbo.ev_roster_county_sources ADD voting_method_scope NVARCHAR(16) NOT NULL CONSTRAINT DF_ev_roster_method_scope DEFAULT (N'ALL');
-IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'date_scope') IS NULL
-  ALTER TABLE dbo.ev_roster_county_sources ADD date_scope NVARCHAR(32) NOT NULL CONSTRAINT DF_ev_roster_date_scope DEFAULT (N'SINGLE_DAY');
-IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'file_format') IS NULL
-  ALTER TABLE dbo.ev_roster_county_sources ADD file_format NVARCHAR(16) NOT NULL CONSTRAINT DF_ev_roster_file_fmt DEFAULT (N'auto');
-IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'roster_party_scope') IS NULL
-  ALTER TABLE dbo.ev_roster_county_sources ADD roster_party_scope NVARCHAR(16) NOT NULL CONSTRAINT DF_ev_roster_party_scope DEFAULT (N'COMBINED');
-IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'discovery_profile_key') IS NULL
-  ALTER TABLE dbo.ev_roster_county_sources ADD discovery_profile_key NVARCHAR(64) NULL;
-IF COL_LENGTH(N'dbo.ev_roster_county_sources', N'training_notes') IS NULL
-  ALTER TABLE dbo.ev_roster_county_sources ADD training_notes NVARCHAR(MAX) NULL;
-
-IF EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = N'UQ_ev_roster_voter' AND parent_object_id = OBJECT_ID(N'dbo.ev_roster_voters'))
-  ALTER TABLE dbo.ev_roster_voters DROP CONSTRAINT UQ_ev_roster_voter;
-IF NOT EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = N'UQ_ev_roster_voter' AND parent_object_id = OBJECT_ID(N'dbo.ev_roster_voters'))
-  ALTER TABLE dbo.ev_roster_voters ADD CONSTRAINT UQ_ev_roster_voter UNIQUE (evr_election_id, voting_date, county_name, vuid);
-
-IF EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = N'UQ_ev_roster_county' AND parent_object_id = OBJECT_ID(N'dbo.ev_roster_county_sources'))
-  ALTER TABLE dbo.ev_roster_county_sources DROP CONSTRAINT UQ_ev_roster_county;
-IF NOT EXISTS (SELECT 1 FROM sys.key_constraints WHERE name = N'UQ_ev_roster_county_variant' AND parent_object_id = OBJECT_ID(N'dbo.ev_roster_county_sources'))
-  ALTER TABLE dbo.ev_roster_county_sources ADD CONSTRAINT UQ_ev_roster_county_variant UNIQUE (evr_election_id, county_key, variant_key);
-
-IF OBJECT_ID(N'dbo.ev_roster_county_pull_status', N'U') IS NULL
-BEGIN
-  CREATE TABLE dbo.ev_roster_county_pull_status (
-    id INT NOT NULL IDENTITY(1, 1) CONSTRAINT PK_ev_roster_county_pull_status PRIMARY KEY,
-    evr_election_id INT NOT NULL,
-    voting_date NVARCHAR(16) NOT NULL,
-    county_name NVARCHAR(128) NOT NULL,
-    county_key NVARCHAR(64) NULL,
-    last_pull_ok BIT NULL,
-    last_pull_at DATETIME2 NULL,
-    last_pull_message NVARCHAR(MAX) NULL,
-    voter_count BIGINT NOT NULL CONSTRAINT DF_ev_roster_status_voters DEFAULT (0),
-    confirmed_at DATETIME2 NULL,
-    CONSTRAINT UQ_ev_roster_county_pull_status UNIQUE (evr_election_id, voting_date, county_name)
-  );
-  CREATE INDEX idx_ev_roster_county_pull_status ON dbo.ev_roster_county_pull_status (evr_election_id, voting_date);
-END;
-${EV_ROSTER_SUMMARY_CACHE_DDL_MSSQL}
-`;
 
 async function migrateLegacyJsonIfNeeded(pool) {
   const countR = await pool.request().query(`SELECT COUNT(*) AS c FROM dbo.manual_elections`);
@@ -894,11 +33,11 @@ async function migrateLegacyJsonIfNeeded(pool) {
     const updatedAt = e.updatedAt || new Date().toISOString();
     await pool
       .request()
-      .input("id", sql.NVarChar(128), e.id)
-      .input("label", sql.NVarChar(512), e.label)
-      .input("data_json", sql.NVarChar(sql.MAX), dataJson)
-      .input("created_at", sql.DateTime2, new Date(updatedAt))
-      .input("updated_at", sql.DateTime2, new Date(updatedAt))
+      .input("id", e.id)
+      .input("label", e.label)
+      .input("data_json", dataJson)
+      .input("created_at", new Date(updatedAt))
+      .input("updated_at", new Date(updatedAt))
       .query(
         `INSERT INTO dbo.manual_elections (id, label, data_json, source_id, created_at, updated_at)
          VALUES (@id, @label, @data_json, N'manual-default', @created_at, @updated_at)`,
@@ -919,15 +58,15 @@ async function syncIngestVendorMetadataMssql(pool) {
     WHERE vendor_id IN (N'clarity-galveston-sd4', N'clarity-jefferson-sd4')
   `);
   await pool.request().query(`
-    IF NOT EXISTS (SELECT 1 FROM dbo.ingest_vendors WHERE id = N'clarity-enr-summary-zip')
-    INSERT INTO dbo.ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
+    INSERT INTO ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
     VALUES (
-      N'clarity-enr-summary-zip',
-      N'Clarity ENR (summary.zip)',
-      N'enr',
-      N'clarity_enr_summary_zip',
-      N'ElectionSystems Clarity: summary.zip → summary.csv for any county URL. Imports all contests; align comparable races when combining totals across counties.'
+      'clarity-enr-summary-zip',
+      'Clarity ENR (summary.zip)',
+      'enr',
+      'clarity_enr_summary_zip',
+      'ElectionSystems Clarity: summary.zip → summary.csv for any county URL. Imports all contests; align comparable races when combining totals across counties.'
     )
+    ON CONFLICT (id) DO NOTHING
   `);
   await pool.request().query(`
     DELETE FROM dbo.ingest_vendors WHERE id IN (N'clarity-galveston-sd4', N'clarity-jefferson-sd4')
@@ -1013,16 +152,20 @@ async function syncIngestVendorMetadataMssql(pool) {
   for (const r of rows) {
     await pool
       .request()
-      .input("id", sql.NVarChar(64), r.id)
-      .input("display_name", sql.NVarChar(256), r.display_name)
-      .input("vendor_tier", sql.NVarChar(32), r.vendor_tier)
-      .input("notes", sql.NVarChar(sql.MAX), r.notes)
+      .input("id", r.id)
+      .input("display_name", r.display_name)
+      .input("vendor_tier", r.vendor_tier)
+      .input("notes", r.notes)
       .query(
         `UPDATE dbo.ingest_vendors
          SET display_name = @display_name, vendor_tier = @vendor_tier, notes = @notes, updated_at = SYSUTCDATETIME()
          WHERE id = @id`,
       );
   }
+}
+
+export async function flushPendingDatabasePersist() {
+  return true;
 }
 
 export function isDatabaseLoaded() {
@@ -1034,10 +177,9 @@ export async function ensureDb() {
   if (_init) return _init;
 
   _init = (async () => {
-    const { config } = buildConfig();
-    _pool = new sql.ConnectionPool(config);
-    await _pool.connect();
-    await _pool.batch(SCHEMA_SQL);
+    _pool = createCompatPool(getDatabaseUrl());
+    await runSchemaSql(_pool);
+    await _pool.query(EV_ROSTER_SUMMARY_CACHE_DDL_POSTGRES);
     await syncIngestVendorMetadataMssql(_pool);
     await migrateLegacyJsonIfNeeded(_pool);
     return _pool;
@@ -1047,15 +189,19 @@ export async function ensureDb() {
 }
 
 export function getDbInfo() {
-  const server = process.env.MSSQL_SERVER?.trim() || "";
-  const database = process.env.MSSQL_DATABASE?.trim() || "electionnighttracker";
+  const url = getDatabaseUrl();
+  let host = "";
+  try {
+    host = new URL(url).host;
+  } catch {
+    host = "(invalid DATABASE_URL)";
+  }
   return {
-    engine: "mssql",
-    server,
-    database,
-    driver: "mssql (tedious)",
-    ssms: true,
-    hint: "Connect SSMS to the same server and database; tables are under dbo.",
+    engine: "postgres",
+    host,
+    driver: "pg",
+    ssms: false,
+    hint: "Set DATABASE_URL to your PostgreSQL connection string.",
   };
 }
 
@@ -1075,7 +221,7 @@ export async function getManualElectionJsonById(id) {
   const pool = await ensureDb();
   const r = await pool
     .request()
-    .input("id", sql.NVarChar(128), id)
+    .input("id", id)
     .query(`SELECT data_json FROM dbo.manual_elections WHERE id = @id`);
   return r.recordset[0]?.data_json ?? null;
 }
@@ -1086,11 +232,11 @@ export async function insertManualElection(id, label, electionFileObj) {
   const dataJson = JSON.stringify(electionFileObj);
   await pool
     .request()
-    .input("id", sql.NVarChar(128), id)
-    .input("label", sql.NVarChar(512), label)
-    .input("data_json", sql.NVarChar(sql.MAX), dataJson)
-    .input("created_at", sql.DateTime2, now)
-    .input("updated_at", sql.DateTime2, now)
+    .input("id", id)
+    .input("label", label)
+    .input("data_json", dataJson)
+    .input("created_at", now)
+    .input("updated_at", now)
     .query(
       `INSERT INTO dbo.manual_elections (id, label, data_json, source_id, created_at, updated_at)
        VALUES (@id, @label, @data_json, N'manual-default', @created_at, @updated_at)`,
@@ -1099,7 +245,7 @@ export async function insertManualElection(id, label, electionFileObj) {
 
 export async function deleteManualElection(id) {
   const pool = await ensureDb();
-  const r = await pool.request().input("id", sql.NVarChar(128), id).query(`DELETE FROM dbo.manual_elections WHERE id = @id`);
+  const r = await pool.request().input("id", id).query(`DELETE FROM dbo.manual_elections WHERE id = @id`);
   return (r.rowsAffected[0] ?? 0) > 0;
 }
 
@@ -1107,7 +253,7 @@ export async function manualElectionExists(id) {
   const pool = await ensureDb();
   const r = await pool
     .request()
-    .input("id", sql.NVarChar(128), id)
+    .input("id", id)
     .query(`SELECT 1 AS x FROM dbo.manual_elections WHERE id = @id`);
   return r.recordset.length > 0;
 }
@@ -1118,10 +264,10 @@ export async function updateManualElection(id, label, electionFileObj) {
   const dataJson = JSON.stringify(electionFileObj);
   const r = await pool
     .request()
-    .input("id", sql.NVarChar(128), id)
-    .input("label", sql.NVarChar(512), label)
-    .input("data_json", sql.NVarChar(sql.MAX), dataJson)
-    .input("updated_at", sql.DateTime2, now)
+    .input("id", id)
+    .input("label", label)
+    .input("data_json", dataJson)
+    .input("updated_at", now)
     .query(`UPDATE dbo.manual_elections SET label = @label, data_json = @data_json, updated_at = @updated_at WHERE id = @id`);
   return (r.rowsAffected[0] ?? 0) > 0;
 }
@@ -1161,9 +307,9 @@ export async function insertSosResultSnapshot({ electionId, electionLabel, paylo
   const pool = await ensureDb();
   await pool
     .request()
-    .input("election_id", sql.NVarChar(128), String(electionId))
-    .input("election_label", sql.NVarChar(512), electionLabel ?? null)
-    .input("payload_json", sql.NVarChar(sql.MAX), JSON.stringify(payload))
+    .input("election_id", String(electionId))
+    .input("election_label", electionLabel ?? null)
+    .input("payload_json", JSON.stringify(payload))
     .query(`INSERT INTO dbo.sos_results (election_id, election_label, payload_json) VALUES (@election_id, @election_label, @payload_json)`);
 }
 
@@ -1199,32 +345,32 @@ export async function commitCountyResultsBatch({ electionId, batchAt, segments }
   try {
     // Replace county rows atomically: delete then insert before commit.
     await new sql.Request(transaction)
-      .input("election_id", sql.NVarChar(128), electionKey)
+      .input("election_id", electionKey)
       .query(`DELETE FROM dbo.county_results WHERE election_id = @election_id`);
 
     for (const seg of segs) {
       for (const row of seg.rows ?? []) {
         const normalizedChoice = normalizeCountyCandidateName(row.choiceName);
         await new sql.Request(transaction)
-          .input("county_id", sql.NVarChar(64), seg.countyId)
-          .input("election_id", sql.NVarChar(128), electionKey)
-          .input("contest_name", sql.NVarChar(512), row.contestName ?? "")
-          .input("choice_name", sql.NVarChar(512), normalizedChoice)
-          .input("party_name", sql.NVarChar(64), row.partyName ?? null)
-          .input("early_votes", sql.BigInt, Number(row.earlyVotes ?? 0))
-          .input("election_day_votes", sql.BigInt, Number(row.electionDayVotes ?? 0))
-          .input("total_votes", sql.BigInt, Number(row.totalVotes ?? 0))
-          .input("percent_of_votes", sql.NVarChar(64), row.percentOfVotes ?? null)
-          .input("registered_voters", sql.BigInt, Number(row.registeredVoters ?? 0))
-          .input("ballots_cast", sql.BigInt, Number(row.ballotsCast ?? 0))
-          .input("precinct_total", sql.Int, Number(row.precinctTotal ?? 0))
-          .input("precinct_reporting", sql.Int, Number(row.precinctReporting ?? 0))
-          .input("over_votes", sql.BigInt, Number(row.overVotes ?? 0))
-          .input("under_votes", sql.BigInt, Number(row.underVotes ?? 0))
-          .input("line_number", sql.Int, row.lineNumber == null ? null : Number(row.lineNumber))
-          .input("source_url", sql.NVarChar(1024), seg.sourceUrl ?? null)
-          .input("payload_json", sql.NVarChar(sql.MAX), JSON.stringify(row))
-          .input("fetched_at", sql.DateTime2, batchAtDt)
+          .input("county_id", seg.countyId)
+          .input("election_id", electionKey)
+          .input("contest_name", row.contestName ?? "")
+          .input("choice_name", normalizedChoice)
+          .input("party_name", row.partyName ?? null)
+          .input("early_votes", Number(row.earlyVotes ?? 0))
+          .input("election_day_votes", Number(row.electionDayVotes ?? 0))
+          .input("total_votes", Number(row.totalVotes ?? 0))
+          .input("percent_of_votes", row.percentOfVotes ?? null)
+          .input("registered_voters", Number(row.registeredVoters ?? 0))
+          .input("ballots_cast", Number(row.ballotsCast ?? 0))
+          .input("precinct_total", Number(row.precinctTotal ?? 0))
+          .input("precinct_reporting", Number(row.precinctReporting ?? 0))
+          .input("over_votes", Number(row.overVotes ?? 0))
+          .input("under_votes", Number(row.underVotes ?? 0))
+          .input("line_number", row.lineNumber == null ? null : Number(row.lineNumber))
+          .input("source_url", seg.sourceUrl ?? null)
+          .input("payload_json", JSON.stringify(row))
+          .input("fetched_at", batchAtDt)
           .query(
             `INSERT INTO dbo.county_results
               (election_id, county_id, contest_name, choice_name, party_name, early_votes, election_day_votes, total_votes, percent_of_votes, registered_voters, ballots_cast,
@@ -1256,19 +402,19 @@ export async function insertSosCandidateRows({ electionId, electionLabel, source
   for (const row of rows ?? []) {
     await pool
       .request()
-      .input("election_id", sql.NVarChar(128), String(electionId))
-      .input("election_label", sql.NVarChar(512), electionLabel ?? null)
-      .input("contest_name", sql.NVarChar(512), row.contestName ?? "")
-      .input("choice_name", sql.NVarChar(512), row.choiceName ?? "")
-      .input("party_name", sql.NVarChar(64), row.partyName ?? null)
-      .input("early_votes", sql.BigInt, Number(row.earlyVotes ?? 0))
-      .input("election_day_votes", sql.BigInt, Number(row.electionDayVotes ?? 0))
-      .input("total_votes", sql.BigInt, Number(row.totalVotes ?? 0))
-      .input("percent_of_votes", sql.NVarChar(64), row.percentOfVotes ?? null)
-      .input("precinct_total", sql.Int, Number(row.precinctTotal ?? 0))
-      .input("precinct_reporting", sql.Int, Number(row.precinctReporting ?? 0))
-      .input("source_url", sql.NVarChar(1024), sourceUrl ?? null)
-      .input("payload_json", sql.NVarChar(sql.MAX), JSON.stringify(row))
+      .input("election_id", String(electionId))
+      .input("election_label", electionLabel ?? null)
+      .input("contest_name", row.contestName ?? "")
+      .input("choice_name", row.choiceName ?? "")
+      .input("party_name", row.partyName ?? null)
+      .input("early_votes", Number(row.earlyVotes ?? 0))
+      .input("election_day_votes", Number(row.electionDayVotes ?? 0))
+      .input("total_votes", Number(row.totalVotes ?? 0))
+      .input("percent_of_votes", row.percentOfVotes ?? null)
+      .input("precinct_total", Number(row.precinctTotal ?? 0))
+      .input("precinct_reporting", Number(row.precinctReporting ?? 0))
+      .input("source_url", sourceUrl ?? null)
+      .input("payload_json", JSON.stringify(row))
       .query(
         `INSERT INTO dbo.sos_candidate_results
           (election_id, election_label, contest_name, choice_name, party_name, early_votes, election_day_votes, total_votes, percent_of_votes,
@@ -1288,24 +434,24 @@ export async function insertSosCountyRows({ electionId, electionLabel, sourceUrl
   try {
     // Atomic replace so readers don't see a partial clear/insert sequence.
     await new sql.Request(transaction)
-      .input("election_id", sql.NVarChar(128), electionKey)
+      .input("election_id", electionKey)
       .query(`DELETE FROM dbo.sos_county_results WHERE election_id = @election_id`);
     for (const row of rows ?? []) {
       await new sql.Request(transaction)
-        .input("election_id", sql.NVarChar(128), String(electionId))
-        .input("election_label", sql.NVarChar(512), electionLabel ?? null)
-        .input("county_name", sql.NVarChar(128), row.countyName ?? "")
-        .input("contest_name", sql.NVarChar(512), row.contestName ?? "")
-        .input("choice_name", sql.NVarChar(512), row.choiceName ?? "")
-        .input("party_name", sql.NVarChar(64), row.partyName ?? null)
-        .input("early_votes", sql.BigInt, Number(row.earlyVotes ?? 0))
-        .input("election_day_votes", sql.BigInt, Number(row.electionDayVotes ?? 0))
-        .input("total_votes", sql.BigInt, Number(row.totalVotes ?? 0))
-        .input("percent_of_votes", sql.NVarChar(64), row.percentOfVotes ?? null)
-        .input("precinct_total", sql.Int, Number(row.precinctTotal ?? 0))
-        .input("precinct_reporting", sql.Int, Number(row.precinctReporting ?? 0))
-        .input("source_url", sql.NVarChar(1024), sourceUrl ?? null)
-        .input("payload_json", sql.NVarChar(sql.MAX), JSON.stringify(row))
+        .input("election_id", String(electionId))
+        .input("election_label", electionLabel ?? null)
+        .input("county_name", row.countyName ?? "")
+        .input("contest_name", row.contestName ?? "")
+        .input("choice_name", row.choiceName ?? "")
+        .input("party_name", row.partyName ?? null)
+        .input("early_votes", Number(row.earlyVotes ?? 0))
+        .input("election_day_votes", Number(row.electionDayVotes ?? 0))
+        .input("total_votes", Number(row.totalVotes ?? 0))
+        .input("percent_of_votes", row.percentOfVotes ?? null)
+        .input("precinct_total", Number(row.precinctTotal ?? 0))
+        .input("precinct_reporting", Number(row.precinctReporting ?? 0))
+        .input("source_url", sourceUrl ?? null)
+        .input("payload_json", JSON.stringify(row))
         .query(
           `INSERT INTO dbo.sos_county_results
             (election_id, election_label, county_name, contest_name, choice_name, party_name, early_votes, election_day_votes, total_votes, percent_of_votes,
@@ -1326,7 +472,7 @@ export async function getLatestSosCountyRows(electionId) {
   const pool = await ensureDb();
   const latest = await pool
     .request()
-    .input("election_id", sql.NVarChar(128), String(electionId))
+    .input("election_id", String(electionId))
     .query(`
       SELECT county_name AS countyName, MAX(fetched_at) AS fetchedAt
       FROM dbo.sos_county_results
@@ -1337,9 +483,9 @@ export async function getLatestSosCountyRows(electionId) {
   for (const row of latest.recordset) {
     const r = await pool
       .request()
-      .input("election_id", sql.NVarChar(128), String(electionId))
-      .input("county_name", sql.NVarChar(128), String(row.countyName))
-      .input("fetched_at", sql.DateTime2, row.fetchedAt)
+      .input("election_id", String(electionId))
+      .input("county_name", String(row.countyName))
+      .input("fetched_at", row.fetchedAt)
       .query(`
         SELECT county_name AS countyName, contest_name AS contestName, choice_name AS choiceName, party_name AS partyName,
                early_votes AS earlyVotes, election_day_votes AS electionDayVotes, total_votes AS totalVotes, percent_of_votes AS percentOfVotes,
@@ -1362,8 +508,8 @@ async function latestRowsForCounty(pool, countyId, electionId) {
   if (!countyId) return [];
   const r = await pool
     .request()
-    .input("countyId", sql.NVarChar(64), countyId)
-    .input("electionId", sql.NVarChar(128), String(electionId ?? "56181"))
+    .input("countyId", countyId)
+    .input("electionId", String(electionId ?? "56181"))
     .query(`
       SELECT
         MAX(line_number) AS lineNumber,
@@ -1396,8 +542,8 @@ async function latestRowsForCounty(pool, countyId, electionId) {
 async function civixCountyLabelForSlugMssql(pool, electionId, slug) {
   const r = await pool
     .request()
-    .input("election_id", sql.NVarChar(128), String(electionId))
-    .input("county_key", sql.NVarChar(64), String(slug))
+    .input("election_id", String(electionId))
+    .input("county_key", String(slug))
     .query(
       `SELECT TOP 1 civix_county_name AS civixCountyName FROM dbo.election_feed_sources WHERE election_id = @election_id AND county_key = @county_key`,
     );
@@ -1408,7 +554,7 @@ async function civixCountyLabelForSlugMssql(pool, electionId, slug) {
 
 export async function getLatestCountyRows(electionId = "56181") {
   const pool = await ensureDb();
-  const dist = await pool.request().input("election_id", sql.NVarChar(128), String(electionId)).query(`
+  const dist = await pool.request().input("election_id", String(electionId)).query(`
     SELECT DISTINCT county_id AS countyId FROM dbo.county_results WHERE election_id = @election_id
   `);
   const byCivixName = {};
@@ -1425,7 +571,7 @@ export async function getLatestCountyRows(electionId = "56181") {
 export async function getSd4MergePreferCountyFeedNameSet(electionId = "56181") {
   const pool = await ensureDb();
   await migrateCountyPreferJsonToFeedsMssql(pool);
-  const r = await pool.request().input("election_id", sql.NVarChar(128), String(electionId)).query(`
+  const r = await pool.request().input("election_id", String(electionId)).query(`
     SELECT county_key AS countyKey FROM dbo.election_feed_sources
     WHERE election_id = @election_id AND prefer_over_sos = 1 AND is_enabled = 1
   `);
@@ -1442,7 +588,7 @@ export async function getSd4MergePreferCountyFeedNameSet(electionId = "56181") {
 
 export async function listCountySosRaceLinks(electionId) {
   const pool = await ensureDb();
-  const r = await pool.request().input("election_id", sql.NVarChar(128), String(electionId)).query(`
+  const r = await pool.request().input("election_id", String(electionId)).query(`
     SELECT county_key AS countyKey, county_contest_name AS countyContestName, sos_race_id AS sosRaceId,
            sos_race_name AS sosRaceName, link_type AS linkType, updated_at AS updatedAt
     FROM dbo.county_sos_race_links WHERE election_id = @election_id
@@ -1462,12 +608,12 @@ export async function upsertCountySosRaceLink(electionId, link) {
   const pool = await ensureDb();
   await pool
     .request()
-    .input("election_id", sql.NVarChar(128), String(electionId))
-    .input("county_key", sql.NVarChar(64), String(link.countyKey ?? "").toLowerCase().trim())
-    .input("county_contest_name", sql.NVarChar(512), String(link.countyContestName ?? "").trim())
-    .input("sos_race_id", sql.NVarChar(64), String(link.sosRaceId ?? "").trim())
-    .input("sos_race_name", sql.NVarChar(512), String(link.sosRaceName ?? "").trim())
-    .input("link_type", sql.NVarChar(32), String(link.linkType ?? "manual"))
+    .input("election_id", String(electionId))
+    .input("county_key", String(link.countyKey ?? "").toLowerCase().trim())
+    .input("county_contest_name", String(link.countyContestName ?? "").trim())
+    .input("sos_race_id", String(link.sosRaceId ?? "").trim())
+    .input("sos_race_name", String(link.sosRaceName ?? "").trim())
+    .input("link_type", String(link.linkType ?? "manual"))
     .query(`
       MERGE dbo.county_sos_race_links AS t
       USING (SELECT @election_id AS election_id, @county_key AS county_key, @county_contest_name AS county_contest_name) AS s
@@ -1482,9 +628,9 @@ export async function deleteCountySosRaceLink(electionId, countyKey, countyConte
   const pool = await ensureDb();
   await pool
     .request()
-    .input("election_id", sql.NVarChar(128), String(electionId))
-    .input("county_key", sql.NVarChar(64), String(countyKey).toLowerCase().trim())
-    .input("county_contest_name", sql.NVarChar(512), String(countyContestName).trim())
+    .input("election_id", String(electionId))
+    .input("county_key", String(countyKey).toLowerCase().trim())
+    .input("county_contest_name", String(countyContestName).trim())
     .query(`
       DELETE FROM dbo.county_sos_race_links
       WHERE election_id = @election_id AND county_key = @county_key AND county_contest_name = @county_contest_name
@@ -1493,7 +639,7 @@ export async function deleteCountySosRaceLink(electionId, countyKey, countyConte
 
 export async function listCountySosManualVotes(electionId) {
   const pool = await ensureDb();
-  const r = await pool.request().input("election_id", sql.NVarChar(128), String(electionId)).query(`
+  const r = await pool.request().input("election_id", String(electionId)).query(`
     SELECT county_key AS countyKey, sos_race_id AS sosRaceId, sos_candidate_id AS sosCandidateId,
            choice_name AS choiceName, party_name AS partyName, early_votes AS earlyVotes,
            election_day_votes AS electionDayVotes, total_votes AS totalVotes, updated_at AS updatedAt
@@ -1517,15 +663,15 @@ export async function upsertCountySosManualVote(electionId, row) {
   const pool = await ensureDb();
   await pool
     .request()
-    .input("election_id", sql.NVarChar(128), String(electionId))
-    .input("county_key", sql.NVarChar(64), String(row.countyKey ?? "").toLowerCase().trim())
-    .input("sos_race_id", sql.NVarChar(64), String(row.sosRaceId ?? "").trim())
-    .input("sos_candidate_id", sql.NVarChar(64), String(row.sosCandidateId ?? "").trim())
-    .input("choice_name", sql.NVarChar(512), String(row.choiceName ?? "").trim())
-    .input("party_name", sql.NVarChar(64), String(row.partyName ?? "").trim())
-    .input("early_votes", sql.BigInt, Number(row.earlyVotes ?? 0))
-    .input("election_day_votes", sql.BigInt, Number(row.electionDayVotes ?? 0))
-    .input("total_votes", sql.BigInt, Number(row.totalVotes ?? 0))
+    .input("election_id", String(electionId))
+    .input("county_key", String(row.countyKey ?? "").toLowerCase().trim())
+    .input("sos_race_id", String(row.sosRaceId ?? "").trim())
+    .input("sos_candidate_id", String(row.sosCandidateId ?? "").trim())
+    .input("choice_name", String(row.choiceName ?? "").trim())
+    .input("party_name", String(row.partyName ?? "").trim())
+    .input("early_votes", Number(row.earlyVotes ?? 0))
+    .input("election_day_votes", Number(row.electionDayVotes ?? 0))
+    .input("total_votes", Number(row.totalVotes ?? 0))
     .query(`
       MERGE dbo.county_sos_manual_votes AS t
       USING (SELECT @election_id AS election_id, @county_key AS county_key, @sos_race_id AS sos_race_id, @sos_candidate_id AS sos_candidate_id) AS s
@@ -1539,7 +685,7 @@ export async function upsertCountySosManualVote(electionId, row) {
 
 export async function listCountySosRaceVoteSources(electionId) {
   const pool = await ensureDb();
-  const r = await pool.request().input("election_id", sql.NVarChar(128), String(electionId)).query(`
+  const r = await pool.request().input("election_id", String(electionId)).query(`
     SELECT county_key AS countyKey, sos_race_id AS sosRaceId, vote_source AS voteSource, updated_at AS updatedAt
     FROM dbo.county_sos_race_vote_source WHERE election_id = @election_id
   `);
@@ -1559,10 +705,10 @@ export async function upsertCountySosRaceVoteSource(electionId, row) {
   const pool = await ensureDb();
   await pool
     .request()
-    .input("election_id", sql.NVarChar(128), String(electionId))
-    .input("county_key", sql.NVarChar(64), String(row.countyKey ?? "").toLowerCase().trim())
-    .input("sos_race_id", sql.NVarChar(64), String(row.sosRaceId ?? "").trim())
-    .input("vote_source", sql.NVarChar(32), src)
+    .input("election_id", String(electionId))
+    .input("county_key", String(row.countyKey ?? "").toLowerCase().trim())
+    .input("sos_race_id", String(row.sosRaceId ?? "").trim())
+    .input("vote_source", src)
     .query(`
       MERGE dbo.county_sos_race_vote_source AS t
       USING (SELECT @election_id AS election_id, @county_key AS county_key, @sos_race_id AS sos_race_id) AS s
@@ -1609,8 +755,8 @@ async function migrateCountyPreferJsonToFeedsMssql(pool) {
         if (!slug) continue;
         await pool
           .request()
-          .input("election_id", sql.NVarChar(128), eid)
-          .input("county_key", sql.NVarChar(64), slug)
+          .input("election_id", eid)
+          .input("county_key", slug)
           .query(`
             UPDATE dbo.election_feed_sources
             SET prefer_over_sos = 1
@@ -1619,7 +765,7 @@ async function migrateCountyPreferJsonToFeedsMssql(pool) {
       }
       await pool
         .request()
-        .input("election_id", sql.NVarChar(128), eid)
+        .input("election_id", eid)
         .query(`
           UPDATE dbo.election_source_configs
           SET county_prefer_over_sos_json = N'[]'
@@ -1647,12 +793,12 @@ export async function listIngestVendors() {
 }
 
 async function ensureElectionFeedsSeededFromLegacyMssql(pool, electionId) {
-  const c = await pool.request().input("election_id", sql.NVarChar(128), electionId).query(`
+  const c = await pool.request().input("election_id", electionId).query(`
     SELECT COUNT(*) AS n FROM dbo.election_feed_sources WHERE election_id = @election_id
   `);
   if (Number(c.recordset?.[0]?.n ?? 0) > 0) return;
 
-  const cfgR = await pool.request().input("election_id", sql.NVarChar(128), electionId).query(`
+  const cfgR = await pool.request().input("election_id", electionId).query(`
     SELECT harris_source_url AS harrisSourceUrl, galveston_source_url AS galvestonSourceUrl, jefferson_source_url AS jeffersonSourceUrl,
            montgomery_source_url AS montgomerySourceUrl, chambers_source_url AS chambersSourceUrl
     FROM dbo.election_source_configs WHERE election_id = @election_id
@@ -1677,11 +823,11 @@ async function ensureElectionFeedsSeededFromLegacyMssql(pool, electionId) {
   for (const f of feeds) {
     await pool
       .request()
-      .input("election_id", sql.NVarChar(128), electionId)
-      .input("county_key", sql.NVarChar(64), f.countyKey)
-      .input("vendor_id", sql.NVarChar(64), f.vendorId)
-      .input("source_url", sql.NVarChar(2048), f.url)
-      .input("sort_order", sql.Int, f.sortOrder)
+      .input("election_id", electionId)
+      .input("county_key", f.countyKey)
+      .input("vendor_id", f.vendorId)
+      .input("source_url", f.url)
+      .input("sort_order", f.sortOrder)
       .query(`
         INSERT INTO dbo.election_feed_sources (election_id, scope, county_key, vendor_id, source_url, hub_page_url, is_enabled, sort_order, updated_at)
         VALUES (@election_id, N'county', @county_key, @vendor_id, @source_url, N'', 1, @sort_order, SYSUTCDATETIME())
@@ -1693,7 +839,7 @@ export async function listElectionFeedSources(electionId) {
   const pool = await ensureDb();
   await migrateCountyPreferJsonToFeedsMssql(pool);
   await ensureElectionFeedsSeededFromLegacyMssql(pool, String(electionId));
-  const r = await pool.request().input("election_id", sql.NVarChar(128), String(electionId)).query(`
+  const r = await pool.request().input("election_id", String(electionId)).query(`
     SELECT id, election_id AS electionId, scope, county_key AS countyKey, civix_county_name AS civixCountyName,
            vendor_id AS vendorId, source_url AS sourceUrl, hub_page_url AS hubPageUrl,
            is_enabled AS isEnabled, prefer_over_sos AS preferOverSos, sort_order AS sortOrder, updated_at AS updatedAt
@@ -1723,7 +869,7 @@ export async function replaceElectionFeedSourcesForElection(electionId, sources)
   const transaction = new sql.Transaction(pool);
   await transaction.begin();
   try {
-    await new sql.Request(transaction).input("election_id", sql.NVarChar(128), eid).query(`
+    await new sql.Request(transaction).input("election_id", eid).query(`
       DELETE FROM dbo.election_feed_sources WHERE election_id = @election_id
     `);
     let ord = 0;
@@ -1733,15 +879,15 @@ export async function replaceElectionFeedSourcesForElection(electionId, sources)
       const civix =
         s.civixCountyName != null && String(s.civixCountyName).trim() ? String(s.civixCountyName).trim() : null;
       await new sql.Request(transaction)
-        .input("election_id", sql.NVarChar(128), eid)
-        .input("county_key", sql.NVarChar(64), countyKey)
-        .input("civix_county_name", sql.NVarChar(128), civix)
-        .input("vendor_id", sql.NVarChar(64), String(s.vendorId ?? "").trim() || "other-vendor")
-        .input("source_url", sql.NVarChar(2048), String(s.sourceUrl ?? ""))
-        .input("hub_page_url", sql.NVarChar(2048), String(s.hubPageUrl ?? ""))
-        .input("is_enabled", sql.Bit, s.isEnabled === false ? 0 : 1)
-        .input("prefer_over_sos", sql.Bit, s.preferOverSos === true ? 1 : 0)
-        .input("sort_order", sql.Int, ord++)
+        .input("election_id", eid)
+        .input("county_key", countyKey)
+        .input("civix_county_name", civix)
+        .input("vendor_id", String(s.vendorId ?? "").trim() || "other-vendor")
+        .input("source_url", String(s.sourceUrl ?? ""))
+        .input("hub_page_url", String(s.hubPageUrl ?? ""))
+        .input("is_enabled", s.isEnabled === false ? 0 : 1)
+        .input("prefer_over_sos", s.preferOverSos === true ? 1 : 0)
+        .input("sort_order", ord++)
         .query(`
           INSERT INTO dbo.election_feed_sources
             (election_id, scope, county_key, civix_county_name, vendor_id, source_url, hub_page_url, is_enabled, prefer_over_sos, sort_order, updated_at)
@@ -1760,9 +906,9 @@ export async function updateElectionFeedSourceUrl(electionId, feedId, sourceUrl)
   const pool = await ensureDb();
   await pool
     .request()
-    .input("election_id", sql.NVarChar(128), String(electionId ?? "").trim())
-    .input("id", sql.Int, Number(feedId))
-    .input("source_url", sql.NVarChar(2048), String(sourceUrl ?? ""))
+    .input("election_id", String(electionId ?? "").trim())
+    .input("id", Number(feedId))
+    .input("source_url", String(sourceUrl ?? ""))
     .query(`
       UPDATE dbo.election_feed_sources
       SET source_url = @source_url, updated_at = SYSUTCDATETIME()
@@ -1817,8 +963,8 @@ export async function updateAppSettings({
   const upsert = async (key, value) => {
     await pool
       .request()
-      .input("setting_key", sql.NVarChar(128), key)
-      .input("value_json", sql.NVarChar(sql.MAX), String(value))
+      .input("setting_key", key)
+      .input("value_json", String(value))
       .query(`
         MERGE dbo.app_settings AS target
         USING (SELECT @setting_key AS setting_key, @value_json AS value_json) AS source
@@ -1858,7 +1004,7 @@ export async function clearLiveResultTables() {
 export async function pruneLiveResultHistory(keepSosBatches = 2) {
   const pool = await ensureDb();
   const keep = Math.max(1, Number(keepSosBatches) || 2);
-  await pool.request().input("keep", sql.Int, keep).batch(`
+  await pool.request().input("keep", keep).batch(`
     ;WITH ranked AS (
       SELECT id,
              DENSE_RANK() OVER (PARTITION BY election_id ORDER BY fetched_at DESC) AS dr
@@ -1913,7 +1059,7 @@ export async function listElectionSourceConfigs() {
 
 export async function getElectionSourceConfig(electionId) {
   const pool = await ensureDb();
-  const r = await pool.request().input("election_id", sql.NVarChar(128), String(electionId)).query(`
+  const r = await pool.request().input("election_id", String(electionId)).query(`
     SELECT election_id AS electionId, label, is_enabled AS isEnabled, auto_refresh_enabled AS autoRefreshEnabled,
            uses_civix_sos AS usesCivixSos, show_in_catalog AS showInCatalog, is_default_catalog AS isDefaultCatalog,
            sos_countyinfo_url AS sosCountyInfoUrl, harris_source_url AS harrisSourceUrl, galveston_source_url AS galvestonSourceUrl,
@@ -1943,14 +1089,14 @@ export async function setDefaultElectionCatalog(electionId) {
   const pool = await ensureDb();
   const id = String(electionId ?? "").trim();
   if (!id) throw new Error("electionId is required");
-  const check = await pool.request().input("election_id", sql.NVarChar(128), id).query(`
+  const check = await pool.request().input("election_id", id).query(`
     SELECT 1 AS ok FROM dbo.election_source_configs WHERE election_id = @election_id
   `);
   if (!check.recordset?.length) throw new Error(`Election ${id} not found`);
   await pool.request().query(`UPDATE dbo.election_source_configs SET is_default_catalog = 0`);
   await pool
     .request()
-    .input("election_id", sql.NVarChar(128), id)
+    .input("election_id", id)
     .query(`
       UPDATE dbo.election_source_configs
       SET is_default_catalog = 1, updated_at = SYSUTCDATETIME()
@@ -1967,18 +1113,18 @@ export async function upsertElectionSourceConfig(payload) {
   const showCat = payload?.showInCatalog === false ? 0 : 1;
   await pool
     .request()
-    .input("election_id", sql.NVarChar(128), electionId)
-    .input("label", sql.NVarChar(256), String(payload?.label ?? electionId))
-    .input("is_enabled", sql.Bit, !!payload?.isEnabled)
-    .input("auto_refresh_enabled", sql.Bit, !!payload?.autoRefreshEnabled)
-    .input("uses_civix_sos", sql.Bit, usesSos)
-    .input("show_in_catalog", sql.Bit, showCat)
-    .input("sos_countyinfo_url", sql.NVarChar(2048), String(payload?.sosCountyInfoUrl ?? ""))
-    .input("harris_source_url", sql.NVarChar(2048), String(payload?.harrisSourceUrl ?? ""))
-    .input("galveston_source_url", sql.NVarChar(2048), String(payload?.galvestonSourceUrl ?? ""))
-    .input("jefferson_source_url", sql.NVarChar(2048), String(payload?.jeffersonSourceUrl ?? ""))
-    .input("montgomery_source_url", sql.NVarChar(2048), String(payload?.montgomerySourceUrl ?? ""))
-    .input("chambers_source_url", sql.NVarChar(2048), String(payload?.chambersSourceUrl ?? ""))
+    .input("election_id", electionId)
+    .input("label", String(payload?.label ?? electionId))
+    .input("is_enabled", !!payload?.isEnabled)
+    .input("auto_refresh_enabled", !!payload?.autoRefreshEnabled)
+    .input("uses_civix_sos", usesSos)
+    .input("show_in_catalog", showCat)
+    .input("sos_countyinfo_url", String(payload?.sosCountyInfoUrl ?? ""))
+    .input("harris_source_url", String(payload?.harrisSourceUrl ?? ""))
+    .input("galveston_source_url", String(payload?.galvestonSourceUrl ?? ""))
+    .input("jefferson_source_url", String(payload?.jeffersonSourceUrl ?? ""))
+    .input("montgomery_source_url", String(payload?.montgomerySourceUrl ?? ""))
+    .input("chambers_source_url", String(payload?.chambersSourceUrl ?? ""))
     .query(`
       MERGE dbo.election_source_configs AS target
       USING (SELECT @election_id AS election_id) AS source
@@ -2019,11 +1165,11 @@ export async function appendVoteHistoryIfChanged({ electionId, sourceKey, captur
     const percentOfVotes = row.percentOfVotes == null ? null : String(row.percentOfVotes);
     const prev = await pool
       .request()
-      .input("election_id", sql.NVarChar(128), electionKey)
-      .input("source_key", sql.NVarChar(128), source)
-      .input("contest_name", sql.NVarChar(512), contestName)
-      .input("choice_name", sql.NVarChar(512), choiceName)
-      .input("party_name", sql.NVarChar(64), partyName)
+      .input("election_id", electionKey)
+      .input("source_key", source)
+      .input("contest_name", contestName)
+      .input("choice_name", choiceName)
+      .input("party_name", partyName)
       .query(`
         SELECT TOP 1 early_votes AS earlyVotes, election_day_votes AS electionDayVotes, total_votes AS totalVotes, percent_of_votes AS percentOfVotes
         FROM dbo.vote_update_history
@@ -2041,16 +1187,16 @@ export async function appendVoteHistoryIfChanged({ electionId, sourceKey, captur
     if (!changed) continue;
     await pool
       .request()
-      .input("election_id", sql.NVarChar(128), electionKey)
-      .input("source_key", sql.NVarChar(128), source)
-      .input("contest_name", sql.NVarChar(512), contestName)
-      .input("choice_name", sql.NVarChar(512), choiceName)
-      .input("party_name", sql.NVarChar(64), partyName)
-      .input("early_votes", sql.BigInt, earlyVotes)
-      .input("election_day_votes", sql.BigInt, electionDayVotes)
-      .input("total_votes", sql.BigInt, totalVotes)
-      .input("percent_of_votes", sql.NVarChar(64), percentOfVotes)
-      .input("captured_at", sql.DateTime2, captured)
+      .input("election_id", electionKey)
+      .input("source_key", source)
+      .input("contest_name", contestName)
+      .input("choice_name", choiceName)
+      .input("party_name", partyName)
+      .input("early_votes", earlyVotes)
+      .input("election_day_votes", electionDayVotes)
+      .input("total_votes", totalVotes)
+      .input("percent_of_votes", percentOfVotes)
+      .input("captured_at", captured)
       .query(`
         INSERT INTO dbo.vote_update_history
           (election_id, source_key, contest_name, choice_name, party_name, early_votes, election_day_votes, total_votes, percent_of_votes, captured_at)
@@ -2069,11 +1215,11 @@ export async function appendSourceImportLog({ sourceKey, ok, message }) {
     const msg = String(message ?? "").slice(0, 400000);
     await pool
       .request()
-      .input("source_key", sql.NVarChar(64), key)
-      .input("ok", sql.Bit, !!ok)
-      .input("message", sql.NVarChar(sql.MAX), msg)
+      .input("source_key", key)
+      .input("ok", !!ok)
+      .input("message", msg)
       .query(`INSERT INTO dbo.source_import_log (source_key, ok, message) VALUES (@source_key, @ok, @message)`);
-    await pool.request().input("cap", sql.Int, SOURCE_IMPORT_LOG_CAP).query(`
+    await pool.request().input("cap", SOURCE_IMPORT_LOG_CAP).query(`
       ;WITH ranked AS (
         SELECT id, ROW_NUMBER() OVER (ORDER BY id DESC) AS rn
         FROM dbo.source_import_log
@@ -2088,7 +1234,7 @@ export async function appendSourceImportLog({ sourceKey, ok, message }) {
 export async function getSourceImportLogPayload({ recentLimit = 200 } = {}) {
   const pool = await ensureDb();
   const limit = Math.max(1, Math.min(500, Number(recentLimit) || 200));
-  const recentR = await pool.request().input("lim", sql.Int, limit).query(`
+  const recentR = await pool.request().input("lim", limit).query(`
     SELECT TOP (@lim) id, source_key AS sourceKey, ok, message, occurred_at AS occurredAt
     FROM dbo.source_import_log ORDER BY id DESC
   `);
@@ -2141,12 +1287,12 @@ export async function upsertEvRosterConfig({ evrElectionId, party, electionName,
   const pool = await ensureDb();
   await pool
     .request()
-    .input("evr_election_id", sql.Int, Number(evrElectionId))
-    .input("party", sql.NVarChar(16), String(party ?? ""))
-    .input("election_name", sql.NVarChar(512), String(electionName ?? ""))
-    .input("election_date", sql.NVarChar(32), String(electionDate ?? ""))
-    .input("is_enabled", sql.Bit, isEnabled === false ? 0 : 1)
-    .input("notes", sql.NVarChar(sql.MAX), notes != null ? String(notes) : null)
+    .input("evr_election_id", Number(evrElectionId))
+    .input("party", String(party ?? ""))
+    .input("election_name", String(electionName ?? ""))
+    .input("election_date", String(electionDate ?? ""))
+    .input("is_enabled", isEnabled === false ? 0 : 1)
+    .input("notes", notes != null ? String(notes) : null)
     .query(`
       MERGE dbo.ev_roster_configs AS target
       USING (SELECT @evr_election_id AS evr_election_id) AS source
@@ -2165,8 +1311,8 @@ export async function getConfirmedEvRosterCountyNames(evrElectionId, votingDate)
   const pool = await ensureDb();
   const r = await pool
     .request()
-    .input("evr_election_id", sql.Int, Number(evrElectionId))
-    .input("voting_date", sql.NVarChar(16), String(votingDate ?? "").trim())
+    .input("evr_election_id", Number(evrElectionId))
+    .input("voting_date", String(votingDate ?? "").trim())
     .query(`
       SELECT county_name AS countyName
       FROM dbo.ev_roster_county_pull_status
@@ -2179,8 +1325,8 @@ export async function listEvRosterCountyPullStatuses(evrElectionId, votingDate) 
   const pool = await ensureDb();
   const r = await pool
     .request()
-    .input("evr_election_id", sql.Int, Number(evrElectionId))
-    .input("voting_date", sql.NVarChar(16), String(votingDate ?? "").trim())
+    .input("evr_election_id", Number(evrElectionId))
+    .input("voting_date", String(votingDate ?? "").trim())
     .query(`
       SELECT county_name AS countyName, county_key AS countyKey, last_pull_ok AS lastPullOk,
              last_pull_at AS lastPullAt, last_pull_message AS lastPullMessage, voter_count AS voterCount,
@@ -2213,14 +1359,14 @@ export async function recordEvRosterCountyPullResults(evrElectionId, votingDate,
   for (const row of aggregateCountyPullResults(countyPullLog)) {
     await pool
       .request()
-      .input("evr_election_id", sql.Int, eid)
-      .input("voting_date", sql.NVarChar(16), vDate)
-      .input("county_name", sql.NVarChar(128), row.countyName)
-      .input("county_key", sql.NVarChar(64), row.countyKey || null)
-      .input("last_pull_ok", sql.Bit, row.lastPullOk ? 1 : 0)
-      .input("last_pull_at", sql.DateTime2, now)
-      .input("last_pull_message", sql.NVarChar(sql.MAX), row.messages.join(" | ").slice(0, 4000) || null)
-      .input("voter_count", sql.BigInt, Number(row.voterCount ?? 0))
+      .input("evr_election_id", eid)
+      .input("voting_date", vDate)
+      .input("county_name", row.countyName)
+      .input("county_key", row.countyKey || null)
+      .input("last_pull_ok", row.lastPullOk ? 1 : 0)
+      .input("last_pull_at", now)
+      .input("last_pull_message", row.messages.join(" | ").slice(0, 4000) || null)
+      .input("voter_count", Number(row.voterCount ?? 0))
       .query(`
         MERGE dbo.ev_roster_county_pull_status AS target
         USING (SELECT @evr_election_id AS evr_election_id, @voting_date AS voting_date, @county_name AS county_name) AS source
@@ -2242,9 +1388,9 @@ export async function confirmEvRosterCountyPull(evrElectionId, votingDate, count
   const name = String(countyName ?? "").toUpperCase();
   const check = await pool
     .request()
-    .input("evr_election_id", sql.Int, Number(evrElectionId))
-    .input("voting_date", sql.NVarChar(16), String(votingDate ?? "").trim())
-    .input("county_name", sql.NVarChar(128), name)
+    .input("evr_election_id", Number(evrElectionId))
+    .input("voting_date", String(votingDate ?? "").trim())
+    .input("county_name", name)
     .query(`
       SELECT last_pull_ok AS lastPullOk FROM dbo.ev_roster_county_pull_status
       WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date AND county_name = @county_name
@@ -2257,9 +1403,9 @@ export async function confirmEvRosterCountyPull(evrElectionId, votingDate, count
   }
   await pool
     .request()
-    .input("evr_election_id", sql.Int, Number(evrElectionId))
-    .input("voting_date", sql.NVarChar(16), String(votingDate ?? "").trim())
-    .input("county_name", sql.NVarChar(128), name)
+    .input("evr_election_id", Number(evrElectionId))
+    .input("voting_date", String(votingDate ?? "").trim())
+    .input("county_name", name)
     .query(`
       UPDATE dbo.ev_roster_county_pull_status SET confirmed_at = SYSUTCDATETIME()
       WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date AND county_name = @county_name
@@ -2332,20 +1478,20 @@ export async function saveEvRosterPull(payload, options = {}) {
   try {
     const req = () => new sql.Request(transaction);
     await req()
-      .input("evr_election_id", sql.Int, eid)
-      .input("voting_date", sql.NVarChar(16), vDate)
+      .input("evr_election_id", eid)
+      .input("voting_date", vDate)
       .query(`DELETE FROM dbo.ev_roster_pulls WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date`);
     const ins = await req()
-      .input("evr_election_id", sql.Int, eid)
-      .input("voting_date", sql.NVarChar(16), vDate)
-      .input("hub_page_url", sql.NVarChar(2048), hubPageUrl ?? null)
-      .input("sos_turnout_url", sql.NVarChar(2048), sosTurnoutUrl ?? null)
-      .input("sos_roster_url", sql.NVarChar(2048), sosRosterUrl ?? null)
-      .input("statewide_voter_count", sql.BigInt, Number(statewideVoterCount ?? 0))
-      .input("raw_record_count", sql.BigInt, Number(rawRecordCount ?? 0))
-      .input("deduped_voter_count", sql.BigInt, Number(dedupedVoterCount ?? 0))
-      .input("ok", sql.Bit, ok === false ? 0 : 1)
-      .input("message", sql.NVarChar(sql.MAX), String(message ?? "").slice(0, 4000))
+      .input("evr_election_id", eid)
+      .input("voting_date", vDate)
+      .input("hub_page_url", hubPageUrl ?? null)
+      .input("sos_turnout_url", sosTurnoutUrl ?? null)
+      .input("sos_roster_url", sosRosterUrl ?? null)
+      .input("statewide_voter_count", Number(statewideVoterCount ?? 0))
+      .input("raw_record_count", Number(rawRecordCount ?? 0))
+      .input("deduped_voter_count", Number(dedupedVoterCount ?? 0))
+      .input("ok", ok === false ? 0 : 1)
+      .input("message", String(message ?? "").slice(0, 4000))
       .query(`
         INSERT INTO dbo.ev_roster_pulls
           (evr_election_id, voting_date, hub_page_url, sos_turnout_url, sos_roster_url, statewide_voter_count,
@@ -2357,18 +1503,18 @@ export async function saveEvRosterPull(payload, options = {}) {
     const pullId = Number(ins.recordset?.[0]?.id);
     for (const c of summariesToWrite) {
       await req()
-        .input("pull_id", sql.Int, pullId)
-        .input("county_name", sql.NVarChar(128), String(c.countyName ?? ""))
-        .input("county_id", sql.Int, c.countyId != null ? Number(c.countyId) : null)
-        .input("registered_voters", sql.BigInt, Number(c.registeredVoters ?? 0))
-        .input("in_person_votes_on_date", sql.BigInt, Number(c.inPersonVotesOnDate ?? 0))
-        .input("total_in_person_votes_for_election", sql.BigInt, Number(c.totalInPersonVotesForElection ?? 0))
-        .input("total_mail_votes_for_election", sql.BigInt, Number(c.totalMailVotesForElection ?? 0))
-        .input("cumulative_total", sql.BigInt, Number(c.cumulativeTotal ?? 0))
-        .input("sos_voter_count", sql.BigInt, Number(c.sosVoterCount ?? 0))
-        .input("county_voter_count", sql.BigInt, Number(c.countyVoterCount ?? 0))
-        .input("chosen_source", sql.NVarChar(32), String(c.chosenSource ?? "sos"))
-        .input("chosen_voter_count", sql.BigInt, Number(c.chosenVoterCount ?? 0))
+        .input("pull_id", pullId)
+        .input("county_name", String(c.countyName ?? ""))
+        .input("county_id", c.countyId != null ? Number(c.countyId) : null)
+        .input("registered_voters", Number(c.registeredVoters ?? 0))
+        .input("in_person_votes_on_date", Number(c.inPersonVotesOnDate ?? 0))
+        .input("total_in_person_votes_for_election", Number(c.totalInPersonVotesForElection ?? 0))
+        .input("total_mail_votes_for_election", Number(c.totalMailVotesForElection ?? 0))
+        .input("cumulative_total", Number(c.cumulativeTotal ?? 0))
+        .input("sos_voter_count", Number(c.sosVoterCount ?? 0))
+        .input("county_voter_count", Number(c.countyVoterCount ?? 0))
+        .input("chosen_source", String(c.chosenSource ?? "sos"))
+        .input("chosen_voter_count", Number(c.chosenVoterCount ?? 0))
         .query(`
           INSERT INTO dbo.ev_roster_county_summary
             (pull_id, county_name, county_id, registered_voters, in_person_votes_on_date, total_in_person_votes_for_election,
@@ -2381,9 +1527,9 @@ export async function saveEvRosterPull(payload, options = {}) {
       const names = [...locked];
       const placeholders = names.map((_, i) => `@lock_${i}`).join(", ");
       const delReq = req()
-        .input("evr_election_id", sql.Int, eid)
-        .input("voting_date", sql.NVarChar(16), vDate);
-      names.forEach((n, i) => delReq.input(`lock_${i}`, sql.NVarChar(128), n));
+        .input("evr_election_id", eid)
+        .input("voting_date", vDate);
+      names.forEach((n, i) => delReq.input(`lock_${i}`, n));
       await delReq.query(`
         DELETE FROM dbo.ev_roster_voters
         WHERE evr_election_id = @evr_election_id
@@ -2392,8 +1538,8 @@ export async function saveEvRosterPull(payload, options = {}) {
       `);
     } else {
       await req()
-        .input("evr_election_id", sql.Int, eid)
-        .input("voting_date", sql.NVarChar(16), vDate)
+        .input("evr_election_id", eid)
+        .input("voting_date", vDate)
         .query(`
           DELETE FROM dbo.ev_roster_voters
           WHERE evr_election_id = @evr_election_id
@@ -2403,17 +1549,17 @@ export async function saveEvRosterPull(payload, options = {}) {
     for (const v of votersToWrite) {
       const activityDate = resolveVoterActivityDate(v, vDate);
       await req()
-        .input("evr_election_id", sql.Int, eid)
-        .input("voting_date", sql.NVarChar(16), activityDate)
-        .input("reporting_date", sql.NVarChar(16), vDate)
-        .input("county_name", sql.NVarChar(128), String(v.countyName ?? v.county ?? ""))
-        .input("vuid", sql.NVarChar(32), String(v.vuid ?? ""))
-        .input("voter_name", sql.NVarChar(256), v.voterName != null ? String(v.voterName) : null)
-        .input("voting_method", sql.NVarChar(64), v.votingMethod != null ? String(v.votingMethod) : null)
-        .input("method_code", sql.NVarChar(8), v.methodCode != null ? String(v.methodCode) : null)
-        .input("party", sql.NVarChar(16), v.party != null ? String(v.party) : null)
-        .input("precinct", sql.NVarChar(64), v.precinct != null ? String(v.precinct) : null)
-        .input("source", sql.NVarChar(32), String(v.sourceKey ?? v.source ?? "sos"))
+        .input("evr_election_id", eid)
+        .input("voting_date", activityDate)
+        .input("reporting_date", vDate)
+        .input("county_name", String(v.countyName ?? v.county ?? ""))
+        .input("vuid", String(v.vuid ?? ""))
+        .input("voter_name", v.voterName != null ? String(v.voterName) : null)
+        .input("voting_method", v.votingMethod != null ? String(v.votingMethod) : null)
+        .input("method_code", v.methodCode != null ? String(v.methodCode) : null)
+        .input("party", v.party != null ? String(v.party) : null)
+        .input("precinct", v.precinct != null ? String(v.precinct) : null)
+        .input("source", String(v.sourceKey ?? v.source ?? "sos"))
         .query(`
           MERGE dbo.ev_roster_voters AS target
           USING (SELECT @evr_election_id AS evr_election_id, @voting_date AS voting_date, @vuid AS vuid) AS source
@@ -2430,14 +1576,14 @@ export async function saveEvRosterPull(payload, options = {}) {
     }
     for (const log of countyPullLog ?? []) {
       await req()
-        .input("pull_id", sql.Int, pullId)
-        .input("county_key", sql.NVarChar(64), String(log.countyKey ?? ""))
-        .input("county_name", sql.NVarChar(128), String(log.countyName ?? ""))
-        .input("handler_key", sql.NVarChar(64), String(log.handlerKey ?? ""))
-        .input("ok", sql.Bit, log.ok === false ? 0 : 1)
-        .input("voter_count", sql.BigInt, Number(log.voterCount ?? 0))
-        .input("source_url", sql.NVarChar(2048), log.sourceUrl ?? null)
-        .input("message", sql.NVarChar(sql.MAX), String(log.message ?? "").slice(0, 2000))
+        .input("pull_id", pullId)
+        .input("county_key", String(log.countyKey ?? ""))
+        .input("county_name", String(log.countyName ?? ""))
+        .input("handler_key", String(log.handlerKey ?? ""))
+        .input("ok", log.ok === false ? 0 : 1)
+        .input("voter_count", Number(log.voterCount ?? 0))
+        .input("source_url", log.sourceUrl ?? null)
+        .input("message", String(log.message ?? "").slice(0, 2000))
         .query(`
           INSERT INTO dbo.ev_roster_county_pull_log
             (pull_id, county_key, county_name, handler_key, ok, voter_count, source_url, message)
@@ -2463,11 +1609,11 @@ export async function dedupeEvRosterVotersKeepOldestDate(evrElectionId) {
 
   const beforeR = await pool
     .request()
-    .input("evr_election_id", sql.Int, eid)
+    .input("evr_election_id", eid)
     .query(`SELECT COUNT(*) AS n FROM dbo.ev_roster_voters WHERE evr_election_id = @evr_election_id`);
   const before = Number(beforeR.recordset?.[0]?.n ?? 0);
 
-  await pool.request().input("evr_election_id", sql.Int, eid).query(`
+  await pool.request().input("evr_election_id", eid).query(`
     DELETE FROM dbo.ev_roster_voters
     WHERE evr_election_id = @evr_election_id
     AND id NOT IN (
@@ -2482,17 +1628,17 @@ export async function dedupeEvRosterVotersKeepOldestDate(evrElectionId) {
 
   const afterR = await pool
     .request()
-    .input("evr_election_id", sql.Int, eid)
+    .input("evr_election_id", eid)
     .query(`SELECT COUNT(*) AS n FROM dbo.ev_roster_voters WHERE evr_election_id = @evr_election_id`);
   const after = Number(afterR.recordset?.[0]?.n ?? 0);
 
   const distinctR = await pool
     .request()
-    .input("evr_election_id", sql.Int, eid)
+    .input("evr_election_id", eid)
     .query(`SELECT COUNT(DISTINCT vuid) AS n FROM dbo.ev_roster_voters WHERE evr_election_id = @evr_election_id`);
   const distinctVuids = Number(distinctR.recordset?.[0]?.n ?? 0);
 
-  await pool.request().input("evr_election_id", sql.Int, eid).query(`
+  await pool.request().input("evr_election_id", eid).query(`
     UPDATE p SET deduped_voter_count = c.n
     FROM dbo.ev_roster_pulls p
     INNER JOIN (
@@ -2537,20 +1683,20 @@ export async function mergeEvRosterPull({
   const votersWritable = filterVotersForLocked(voters, locked);
   const findR = await pool
     .request()
-    .input("evr_election_id", sql.Int, eid)
-    .input("voting_date", sql.NVarChar(16), vDate)
+    .input("evr_election_id", eid)
+    .input("voting_date", vDate)
     .query(`SELECT TOP 1 id FROM dbo.ev_roster_pulls WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date`);
   let pullId = findR.recordset?.[0]?.id != null ? Number(findR.recordset[0].id) : null;
   if (pullId == null) {
     const ins = await pool
       .request()
-      .input("evr_election_id", sql.Int, eid)
-      .input("voting_date", sql.NVarChar(16), vDate)
-      .input("hub_page_url", sql.NVarChar(2048), hubPageUrl ?? null)
-      .input("sos_turnout_url", sql.NVarChar(2048), sosTurnoutUrl ?? null)
-      .input("sos_roster_url", sql.NVarChar(2048), sosRosterUrl ?? null)
-      .input("statewide_voter_count", sql.BigInt, Number(statewideVoterCount ?? 0))
-      .input("message", sql.NVarChar(sql.MAX), String(message ?? "Merged county pull").slice(0, 4000))
+      .input("evr_election_id", eid)
+      .input("voting_date", vDate)
+      .input("hub_page_url", hubPageUrl ?? null)
+      .input("sos_turnout_url", sosTurnoutUrl ?? null)
+      .input("sos_roster_url", sosRosterUrl ?? null)
+      .input("statewide_voter_count", Number(statewideVoterCount ?? 0))
+      .input("message", String(message ?? "Merged county pull").slice(0, 4000))
       .query(`
         INSERT INTO dbo.ev_roster_pulls
           (evr_election_id, voting_date, hub_page_url, sos_turnout_url, sos_roster_url, statewide_voter_count, raw_record_count, deduped_voter_count, ok, message)
@@ -2567,9 +1713,9 @@ export async function mergeEvRosterPull({
   for (const name of voterCountyNames) {
     await pool
       .request()
-      .input("evr_election_id", sql.Int, eid)
-      .input("voting_date", sql.NVarChar(16), vDate)
-      .input("county_name", sql.NVarChar(128), name)
+      .input("evr_election_id", eid)
+      .input("voting_date", vDate)
+      .input("county_name", name)
       .query(`
         DELETE FROM dbo.ev_roster_voters
         WHERE evr_election_id = @evr_election_id
@@ -2585,25 +1731,25 @@ export async function mergeEvRosterPull({
   for (const name of summaryCountyNames) {
     await pool
       .request()
-      .input("pull_id", sql.Int, pullId)
-      .input("county_name", sql.NVarChar(128), name)
+      .input("pull_id", pullId)
+      .input("county_name", name)
       .query(`DELETE FROM dbo.ev_roster_county_summary WHERE pull_id = @pull_id AND county_name = @county_name`);
   }
   for (const c of countySummariesWritable) {
     await pool
       .request()
-      .input("pull_id", sql.Int, pullId)
-      .input("county_name", sql.NVarChar(128), String(c.countyName ?? ""))
-      .input("county_id", sql.Int, c.countyId != null ? Number(c.countyId) : null)
-      .input("registered_voters", sql.BigInt, Number(c.registeredVoters ?? 0))
-      .input("in_person_votes_on_date", sql.BigInt, Number(c.inPersonVotesOnDate ?? 0))
-      .input("total_in_person_votes_for_election", sql.BigInt, Number(c.totalInPersonVotesForElection ?? 0))
-      .input("total_mail_votes_for_election", sql.BigInt, Number(c.totalMailVotesForElection ?? 0))
-      .input("cumulative_total", sql.BigInt, Number(c.cumulativeTotal ?? 0))
-      .input("sos_voter_count", sql.BigInt, Number(c.sosVoterCount ?? 0))
-      .input("county_voter_count", sql.BigInt, Number(c.countyVoterCount ?? 0))
-      .input("chosen_source", sql.NVarChar(32), String(c.chosenSource ?? "county"))
-      .input("chosen_voter_count", sql.BigInt, Number(c.chosenVoterCount ?? 0))
+      .input("pull_id", pullId)
+      .input("county_name", String(c.countyName ?? ""))
+      .input("county_id", c.countyId != null ? Number(c.countyId) : null)
+      .input("registered_voters", Number(c.registeredVoters ?? 0))
+      .input("in_person_votes_on_date", Number(c.inPersonVotesOnDate ?? 0))
+      .input("total_in_person_votes_for_election", Number(c.totalInPersonVotesForElection ?? 0))
+      .input("total_mail_votes_for_election", Number(c.totalMailVotesForElection ?? 0))
+      .input("cumulative_total", Number(c.cumulativeTotal ?? 0))
+      .input("sos_voter_count", Number(c.sosVoterCount ?? 0))
+      .input("county_voter_count", Number(c.countyVoterCount ?? 0))
+      .input("chosen_source", String(c.chosenSource ?? "county"))
+      .input("chosen_voter_count", Number(c.chosenVoterCount ?? 0))
       .query(`
         INSERT INTO dbo.ev_roster_county_summary
           (pull_id, county_name, county_id, registered_voters, in_person_votes_on_date, total_in_person_votes_for_election,
@@ -2616,17 +1762,17 @@ export async function mergeEvRosterPull({
     const activityDate = resolveVoterActivityDate(v, vDate);
     await pool
       .request()
-      .input("evr_election_id", sql.Int, eid)
-      .input("voting_date", sql.NVarChar(16), activityDate)
-      .input("reporting_date", sql.NVarChar(16), vDate)
-      .input("county_name", sql.NVarChar(128), String(v.countyName ?? v.county ?? ""))
-      .input("vuid", sql.NVarChar(32), String(v.vuid ?? ""))
-      .input("voter_name", sql.NVarChar(256), v.voterName != null ? String(v.voterName) : null)
-      .input("voting_method", sql.NVarChar(64), v.votingMethod != null ? String(v.votingMethod) : null)
-      .input("method_code", sql.NVarChar(8), v.methodCode != null ? String(v.methodCode) : null)
-      .input("party", sql.NVarChar(16), v.party != null ? String(v.party) : null)
-      .input("precinct", sql.NVarChar(64), v.precinct != null ? String(v.precinct) : null)
-      .input("source", sql.NVarChar(64), String(v.sourceKey ?? v.source ?? "county"))
+      .input("evr_election_id", eid)
+      .input("voting_date", activityDate)
+      .input("reporting_date", vDate)
+      .input("county_name", String(v.countyName ?? v.county ?? ""))
+      .input("vuid", String(v.vuid ?? ""))
+      .input("voter_name", v.voterName != null ? String(v.voterName) : null)
+      .input("voting_method", v.votingMethod != null ? String(v.votingMethod) : null)
+      .input("method_code", v.methodCode != null ? String(v.methodCode) : null)
+      .input("party", v.party != null ? String(v.party) : null)
+      .input("precinct", v.precinct != null ? String(v.precinct) : null)
+      .input("source", String(v.sourceKey ?? v.source ?? "county"))
       .query(`
         MERGE dbo.ev_roster_voters AS target
         USING (SELECT @evr_election_id AS evr_election_id, @voting_date AS voting_date, @vuid AS vuid) AS source
@@ -2644,14 +1790,14 @@ export async function mergeEvRosterPull({
   for (const log of countyPullLog ?? []) {
     await pool
       .request()
-      .input("pull_id", sql.Int, pullId)
-      .input("county_key", sql.NVarChar(64), String(log.countyKey ?? ""))
-      .input("county_name", sql.NVarChar(128), String(log.countyName ?? ""))
-      .input("handler_key", sql.NVarChar(64), String(log.handlerKey ?? ""))
-      .input("ok", sql.Bit, log.ok === false ? 0 : 1)
-      .input("voter_count", sql.BigInt, Number(log.voterCount ?? 0))
-      .input("source_url", sql.NVarChar(2048), log.sourceUrl ?? null)
-      .input("message", sql.NVarChar(sql.MAX), String(log.message ?? "").slice(0, 2000))
+      .input("pull_id", pullId)
+      .input("county_key", String(log.countyKey ?? ""))
+      .input("county_name", String(log.countyName ?? ""))
+      .input("handler_key", String(log.handlerKey ?? ""))
+      .input("ok", log.ok === false ? 0 : 1)
+      .input("voter_count", Number(log.voterCount ?? 0))
+      .input("source_url", log.sourceUrl ?? null)
+      .input("message", String(log.message ?? "").slice(0, 2000))
       .query(`
         INSERT INTO dbo.ev_roster_county_pull_log
           (pull_id, county_key, county_name, handler_key, ok, voter_count, source_url, message)
@@ -2662,17 +1808,17 @@ export async function mergeEvRosterPull({
 
   const countR = await pool
     .request()
-    .input("evr_election_id", sql.Int, eid)
-    .input("voting_date", sql.NVarChar(16), vDate)
+    .input("evr_election_id", eid)
+    .input("voting_date", vDate)
     .query(`SELECT COUNT(*) AS n FROM dbo.ev_roster_voters WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date`);
   const totalVoters = Number(countR.recordset?.[0]?.n ?? 0);
   await pool
     .request()
-    .input("id", sql.Int, pullId)
-    .input("raw_record_count", sql.BigInt, Number(rawRecordCount ?? 0))
-    .input("deduped_voter_count", sql.BigInt, totalVoters)
-    .input("message", sql.NVarChar(sql.MAX), String(message ?? "").slice(0, 4000))
-    .input("ok", sql.Bit, ok === false ? 0 : 1)
+    .input("id", pullId)
+    .input("raw_record_count", Number(rawRecordCount ?? 0))
+    .input("deduped_voter_count", totalVoters)
+    .input("message", String(message ?? "").slice(0, 4000))
+    .input("ok", ok === false ? 0 : 1)
     .query(`
       UPDATE dbo.ev_roster_pulls SET
         raw_record_count = COALESCE(raw_record_count, 0) + @raw_record_count,
@@ -2696,29 +1842,29 @@ export async function listEvRosterVoters(evrElectionId, votingDate, options = {}
   const q = options.q ? String(options.q).trim() : "";
 
   let where = `WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date`;
-  const req = pool.request().input("evr_election_id", sql.Int, eid).input("voting_date", sql.NVarChar(16), vDate);
+  const req = pool.request().input("evr_election_id", eid).input("voting_date", vDate);
   countyList.forEach((name, i) => {
-    req.input(`county_${i}`, sql.NVarChar(128), name);
+    req.input(`county_${i}`, name);
   });
   if (countyList.length) {
     where += ` AND county_name IN (${countyList.map((_, i) => `@county_${i}`).join(", ")})`;
   }
   if (q) {
     where += ` AND (vuid LIKE @q OR county_name LIKE @q OR party LIKE @q)`;
-    req.input("q", sql.NVarChar(128), `%${q}%`);
+    req.input("q", `%${q}%`);
   }
   const countR = await req.query(`SELECT COUNT(*) AS n FROM dbo.ev_roster_voters ${where}`);
   const total = Number(countR.recordset?.[0]?.n ?? 0);
   const dataReq = pool
     .request()
-    .input("evr_election_id", sql.Int, eid)
-    .input("voting_date", sql.NVarChar(16), vDate)
-    .input("limit", sql.Int, limit)
-    .input("offset", sql.Int, offset);
+    .input("evr_election_id", eid)
+    .input("voting_date", vDate)
+    .input("limit", limit)
+    .input("offset", offset);
   countyList.forEach((name, i) => {
-    dataReq.input(`county_${i}`, sql.NVarChar(128), name);
+    dataReq.input(`county_${i}`, name);
   });
-  if (q) dataReq.input("q", sql.NVarChar(128), `%${q}%`);
+  if (q) dataReq.input("q", `%${q}%`);
   const dataR = await dataReq.query(`
       SELECT vuid, party, voting_date AS votingDate, county_name AS countyName,
              COALESCE(method_code, N'EV') AS methodCode
@@ -2877,8 +2023,8 @@ export async function getEvRosterPullPayload(evrElectionId, votingDate) {
   const vDate = String(votingDate ?? "").trim();
   const pullR = await pool
     .request()
-    .input("evr_election_id", sql.Int, eid)
-    .input("voting_date", sql.NVarChar(16), vDate)
+    .input("evr_election_id", eid)
+    .input("voting_date", vDate)
     .query(`
       SELECT TOP 1 id, evr_election_id AS evrElectionId, voting_date AS votingDate, hub_page_url AS hubPageUrl,
              sos_turnout_url AS sosTurnoutUrl, sos_roster_url AS sosRosterUrl, statewide_voter_count AS statewideVoterCount,
@@ -2889,7 +2035,7 @@ export async function getEvRosterPullPayload(evrElectionId, votingDate) {
   const pullRow = pullR.recordset?.[0];
   if (!pullRow) return null;
   const pullId = Number(pullRow.id);
-  const countyR = await pool.request().input("pull_id", sql.Int, pullId).query(`
+  const countyR = await pool.request().input("pull_id", pullId).query(`
     SELECT county_name AS countyName, county_id AS countyId, registered_voters AS registeredVoters,
            in_person_votes_on_date AS inPersonVotesOnDate, total_in_person_votes_for_election AS totalInPersonVotesForElection,
            total_mail_votes_for_election AS totalMailVotesForElection, cumulative_total AS cumulativeTotal,
@@ -2899,8 +2045,8 @@ export async function getEvRosterPullPayload(evrElectionId, votingDate) {
   `);
   const countR = await pool
     .request()
-    .input("evr_election_id", sql.Int, eid)
-    .input("voting_date", sql.NVarChar(16), vDate)
+    .input("evr_election_id", eid)
+    .input("voting_date", vDate)
     .query(
       `SELECT COUNT(*) AS n FROM dbo.ev_roster_voters WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date`,
     );
@@ -2954,7 +2100,7 @@ export async function getEvRosterPullPayload(evrElectionId, votingDate) {
 
 export async function listEvRosterCountySources(evrElectionId) {
   const pool = await ensureDb();
-  const r = await pool.request().input("evr_election_id", sql.Int, Number(evrElectionId)).query(`
+  const r = await pool.request().input("evr_election_id", Number(evrElectionId)).query(`
     SELECT id, evr_election_id AS evrElectionId, county_key AS countyKey, variant_key AS variantKey,
            source_label AS sourceLabel, civix_county_name AS civixCountyName, civix_county_id AS civixCountyId,
            handler_key AS handlerKey, hub_page_url AS hubPageUrl, roster_url AS rosterUrl,
@@ -2994,20 +2140,20 @@ export async function upsertEvRosterCountySource(row) {
   if (row.id != null) {
     await pool
       .request()
-      .input("id", sql.Int, Number(row.id))
-      .input("source_label", sql.NVarChar(256), String(row.sourceLabel ?? ""))
-      .input("civix_county_name", sql.NVarChar(128), String(row.civixCountyName ?? ""))
-      .input("civix_county_id", sql.Int, row.civixCountyId != null ? Number(row.civixCountyId) : null)
-      .input("handler_key", sql.NVarChar(64), String(row.handlerKey ?? "generic_file_url"))
-      .input("hub_page_url", sql.NVarChar(2048), String(row.hubPageUrl ?? ""))
-      .input("roster_url", sql.NVarChar(2048), String(row.rosterUrl ?? ""))
-      .input("voting_method_scope", sql.NVarChar(16), String(row.votingMethodScope ?? "ALL"))
-      .input("date_scope", sql.NVarChar(32), String(row.dateScope ?? "SINGLE_DAY"))
-      .input("file_format", sql.NVarChar(16), String(row.fileFormat ?? "auto"))
-      .input("roster_party_scope", sql.NVarChar(16), String(row.rosterPartyScope ?? "COMBINED"))
-      .input("discovery_profile_key", sql.NVarChar(64), row.discoveryProfileKey != null ? String(row.discoveryProfileKey) : null)
-      .input("training_notes", sql.NVarChar(sql.MAX), row.trainingNotes != null ? String(row.trainingNotes) : null)
-      .input("is_enabled", sql.Bit, row.isEnabled === false ? 0 : 1)
+      .input("id", Number(row.id))
+      .input("source_label", String(row.sourceLabel ?? ""))
+      .input("civix_county_name", String(row.civixCountyName ?? ""))
+      .input("civix_county_id", row.civixCountyId != null ? Number(row.civixCountyId) : null)
+      .input("handler_key", String(row.handlerKey ?? "generic_file_url"))
+      .input("hub_page_url", String(row.hubPageUrl ?? ""))
+      .input("roster_url", String(row.rosterUrl ?? ""))
+      .input("voting_method_scope", String(row.votingMethodScope ?? "ALL"))
+      .input("date_scope", String(row.dateScope ?? "SINGLE_DAY"))
+      .input("file_format", String(row.fileFormat ?? "auto"))
+      .input("roster_party_scope", String(row.rosterPartyScope ?? "COMBINED"))
+      .input("discovery_profile_key", row.discoveryProfileKey != null ? String(row.discoveryProfileKey) : null)
+      .input("training_notes", row.trainingNotes != null ? String(row.trainingNotes) : null)
+      .input("is_enabled", row.isEnabled === false ? 0 : 1)
       .query(`
         UPDATE dbo.ev_roster_county_sources SET
           source_label = @source_label, civix_county_name = @civix_county_name,
@@ -3023,22 +2169,22 @@ export async function upsertEvRosterCountySource(row) {
   }
   await pool
     .request()
-    .input("evr_election_id", sql.Int, Number(row.evrElectionId))
-    .input("county_key", sql.NVarChar(64), String(row.countyKey ?? ""))
-    .input("variant_key", sql.NVarChar(64), variantKey)
-    .input("source_label", sql.NVarChar(256), String(row.sourceLabel ?? ""))
-    .input("civix_county_name", sql.NVarChar(128), String(row.civixCountyName ?? ""))
-    .input("civix_county_id", sql.Int, row.civixCountyId != null ? Number(row.civixCountyId) : null)
-    .input("handler_key", sql.NVarChar(64), String(row.handlerKey ?? "generic_file_url"))
-    .input("hub_page_url", sql.NVarChar(2048), String(row.hubPageUrl ?? ""))
-    .input("roster_url", sql.NVarChar(2048), String(row.rosterUrl ?? ""))
-    .input("voting_method_scope", sql.NVarChar(16), String(row.votingMethodScope ?? "ALL"))
-    .input("date_scope", sql.NVarChar(32), String(row.dateScope ?? "SINGLE_DAY"))
-    .input("file_format", sql.NVarChar(16), String(row.fileFormat ?? "auto"))
-    .input("roster_party_scope", sql.NVarChar(16), String(row.rosterPartyScope ?? "COMBINED"))
-    .input("discovery_profile_key", sql.NVarChar(64), row.discoveryProfileKey != null ? String(row.discoveryProfileKey) : null)
-    .input("training_notes", sql.NVarChar(sql.MAX), row.trainingNotes != null ? String(row.trainingNotes) : null)
-    .input("is_enabled", sql.Bit, row.isEnabled === false ? 0 : 1)
+    .input("evr_election_id", Number(row.evrElectionId))
+    .input("county_key", String(row.countyKey ?? ""))
+    .input("variant_key", variantKey)
+    .input("source_label", String(row.sourceLabel ?? ""))
+    .input("civix_county_name", String(row.civixCountyName ?? ""))
+    .input("civix_county_id", row.civixCountyId != null ? Number(row.civixCountyId) : null)
+    .input("handler_key", String(row.handlerKey ?? "generic_file_url"))
+    .input("hub_page_url", String(row.hubPageUrl ?? ""))
+    .input("roster_url", String(row.rosterUrl ?? ""))
+    .input("voting_method_scope", String(row.votingMethodScope ?? "ALL"))
+    .input("date_scope", String(row.dateScope ?? "SINGLE_DAY"))
+    .input("file_format", String(row.fileFormat ?? "auto"))
+    .input("roster_party_scope", String(row.rosterPartyScope ?? "COMBINED"))
+    .input("discovery_profile_key", row.discoveryProfileKey != null ? String(row.discoveryProfileKey) : null)
+    .input("training_notes", row.trainingNotes != null ? String(row.trainingNotes) : null)
+    .input("is_enabled", row.isEnabled === false ? 0 : 1)
     .query(`
       MERGE dbo.ev_roster_county_sources AS target
       USING (SELECT @evr_election_id AS evr_election_id, @county_key AS county_key, @variant_key AS variant_key) AS source
@@ -3090,8 +2236,8 @@ export async function getEvRosterExportRows(evrElectionId, votingDate) {
   const pool = await ensureDb();
   const r = await pool
     .request()
-    .input("evr_election_id", sql.Int, Number(evrElectionId))
-    .input("voting_date", sql.NVarChar(16), String(votingDate ?? "").trim())
+    .input("evr_election_id", Number(evrElectionId))
+    .input("voting_date", String(votingDate ?? "").trim())
     .query(`
       SELECT vuid, party, voting_date AS votingDate, county_name AS countyName, COALESCE(method_code, N'EV') AS methodCode
       FROM dbo.ev_roster_voters WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date
@@ -3110,12 +2256,12 @@ export async function getEvRosterCountyPullLog(evrElectionId, votingDate) {
   const pool = await ensureDb();
   const pullR = await pool
     .request()
-    .input("evr_election_id", sql.Int, Number(evrElectionId))
-    .input("voting_date", sql.NVarChar(16), String(votingDate ?? "").trim())
+    .input("evr_election_id", Number(evrElectionId))
+    .input("voting_date", String(votingDate ?? "").trim())
     .query(`SELECT TOP 1 id FROM dbo.ev_roster_pulls WHERE evr_election_id = @evr_election_id AND voting_date = @voting_date`);
   const pullId = pullR.recordset?.[0]?.id;
   if (pullId == null) return [];
-  const r = await pool.request().input("pull_id", sql.Int, Number(pullId)).query(`
+  const r = await pool.request().input("pull_id", Number(pullId)).query(`
     SELECT county_key AS countyKey, county_name AS countyName, handler_key AS handlerKey, ok,
            voter_count AS voterCount, source_url AS sourceUrl, message
     FROM dbo.ev_roster_county_pull_log WHERE pull_id = @pull_id ORDER BY county_name
