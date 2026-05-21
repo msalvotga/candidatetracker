@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
-import { listCivixElections } from "./lib/civix/api";
 import { loadCivixElectionBundle } from "./lib/civix/loadElection";
 import {
-  civixListToOptions,
   fetchCatalogFromBackend,
   fetchAppSettings,
   fetchIngestStatus,
@@ -77,24 +75,22 @@ export function App() {
         if (cancelled) return;
         setUseBackend(backendOk);
 
-        if (!backendOk && import.meta.env.DEV) {
+        if (!backendOk) {
           setElectionOptions([]);
           setSelectedElectionId(null);
           setLoadError(
-            "Local election API is not reachable. From the project folder run npm run server (wait for “Database ready”), then npm run dev -- --mode proxy — or run npm run dev:all once. Hard-refresh this page.",
+            import.meta.env.DEV
+              ? "Local election API is not reachable. From the project folder run npm run server (wait for “Database ready”), then npm run dev -- --mode proxy — or run npm run dev:all once. Hard-refresh this page."
+              : "Election API is not reachable. Check that /api/health works on this site (static rewrites to your API service) and DATABASE_URL is set on the API.",
           );
           return;
         }
 
         let options: ElectionOption[];
         let defaultCatalogId: string | null = null;
-        if (backendOk) {
-          const catalog = await fetchCatalogFromBackend();
-          options = catalog.options;
-          defaultCatalogId = catalog.defaultCatalogId;
-        } else {
-          options = civixListToOptions(await listCivixElections());
-        }
+        const catalog = await fetchCatalogFromBackend();
+        options = catalog.options;
+        defaultCatalogId = catalog.defaultCatalogId;
         if (cancelled) return;
         setElectionOptions(options);
         const preferred =

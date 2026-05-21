@@ -86,6 +86,7 @@ import { buildCountyRaceMappingView } from "./lib/countyRaceMappingView.mjs";
 import { collectCivixSosRaces } from "./lib/civixSosRaces.mjs";
 import { inferElectionPartyFromConfig } from "./lib/countySosRaceMatch.mjs";
 import { mergeLinkedCountyOverridesIntoCivix } from "./lib/mergeLinkedCountyIntoCivix.mjs";
+import { civixProxyHandler } from "./lib/civixProxy.mjs";
 
 /** Only civix election wired for full ingest + live merge in this deployment. */
 const TRACKED_CIVIX_ELECTION_ID = 56181;
@@ -483,12 +484,18 @@ export function createApiApp() {
   const PORT = Number(process.env.PORT || 3847);
 
   const app = express();
+  const corsOrigins = [/localhost:\d+$/, /^127\.0\.0\.1:\d+$/, /\.onrender\.com$/];
   app.use(
     cors({
-      origin: [/localhost:\d+$/, /^127\.0\.0\.1:\d+$/],
+      origin: corsOrigins,
     }),
   );
   app.use(express.json({ limit: "80mb" }));
+
+  /** Texas Civix ENR — browser uses /api-ivis-system on same host (Vite or static rewrite → here). */
+  app.use("/api-ivis-system", (req, res) => {
+    void civixProxyHandler(req, res);
+  });
 
   async function shouldAutoIngest() {
     const settings = await getAppSettings();
