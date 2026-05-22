@@ -12,7 +12,10 @@ import {
   setDefaultElectionCatalog,
   updateElectionSourceConfig,
   updateAppSettings,
+  prepareCivixConnect,
+  clearCivixConnect,
   type AppSettings,
+  type CivixConnectPrepare,
   type DbTablePreview,
   type DbOverview,
   type ElectionSourceConfig,
@@ -69,7 +72,7 @@ export function SettingsScreen({
     chambersSourceUrl: "",
     civixCookieConfigured: false,
   });
-  const [civixCookieInput, setCivixCookieInput] = useState("");
+  const [civixConnect, setCivixConnect] = useState<CivixConnectPrepare | null>(null);
   const [forceMsg, setForceMsg] = useState<string | null>(null);
   const [forceRefreshing, setForceRefreshing] = useState(false);
   const [ingestProgress, setIngestProgress] = useState<IngestProgress | null>(null);
@@ -144,23 +147,30 @@ export function SettingsScreen({
     }
   }
 
-  async function onSaveCivixCookie() {
+  async function onPrepareCivixConnect() {
     setBusy(true);
     setSaveMsg(null);
     try {
-      const updated = await updateAppSettings({
-        ...appSettings,
-        civixCookie: civixCookieInput.trim(),
-      });
-      setAppSettings(updated);
-      setCivixCookieInput("");
-      setSaveMsg(
-        civixCookieInput.trim()
-          ? "Civix session cookie saved. Force update can pull live SOS from Render."
-          : "Civix session cookie cleared.",
-      );
+      setCivixConnect(await prepareCivixConnect());
+      setSaveMsg("Follow the steps below to link Civix once (bookmarklet).");
     } catch (e) {
-      setSaveMsg(e instanceof Error ? e.message : "Failed to save Civix cookie");
+      setSaveMsg(e instanceof Error ? e.message : "Failed to prepare Civix link");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onClearCivixConnect() {
+    setBusy(true);
+    setSaveMsg(null);
+    try {
+      await clearCivixConnect();
+      setCivixConnect(null);
+      const settings = await fetchAppSettings();
+      setAppSettings(settings);
+      setSaveMsg("Civix link removed. Force update will use the last SOS snapshot until you link again.");
+    } catch (e) {
+      setSaveMsg(e instanceof Error ? e.message : "Failed to clear Civix link");
     } finally {
       setBusy(false);
     }
@@ -427,34 +437,65 @@ export function SettingsScreen({
             <option value="UTC">UTC</option>
           </select>
         </label>
-        <label className="enr-field">
-          Civix session cookie (for live SOS on Render)
-          <textarea
-            className="enr-input"
-            rows={3}
-            placeholder={
-              appSettings.civixCookieConfigured
-                ? "Cookie is saved. Paste a new value to replace, or clear and Save."
-                : "On goelect.txelections.civixapps.com: DevTools → Network → countyInfo request → copy Cookie header"
-            }
-            value={civixCookieInput}
-            disabled={busy}
-            onChange={(e) => setCivixCookieInput(e.target.value)}
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <button type="button" className="enr-secondaryBtn" disabled={busy} onClick={() => void onSaveCivixCookie()}>
-            Save Civix cookie
-          </button>
+        <div className="enr-field">
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Texas SOS / Civix (live statewide on Render)</div>
           {appSettings.civixCookieConfigured ? (
-            <span className="enr-muted"> Live Civix ingest enabled on the API server.</span>
+            <p className="enr-saveOk" style={{ margin: "0 0 8px" }}>
+              Civix is linked. Force update pulls fresh SOS automatically — no copy/paste each time.
+            </p>
           ) : (
-            <span className="enr-muted">
-              {" "}
-              Without this, Render uses the last SOS snapshot; your browser can still load countyInfo JSON directly.
-            </span>
+            <p className="enr-muted" style={{ margin: "0 0 8px" }}>
+              One-time setup: link your browser session to the server. After that, every force update uses it. Without
+              a link, the app uses the last SOS snapshot already in the database.
+            </p>
           )}
-        </label>
+          <div className="enr-settings__actions" style={{ flexWrap: "wrap", gap: 8 }}>
+            <button type="button" className="enr-secondaryBtn" disabled={busy} onClick={() => void onPrepareCivixConnect()}>
+              {appSettings.civixCookieConfigured ? "Renew Civix link" : "Link Civix (one time)"}
+            </button>
+            {appSettings.civixCookieConfigured ? (
+              <button type="button" className="enr-secondaryBtn" disabled={busy} onClick={() => void onClearCivixConnect()}>
+                Unlink Civix
+              </button>
+            ) : null}
+          </div>
+          {civixConnect ? (
+            <div className="enr-panel" style={{ marginTop: 12, padding: 12 }}>
+              <ol className="enr-muted" style={{ margin: "0 0 12px", paddingLeft: 20 }}>
+                {civixConnect.steps.map((s) => (
+                  <li key={s} style={{ marginBottom: 6 }}>
+                    {s}
+                  </li>
+                ))}
+              </ol>
+              <a className="enr-primaryBtn" href={civixConnect.bookmarklet} style={{ display: "inline-block", marginBottom: 8 }}>
+                Link Civix — drag to bookmarks bar
+              </a>
+              <button
+                type="button"
+                className="enr-secondaryBtn"
+                style={{ marginTop: 8 }}
+                disabled={busy}
+                onClick={() => {
+                  void (async () => {
+                    setBusy(true);
+                    try {
+                      setAppSettings(await fetchAppSettings());
+                      setSaveMsg("Refreshed link status.");
+                    } finally {
+                      setBusy(false);
+                    }
+                  })();
+                }}
+              >
+                I clicked the bookmarklet — check status
+              </button>
+              <p className="enr-muted" style={{ margin: "8px 0 0", fontSize: 12 }}>
+                Token expires {new Date(civixConnect.expiresAt).toLocaleTimeString()}.
+              </p>
+            </div>
+          ) : null}
+        </div>
         <div className="enr-settings__actions">
           <select
             className="enr-input"

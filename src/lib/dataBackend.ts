@@ -616,6 +616,26 @@ export async function fetchImportLog(limit = 200): Promise<ImportLogPayload> {
   return r.json() as Promise<ImportLogPayload>;
 }
 
+export interface CivixConnectPrepare {
+  token: string;
+  expiresAt: string;
+  apiBase: string;
+  bookmarklet: string;
+  steps: string[];
+}
+
+/** One-time Civix link (bookmarklet on goelect site). After this, force update uses the saved session automatically. */
+export async function prepareCivixConnect(): Promise<CivixConnectPrepare> {
+  const r = await apiFetch("/api/settings/civix-connect-prepare", { method: "POST" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json() as Promise<CivixConnectPrepare>;
+}
+
+export async function clearCivixConnect(): Promise<void> {
+  const r = await apiFetch("/api/settings/civix-cookie", { method: "DELETE" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+}
+
 export async function forceRefreshAllSources(electionId: string | number = 56181): Promise<ForceRefreshResult> {
   const id =
     typeof electionId === "number" && Number.isFinite(electionId)
@@ -623,20 +643,10 @@ export async function forceRefreshAllSources(electionId: string | number = 56181
       : String(electionId ?? "").trim();
   if (!id) throw new Error("electionId required");
 
-  let civixBundle: { election: Record<string, unknown>; county: Record<string, unknown> } | null = null;
-  const num = Number(id);
-  if (Number.isFinite(num) && String(num) === id) {
-    const { fetchCivixBundleForIngest } = await import("./civix/api");
-    civixBundle = await fetchCivixBundleForIngest(num);
-  }
-
   const r = await apiFetch("/api/ingest/refresh-once", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      electionId: id,
-      ...(civixBundle ? { civixBundle } : {}),
-    }),
+    body: JSON.stringify({ electionId: id }),
   });
   if (!r.ok && r.status !== 207) throw new Error(`HTTP ${r.status}`);
   return (await r.json()) as ForceRefreshResult;

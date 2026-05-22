@@ -78,6 +78,7 @@ import {
   setDefaultElectionCatalog,
   updateManualElection,
   updateAppSettings,
+  upsertAppSetting,
   upsertCountySosRaceLink,
   deleteCountySosRaceLink,
   upsertCountySosManualVote,
@@ -89,6 +90,7 @@ import { collectCivixSosRaces } from "./lib/civixSosRaces.mjs";
 import { inferElectionPartyFromConfig } from "./lib/countySosRaceMatch.mjs";
 import { mergeLinkedCountyOverridesIntoCivix } from "./lib/mergeLinkedCountyIntoCivix.mjs";
 import { civixProxyHandler } from "./lib/civixProxy.mjs";
+import { buildCivixConnectBookmarklet, createCivixConnectHelpers } from "./lib/civixConnect.mjs";
 import { decodeCatalogIdFromPath } from "./lib/catalogIdPath.mjs";
 
 /** Only civix election wired for full ingest + live merge in this deployment. */
@@ -567,19 +569,31 @@ export function createApiApp() {
   const PORT = Number(process.env.PORT || 3847);
 
   const app = express();
-  const corsOrigins = [/localhost:\d+$/, /^127\.0\.0\.1:\d+$/, /^https:\/\/[a-z0-9-]+\.onrender\.com$/i];
+  const corsPatterns = [/localhost:\d+$/, /^127\.0\.0\.1:\d+$/, /^https:\/\/[a-z0-9-]+\.onrender\.com$/i];
   const extra = String(process.env.CORS_ALLOWED_ORIGINS ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
   for (const o of extra) {
     try {
-      corsOrigins.push(new RegExp(`^${o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"));
+      corsPatterns.push(new RegExp(`^${o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"));
     } catch {
-      corsOrigins.push(o);
+      corsPatterns.push(o);
     }
   }
-  app.use(cors({ origin: corsOrigins }));
+  const civixConnect = createCivixConnectHelpers(getAppSettings, upsertAppSetting);
+  app.use(
+    cors({
+      origin(origin, callback) {
+        if (!origin) return callback(null, true);
+        if (origin === "https://goelect.txelections.civixapps.com") return callback(null, true);
+        if (corsPatterns.some((p) => (typeof p === "string" ? origin === p : p.test(origin)))) {
+          return callback(null, true);
+        }
+        callback(null, false);
+      },
+    }),
+  );
   app.use(express.json({ limit: "80mb" }));
 
   /** Texas Civix ENR — browser uses /api-ivis-system on same host (Vite or static rewrite → here). */
@@ -1403,6 +1417,60 @@ export function createApiApp() {
       const settings = await getAppSettings();
       const { civixCookie: _omit, ...publicSettings } = settings;
       res.json(publicSettings);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/settings/civix-connect-prepare", async (req, res) => {
+    try {
+      await ensureDb();
+      const { token, expiresAt } = await civixConnect.issueConnectToken();
+      const proto = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+      const host = req.headers["x-forwarded-host"] || req.headers.host || `127.0.0.1:${PORT}`;
+      const apiBase = `${proto}://${host}`;
+      res.json({
+        token,
+        expiresAt,
+        apiBase,
+        bookmarklet: buildCivixConnectBookmarklet(apiBase, token),
+        steps: [
+          "Open https://goelect.txelections.civixapps.com/ivis-enr-ui/ in a tab (normal browsing).",
+          "Drag the bookmarklet below to your bookmarks bar (one time).",
+          "While on the goelect site, click the bookmarklet — your session is saved on the server.",
+          "Return here and run Force update anytime; no copy/paste per update.",
+        ],
+      });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/settings/civix-cookie", async (req, res) => {
+    try {
+      await ensureDb();
+      const token = String(req.body?.token ?? "").trim();
+      const civixCookie = String(req.body?.civixCookie ?? "").trim();
+      if (!civixCookie) return res.status(400).json({ ok: false, error: "civixCookie required" });
+      if (!(await civixConnect.verifyConnectToken(token))) {
+        return res.status(403).json({ ok: false, error: "Invalid or expired link token. Generate a new bookmarklet in Settings." });
+      }
+      await updateAppSettings({ civixCookie });
+      await civixConnect.clearConnectToken();
+      res.json({ ok: true, civixCookieConfigured: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  app.delete("/api/settings/civix-cookie", async (_req, res) => {
+    try {
+      await ensureDb();
+      await updateAppSettings({ civixCookie: "" });
+      res.json({ ok: true, civixCookieConfigured: false });
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: String(e?.message || e) });

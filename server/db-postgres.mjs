@@ -1001,7 +1001,7 @@ export async function getAppSettings() {
      WHERE setting_key IN (
        N'disable_auto_ingest', N'auto_refresh_enabled', N'auto_refresh_interval_sec', N'sos_countyinfo_url',
        N'harris_source_url', N'galveston_source_url', N'jefferson_source_url', N'montgomery_source_url', N'chambers_source_url',
-       N'display_time_zone', N'civix_cookie'
+       N'display_time_zone', N'civix_cookie', N'civix_connect_token'
      )`,
   );
   const map = new Map(r.recordset.map((x) => [String(x.settingKey), String(x.valueJson)]));
@@ -1019,7 +1019,24 @@ export async function getAppSettings() {
     /** Stored session cookie for Civix (not returned to clients). */
     civixCookie: map.get("civix_cookie") ?? "",
     civixCookieConfigured: Boolean(String(map.get("civix_cookie") ?? "").trim()),
+    civixConnectTokenJson: map.get("civix_connect_token") ?? "",
   };
+}
+
+/** @param {string} key @param {string} value */
+export async function upsertAppSetting(key, value) {
+  const pool = await ensureDb();
+  await pool
+    .request()
+    .input("setting_key", key)
+    .input("value_json", String(value))
+    .query(`
+      MERGE dbo.app_settings AS target
+      USING (SELECT @setting_key AS setting_key, @value_json AS value_json) AS source
+      ON target.setting_key = source.setting_key
+      WHEN MATCHED THEN UPDATE SET value_json = source.value_json, updated_at = SYSUTCDATETIME()
+      WHEN NOT MATCHED THEN INSERT (setting_key, value_json) VALUES (source.setting_key, source.value_json);
+    `);
 }
 
 export async function updateAppSettings({
