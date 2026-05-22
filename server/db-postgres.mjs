@@ -1360,7 +1360,7 @@ export async function appendVoteHistoryIfChanged({ electionId, sourceKey, captur
         SELECT TOP 1 early_votes AS earlyVotes, election_day_votes AS electionDayVotes, total_votes AS totalVotes, percent_of_votes AS percentOfVotes
         FROM dbo.vote_update_history
         WHERE election_id = @election_id AND source_key = @source_key AND contest_name = @contest_name AND choice_name = @choice_name
-          AND ISNULL(party_name, N'') = ISNULL(@party_name, N'')
+          AND COALESCE(party_name, '') = COALESCE(@party_name, '')
         ORDER BY id DESC
       `);
     const p = prev.recordset?.[0];

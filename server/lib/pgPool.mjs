@@ -139,7 +139,10 @@ function mapPgRows(rows, aliasMap) {
  * @param {Record<string, unknown>} params
  */
 export async function pgQuery(executor, text, params = {}) {
-  const { pgText, values } = bindParams(text, params);
+  let { pgText, values } = bindParams(text, params);
+  if (/\bnvarchar\b/i.test(pgText)) {
+    pgText = pgText.replace(/\bNVARCHAR\s*\(\s*\d+\s*\)/gi, "TEXT").replace(/\bNVARCHAR\b/gi, "TEXT");
+  }
   const result = await executor.query(pgText, values);
   const aliasMap = buildAliasMap(pgText);
   const rows = mapPgRows(result.rows, aliasMap);

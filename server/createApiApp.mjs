@@ -1687,15 +1687,27 @@ export function createApiApp() {
     const { election, county, sosCountyInfoUrlConfigured, sosCountyInfoUrlUsed, civixFromCache, civixCacheNote } =
       bundle;
     const mergedSd4 = await mergeSd4CountyOverridesIntoCivix(num, election, county);
-    const merged = await mergeLinkedCountyOverridesIntoCivix(num, mergedSd4.electionPayload, mergedSd4.countyDoc);
+    let electionPayload = mergedSd4.electionPayload;
+    let countyDoc = mergedSd4.countyDoc;
+    let countyMergeWarning;
+    try {
+      const merged = await mergeLinkedCountyOverridesIntoCivix(num, electionPayload, countyDoc);
+      electionPayload = merged.electionPayload;
+      countyDoc = merged.countyDoc;
+    } catch (mergeErr) {
+      console.error("mergeLinkedCountyOverridesIntoCivix failed:", mergeErr);
+      countyMergeWarning =
+        "County race links could not be applied to this response. Redeploy the API if this persists (Postgres SQL compatibility).";
+    }
     return {
       provider: "civix",
       civixElectionId: num,
       sosCountyInfoUrlConfigured,
       sosCountyInfoUrlUsed,
-      election: merged.electionPayload,
-      county: merged.countyDoc,
+      election: electionPayload,
+      county: countyDoc,
       ...(civixFromCache ? { civixFromCache: true, civixCacheNote } : {}),
+      ...(countyMergeWarning ? { warnings: [countyMergeWarning] } : {}),
     };
   }
 
