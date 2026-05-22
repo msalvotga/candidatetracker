@@ -16,6 +16,7 @@ import { ReportingRibbon } from "./components/ReportingRibbon";
 import { RaceSummary } from "./components/RaceSummary";
 import { CountyBreakdown } from "./components/CountyBreakdown";
 import { SettingsScreen } from "./components/SettingsScreen";
+import { APP_VERSION } from "./lib/appVersion";
 import { EV_ROSTER_ENABLED } from "./lib/featureFlags";
 import { EvRosterScreen } from "./components/EvRosterScreen";
 
@@ -501,7 +502,7 @@ export function App() {
       </main>
 
       <footer className="enr-footer">
-        <div>1.18 Beta</div>
+        <div>{APP_VERSION}</div>
       </footer>
     </div>
   );

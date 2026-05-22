@@ -1,7 +1,7 @@
 {
   "name": "electionnighttracker",
   "private": true,
-  "version": "0.0.1",
+  "version": "1.19.0955",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,7 +10,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "db:migrate": "node server/scripts/migrate-sqlite-to-postgres.mjs",
-    "db:counts": "node server/scripts/inspectDbCounts.mjs"
+    "db:counts": "node server/scripts/inspectDbCounts.mjs",
+    "version:bump": "node scripts/bump-version.mjs"
   },
   "dependencies": {
     "cors": "^2.8.6",

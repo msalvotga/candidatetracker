@@ -1,0 +1,20 @@
+---
+description: Bump app version on every user-facing change
+alwaysApply: true
+---
+
+# App version (1.DDD.HHMM)
+
+Format: `1.{days}.{HHMM}`
+
+- **days**: whole days since **3 May 2026** (local midnight), e.g. `19` → `1.19.…`
+- **HHMM**: 24-hour time of this update (no colon), e.g. 9:55 AM → `0955` → `1.19.0955`
+
+## On every change
+
+When finishing a user-facing or deployable change:
+
+1. Run `npm run version:bump` (or set `APP_VERSION` in `src/lib/appVersion.ts` and `version` in `package.json` to match).
+2. Footer uses `APP_VERSION` from `src/lib/appVersion.ts` — do not hardcode the version in components.
+
+Single source of truth: `src/lib/appVersion.ts` (`APP_VERSION`).
