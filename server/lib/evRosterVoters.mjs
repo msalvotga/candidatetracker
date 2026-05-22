@@ -11,11 +11,11 @@ export function normalizeVoterCountyFilter(counties, county) {
 
 /**
  * @param {string[]} counties
- * @param {"sqlite" | "mssql"} dialect
+ * @param {"postgres" | "mssql"} dialect
  */
-export function countyInClause(counties, dialect = "sqlite") {
+export function countyInClause(counties, dialect = "postgres") {
   if (!counties.length) return { sql: "", params: [] };
-  if (dialect === "mssql") {
+  if (dialect === "postgres" || dialect === "mssql") {
     const params = {};
     const parts = counties.map((name, i) => {
       const key = `county_${i}`;

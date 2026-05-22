@@ -8,7 +8,9 @@
     "server": "node --import dotenv/config --max-old-space-size=4096 server/index.mjs",
     "dev:all": "concurrently -k \"npm run server\" \"vite --mode proxy\"",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "db:migrate": "node server/scripts/migrate-sqlite-to-postgres.mjs",
+    "db:counts": "node server/scripts/inspectDbCounts.mjs"
   },
   "dependencies": {
     "cors": "^2.8.6",
@@ -16,16 +18,15 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "jszip": "^3.10.1",
-    "mssql": "^12.3.1",
     "pdf-parse": "^2.4.5",
     "pg": "^8.21.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "sql.js": "^1.12.0",
     "undici": "^7.25.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "sql.js": "^1.12.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",

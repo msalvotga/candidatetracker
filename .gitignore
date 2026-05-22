@@ -12,11 +12,12 @@ dist
 server/data/election-feed-configs.json
 server/data/election-source-configs.json
 
-# SQLite (manual elections + future snapshots)
+# Legacy SQLite (migrated to PostgreSQL — safe to delete locally)
 server/data/*.db
 server/data/*.db-wal
 server/data/*.db-shm
 server/data/*.db-journal
+elections.db
 
 # Logs and local scratch
 debug.log

@@ -88,6 +88,8 @@ import { buildCountyRaceMappingView } from "./lib/countyRaceMappingView.mjs";
 import { collectCivixSosRaces } from "./lib/civixSosRaces.mjs";
 import { inferElectionPartyFromConfig } from "./lib/countySosRaceMatch.mjs";
 import { mergeLinkedCountyOverridesIntoCivix } from "./lib/mergeLinkedCountyIntoCivix.mjs";
+import { civixProxyHandler } from "./lib/civixProxy.mjs";
+import { decodeCatalogIdFromPath } from "./lib/catalogIdPath.mjs";
 
 /** Only civix election wired for full ingest + live merge in this deployment. */
 const TRACKED_CIVIX_ELECTION_ID = 56181;
@@ -530,6 +532,11 @@ export function createApiApp() {
   }
   app.use(cors({ origin: corsOrigins }));
   app.use(express.json({ limit: "80mb" }));
+
+  /** Texas Civix ENR — browser uses /api-ivis-system on same host (Vite or static rewrite → here). */
+  app.use("/api-ivis-system", (req, res) => {
+    void civixProxyHandler(req, res);
+  });
 
   async function shouldAutoIngest() {
     const settings = await getAppSettings();
@@ -1525,10 +1532,9 @@ export function createApiApp() {
     };
   }
 
-  async function respondElectionByCatalogId(req, res) {
-    const id = req.query.id;
+  async function respondElectionByCatalogId(id, res) {
     if (typeof id !== "string" || !id.includes(":")) {
-      return res.status(400).json({ error: "Query `id` must be like civix:…, manual:…, or election:…" });
+      return res.status(400).json({ error: "Catalog id must be like civix:…, manual:…, or election:…" });
     }
 
     let provider;
@@ -1573,13 +1579,63 @@ export function createApiApp() {
       return res.status(400).json({ error: "Unknown provider" });
     } catch (e) {
       console.error(e);
-      res.status(502).json({ error: String(e.message || e) });
+      return res.status(502).json({ error: String(e.message || e) });
     }
   }
 
-  app.get("/api/election", respondElectionByCatalogId);
-  /** Legacy path used by some Render deployments. */
-  app.get("/api/election-data", respondElectionByCatalogId);
+  function catalogIdFromElectionDataRequest(req) {
+    if (typeof req.body?.catalogId === "string") return req.body.catalogId;
+    if (typeof req.query.catalogId === "string") return req.query.catalogId;
+    if (typeof req.query.id === "string") return req.query.id;
+    if (typeof req.query.token === "string") {
+      try {
+        return decodeCatalogIdFromPath(req.query.token);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  async function handleElectionDataRequest(req, res) {
+    const id = catalogIdFromElectionDataRequest(req);
+    if (typeof id !== "string" || !id.includes(":")) {
+      return res.status(400).json({
+        error: "Pass catalogId (e.g. civix:56181) as ?catalogId=… or POST JSON { catalogId }",
+        hint: "Render static rewrites often drop POST bodies — prefer GET ?catalogId=",
+      });
+    }
+    return respondElectionByCatalogId(id, res);
+  }
+
+  app.get("/api/election-data", handleElectionDataRequest);
+  app.post("/api/election-data", handleElectionDataRequest);
+
+  /** Base64url token in path (direct API access only). */
+  app.get("/api/election-data/:token", async (req, res) => {
+    try {
+      const id = decodeCatalogIdFromPath(String(req.params.token ?? ""));
+      return respondElectionByCatalogId(id, res);
+    } catch {
+      return res.status(400).json({ error: "Invalid election-data token" });
+    }
+  });
+
+  /** @deprecated Prefer /api/election-data/:token */
+  app.get("/api/election/:catalogIdEncoded", async (req, res) => {
+    const id = decodeURIComponent(String(req.params.catalogIdEncoded ?? ""));
+    return respondElectionByCatalogId(id, res);
+  });
+
+  app.get("/api/election", async (req, res) => {
+    const id = req.query.id;
+    if (typeof id !== "string" || !id.includes(":")) {
+      return res.status(400).json({
+        error: "Query `id` must be like civix:…, manual:…, or election:… (or use /api/election/:id)",
+      });
+    }
+    return respondElectionByCatalogId(id, res);
+  });
 
   app.post("/api/manual-elections", async (req, res) => {
     try {
@@ -2097,7 +2153,13 @@ export function createApiApp() {
   app.use((req, res) => {
     const path = String(req.path ?? req.url ?? "").split("?")[0];
     if (path === "/api" || path.startsWith("/api/")) {
-      res.status(404).json({ error: `No API route for ${path}` });
+      const hint =
+        path === "/api/$1"
+          ? "Render rewrite used $1 — use Destination https://YOUR-API.onrender.com/api/* (asterisk, not $1)."
+          : path === "/api/election" || path.startsWith("/api/election/")
+            ? "Use /api/election-data/{token} — catalog ids must not include raw colons in the path"
+            : undefined;
+      res.status(404).json({ error: `No API route for ${path}`, hint });
       return;
     }
     res.status(404).send("Not found");

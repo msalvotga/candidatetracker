@@ -14,7 +14,7 @@ export function isPostgresMode() {
  * Covers the MERGE patterns used in db-mssql.mjs.
  * @param {string} sql
  */
-function translateMergeForPg(sql) {
+export function translateMergeForPg(sql) {
   if (!/\bMERGE\b/i.test(sql)) return sql;
 
   const table = sql.match(/\bMERGE\s+(?:dbo\.)?(\w+)\b/i)?.[1];
