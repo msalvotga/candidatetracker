@@ -24,10 +24,6 @@ function countyLabel(key: string) {
   return hit?.label ?? key.replace(/_/g, " ");
 }
 
-function rowKey(raceId: string, countyKey: string) {
-  return `${raceId}|${countyKey}`;
-}
-
 function emptyCandidateDraft(): CandidateDraft {
   return { earlyVotes: "0", electionDayVotes: "0", totalVotes: "0" };
 }
@@ -90,7 +86,6 @@ function ManualRaceTable({
     (countyKey: string, candidateId: string, field: keyof CandidateDraft, value: string) => {
       setDrafts((prev) => {
         const next = new Map(prev);
-        const rk = rowKey(race.id, countyKey);
         const row = { ...(next.get(countyKey) ?? {}) };
         row[candidateId] = { ...(row[candidateId] ?? emptyCandidateDraft()), [field]: value };
         next.set(countyKey, row);
