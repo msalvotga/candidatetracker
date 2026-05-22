@@ -1267,7 +1267,7 @@ export async function deleteElectionSourceConfig(electionId) {
   const wasDefault = !!row.isDefaultCatalog;
   const importLike = `${id}:%`;
 
-  await pool.request().input("election_id", id).input("import_like", importLike).query(`
+  await pool.request().input("election_id", id).input("import_like", importLike).batch(`
     DELETE FROM dbo.county_sos_race_vote_source WHERE election_id = @election_id;
     DELETE FROM dbo.county_sos_manual_votes WHERE election_id = @election_id;
     DELETE FROM dbo.county_sos_race_links WHERE election_id = @election_id;
