@@ -233,14 +233,20 @@ export class PgTransaction {
   }
 }
 
+/** MSSQL-style constructors so `new sql.Transaction(pool)` works in db-postgres.mjs. */
+export class CompatSqlTransaction extends PgTransaction {}
+
+export class CompatSqlRequest {
+  /** @param {PgTransaction} transaction */
+  constructor(transaction) {
+    return transaction.request();
+  }
+}
+
 /** MSSQL driver shim for legacy db-mssql query shapes. */
 export const sql = {
-  Transaction(_compatPool) {
-    return new PgTransaction(_compatPool);
-  },
-  Request(transaction) {
-    return transaction.request();
-  },
+  Transaction: CompatSqlTransaction,
+  Request: CompatSqlRequest,
 };
 
 /**
