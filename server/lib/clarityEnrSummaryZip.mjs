@@ -1,5 +1,6 @@
 import JSZip from "jszip";
 import { parse } from "csv-parse/sync";
+import { assertLikelyZip } from "./zipFetchUtils.mjs";
 
 /**
  * Shared ENR Clarity pipeline: summary.zip → summary.csv.
@@ -15,7 +16,9 @@ async function fetchSummaryCsvRowsFromZip(zipUrl) {
   });
   if (!res.ok) throw new Error(`Clarity summary zip HTTP ${res.status} (${zipUrl.slice(0, 80)}…)`);
 
-  const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+  const buf = Buffer.from(await res.arrayBuffer());
+  assertLikelyZip(buf, { url: zipUrl, contentType: res.headers.get("content-type") });
+  const zip = await JSZip.loadAsync(buf);
   const summary = zip.file("summary.csv") ?? Object.values(zip.files).find((f) => /summary\.csv$/i.test(f.name));
   if (!summary) throw new Error("summary.csv not found in Clarity summary.zip");
 

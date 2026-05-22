@@ -1,11 +1,16 @@
+import { apiUrl } from "../apiBase";
+
 /** Public Texas Civix ENR (same host the SOS night reporting site uses). */
 export const TX_CIVIX_ORIGIN = "https://goelect.txelections.civixapps.com";
 
-/**
- * Always use a same-origin path so Vite (dev) or the API / static rewrites (production) can proxy to Civix.
- * Do not call goelect.txelections.civixapps.com from the browser — it blocks cross-origin requests.
- */
+/** Same-origin path proxied to Civix (Vite dev, API service, or static rewrite). */
 export const TX_CIVIX_API = "/api-ivis-system/api";
+
+/** Civix API path via app API host when VITE_API_BASE_URL is set (split Render frontend + API). */
+export function civixApiUrl(subpath: string): string {
+  const p = subpath.startsWith("/") ? subpath : `/${subpath}`;
+  return apiUrl(`${TX_CIVIX_API}${p}`);
+}
 
 /**
  * County JSON on Civix — only the trailing election id (often five digits) changes per election.

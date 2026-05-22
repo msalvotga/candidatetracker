@@ -1,27 +1,13 @@
 import { decodeUploadPayload } from "./b64.mjs";
+import { buildCivixFetchHeaders } from "./civixCredentials.mjs";
 
 const CIVIX_API =
   process.env.CIVIX_API_BASE?.trim() ||
   "https://goelect.txelections.civixapps.com/api-ivis-system/api";
 
-function civixFetchHeaders() {
-  /** @type {Record<string, string>} */
-  const headers = {
-    Accept: "application/json, text/plain, */*",
-    "User-Agent":
-      process.env.CIVIX_USER_AGENT?.trim() ||
-      "Mozilla/5.0 (compatible; electionnighttracker/1.0; +https://github.com/)",
-    Referer:
-      process.env.CIVIX_REFERER?.trim() || "https://goelect.txelections.civixapps.com/ivis-enr-ui/",
-    Origin: process.env.CIVIX_ORIGIN?.trim() || "https://goelect.txelections.civixapps.com",
-  };
-  const cookie = process.env.CIVIX_COOKIE?.trim();
-  if (cookie) headers.Cookie = cookie;
-  return headers;
-}
-
-async function fetchJson(url) {
-  const res = await fetch(url, { headers: civixFetchHeaders() });
+/** @param {string} url @param {string} [requestCookie] */
+async function fetchJson(url, requestCookie) {
+  const res = await fetch(url, { headers: await buildCivixFetchHeaders(requestCookie) });
   if (!res.ok) {
     const hint =
       res.status === 403
@@ -37,8 +23,9 @@ async function fetchJson(url) {
  * detect that and fail softly so callers can fall back to the default countyInfo endpoint.
  * @returns {{ ok: true, data: unknown } | { ok: false, error: string }}
  */
-async function tryFetchCountyJson(url) {
-  const res = await fetch(url, { headers: civixFetchHeaders() });
+/** @param {string} url @param {string} [requestCookie] */
+async function tryFetchCountyJson(url, requestCookie) {
+  const res = await fetch(url, { headers: await buildCivixFetchHeaders(requestCookie) });
   if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
   const ct = (res.headers.get("content-type") || "").toLowerCase();
   if (ct.includes("pdf")) return { ok: false, error: "content-type is PDF" };
@@ -89,16 +76,17 @@ export async function fetchCivixElectionBundleWithOverrides(civixElectionId, ove
   const defaultCountyUrl = `${CIVIX_API}/s3/enr/election/countyInfo/${civixElectionId}`;
   const override = overrides?.countyInfoUrl?.trim();
   const sosCountyInfoUrlConfigured = override || "";
+  const requestCookie = overrides?.requestCookie;
 
-  const electionP = fetchJson(electionUrl);
+  const electionP = fetchJson(electionUrl, requestCookie);
   /** @type {{ used: string }} */
   const countyFetch = { used: defaultCountyUrl };
   const countyP = (async () => {
     if (!override) {
       countyFetch.used = defaultCountyUrl;
-      return fetchJson(defaultCountyUrl);
+      return fetchJson(defaultCountyUrl, requestCookie);
     }
-    const attempt = await tryFetchCountyJson(override);
+    const attempt = await tryFetchCountyJson(override, requestCookie);
     if (attempt.ok) {
       countyFetch.used = override;
       return attempt.data;
@@ -109,7 +97,7 @@ export async function fetchCivixElectionBundleWithOverrides(civixElectionId, ove
       detail: attempt.error,
     });
     countyFetch.used = defaultCountyUrl;
-    return fetchJson(defaultCountyUrl);
+    return fetchJson(defaultCountyUrl, requestCookie);
   })();
 
   const [election, county] = await Promise.all([electionP, countyP]);

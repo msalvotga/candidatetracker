@@ -2,7 +2,7 @@ import { PDFParse } from "pdf-parse";
 import { assertLikelyPdf } from "./pdfFetchUtils.mjs";
 
 const HARRIS_CUMULATIVE_PDF_URL = "https://appfiles.harrisvotes.com/harrisvotes/prd/Data/5226/cumulative.pdf";
-const HARRIS_CONTEST_REGEX = /state senate,\s*district\s*4\s*-\s*unexpired term/i;
+const HARRIS_CONTEST_REGEX = /state senate,\s*district\s*4(?:\s*-\s*unexpired term)?/i;
 
 function asNum(v) {
   const n = Number(String(v ?? "").replace(/,/g, ""));

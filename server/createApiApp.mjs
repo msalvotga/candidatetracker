@@ -118,11 +118,21 @@ function slugId(s) {
     .slice(0, 80);
 }
 
-function shouldPreferCivixCacheOnCloud() {
+async function shouldPreferCivixCacheOnCloud() {
   if (process.env.CIVIX_PREFER_CACHE === "1") return true;
   if (process.env.CIVIX_PREFER_CACHE === "0") return false;
-  // Render sets RENDER=true; Civix often returns HTTP 403 from datacenter IPs.
-  return Boolean(process.env.RENDER) && !process.env.CIVIX_COOKIE?.trim();
+  const { resolveCivixCookie } = await import("./lib/civixCredentials.mjs");
+  if (await resolveCivixCookie()) return false;
+  return Boolean(process.env.RENDER);
+}
+
+/** @param {unknown} raw */
+function normalizeClientCivixBundle(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const election = raw.election;
+  const county = raw.county;
+  if (!election || typeof election !== "object" || !county || typeof county !== "object") return null;
+  return { election, county };
 }
 
 /**
@@ -130,11 +140,25 @@ function shouldPreferCivixCacheOnCloud() {
  * @param {string | number} electionId
  * @param {string} [countyInfoUrl]
  */
-async function loadCivixBundleWithCacheFallback(electionId, countyInfoUrl = "") {
+async function loadCivixBundleWithCacheFallback(electionId, countyInfoUrl = "", opts = {}) {
   const override = String(countyInfoUrl ?? "").trim();
   const eid = String(electionId);
+  const clientBundle = normalizeClientCivixBundle(opts.clientBundle);
 
-  if (shouldPreferCivixCacheOnCloud()) {
+  if (clientBundle) {
+    return {
+      election: clientBundle.election,
+      county: clientBundle.county,
+      sosCountyInfoUrlConfigured: override,
+      sosCountyInfoUrlUsed:
+        override ||
+        `https://goelect.txelections.civixapps.com/api-ivis-system/api/s3/enr/election/countyInfo/${eid}`,
+      civixFromCache: false,
+      civixCacheNote: "SOS loaded from browser (live Civix JSON posted with force update).",
+    };
+  }
+
+  if (await shouldPreferCivixCacheOnCloud()) {
     const snap = await getLatestSosCivixSnapshot(eid);
     if (snap) {
       console.info(
@@ -657,7 +681,7 @@ export function createApiApp() {
     return next;
   }
 
-  async function runFullIngestRefresh(electionId) {
+  async function runFullIngestRefresh(electionId, ingestOpts = {}) {
     const cfg = await getElectionIngestConfig(electionId);
     if (!cfg.isEnabled) {
       return {
@@ -709,7 +733,9 @@ export function createApiApp() {
       });
       try {
         const countyInfoUrl = cfg.sosCountyInfoUrl;
-        const bundle = await loadCivixBundleWithCacheFallback(electionId, countyInfoUrl);
+        const bundle = await loadCivixBundleWithCacheFallback(electionId, countyInfoUrl, {
+          clientBundle: ingestOpts.clientCivixBundle,
+        });
         const { election, county, civixFromCache, civixCacheNote } = bundle;
         const sosCandidateRows = extractSd4SosCandidateRowsFromCivix({
           electionId,
@@ -753,7 +779,7 @@ export function createApiApp() {
           ok: true,
           message: `OK: civix bundle + snapshot + ${sosCandidateRows.length} candidate rows + ${sosCountyRows.length} SOS county rows${sosLogSuffix}`,
         });
-        if (civixFromCache && civixCacheNote) result.warnings.push(civixCacheNote);
+        if (civixCacheNote) result.warnings.push(civixCacheNote);
       } catch (e) {
         const msg = String(e?.message || e);
         result.errors.push(
@@ -1375,7 +1401,8 @@ export function createApiApp() {
     try {
       await ensureDb();
       const settings = await getAppSettings();
-      res.json(settings);
+      const { civixCookie: _omit, ...publicSettings } = settings;
+      res.json(publicSettings);
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: String(e?.message || e) });
@@ -1396,6 +1423,7 @@ export function createApiApp() {
         jeffersonSourceUrl: req.body?.jeffersonSourceUrl,
         montgomerySourceUrl: req.body?.montgomerySourceUrl,
         chambersSourceUrl: req.body?.chambersSourceUrl,
+        civixCookie: req.body?.civixCookie,
       });
       res.json(settings);
     } catch (e) {
@@ -1422,7 +1450,9 @@ export function createApiApp() {
       await withIngestLock(async () => {
         ingestState.running = true;
         try {
-          result = await runFullIngestRefresh(String(electionId));
+          result = await runFullIngestRefresh(String(electionId), {
+            clientCivixBundle: normalizeClientCivixBundle(req.body?.civixBundle),
+          });
           ingestState.lastRunEndTime = Date.now();
           ingestState.lastResult = result;
           const settings = await getAppSettings();

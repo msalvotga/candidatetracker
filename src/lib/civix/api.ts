@@ -1,4 +1,4 @@
-import { TX_CIVIX_API } from "./urls";
+import { TX_CIVIX_API, TX_CIVIX_ORIGIN, civixApiUrl } from "./urls";
 import { decodeBase64Json, decodeUploadPayload } from "./decode";
 
 export interface CivixElectionListItem {
@@ -26,7 +26,7 @@ async function fetchJson(url: string): Promise<unknown> {
 }
 
 export async function listCivixElections(): Promise<CivixElectionListItem[]> {
-  const raw = await fetchJson(`${TX_CIVIX_API}/s3/enr/electionConstants`);
+  const raw = await fetchJson(civixApiUrl("/s3/enr/electionConstants"));
   const inner = decodeUploadPayload<CivixElectionConstantsInner>(raw);
   const ei = inner.electionInfo;
   const out: CivixElectionListItem[] = [];
@@ -48,15 +48,49 @@ export async function listCivixElections(): Promise<CivixElectionListItem[]> {
   return out;
 }
 
+/** Direct Civix host (user's IP). Works when CORS allows; used before API proxy on force update. */
+export async function fetchCivixElectionPayloadDirect(civixElectionId: number): Promise<{
+  election: Record<string, unknown>;
+  county: Record<string, unknown>;
+}> {
+  const base = `${TX_CIVIX_ORIGIN}${TX_CIVIX_API}/s3/enr`;
+  const [election, county] = await Promise.all([
+    fetchJson(`${base}/election/${civixElectionId}`),
+    fetchJson(`${base}/election/countyInfo/${civixElectionId}`),
+  ]);
+  return { election: election as Record<string, unknown>, county: county as Record<string, unknown> };
+}
+
+/** Via app API Civix proxy (uses CIVIX_COOKIE / Settings cookie on server). */
 export async function fetchCivixElectionPayload(civixElectionId: number): Promise<{
   election: Record<string, unknown>;
   county: Record<string, unknown>;
 }> {
   const [election, county] = await Promise.all([
-    fetchJson(`${TX_CIVIX_API}/s3/enr/election/${civixElectionId}`),
-    fetchJson(`${TX_CIVIX_API}/s3/enr/election/countyInfo/${civixElectionId}`),
+    fetchJson(civixApiUrl(`/s3/enr/election/${civixElectionId}`)),
+    fetchJson(civixApiUrl(`/s3/enr/election/countyInfo/${civixElectionId}`)),
   ]);
   return { election: election as Record<string, unknown>, county: county as Record<string, unknown> };
+}
+
+/**
+ * For force update: try browser → Civix (home IP), then API proxy (cookie on server).
+ * Returns null when both fail (server will use DB snapshot).
+ */
+export async function fetchCivixBundleForIngest(civixElectionId: number): Promise<{
+  election: Record<string, unknown>;
+  county: Record<string, unknown>;
+} | null> {
+  try {
+    return await fetchCivixElectionPayloadDirect(civixElectionId);
+  } catch {
+    /* CORS or network — try API proxy */
+  }
+  try {
+    return await fetchCivixElectionPayload(civixElectionId);
+  } catch {
+    return null;
+  }
 }
 
 export function decodeCountyIndex(countyDoc: Record<string, unknown>): Record<string, CivixCountyBlock> {

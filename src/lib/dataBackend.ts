@@ -156,6 +156,9 @@ export interface AppSettings {
   jeffersonSourceUrl?: string;
   montgomerySourceUrl?: string;
   chambersSourceUrl?: string;
+  /** Paste Cookie header from DevTools on goelect (saved server-side, not echoed back). */
+  civixCookie?: string;
+  civixCookieConfigured?: boolean;
 }
 
 export interface ElectionSourceConfig {
@@ -619,10 +622,21 @@ export async function forceRefreshAllSources(electionId: string | number = 56181
       ? String(electionId)
       : String(electionId ?? "").trim();
   if (!id) throw new Error("electionId required");
+
+  let civixBundle: { election: Record<string, unknown>; county: Record<string, unknown> } | null = null;
+  const num = Number(id);
+  if (Number.isFinite(num) && String(num) === id) {
+    const { fetchCivixBundleForIngest } = await import("./civix/api");
+    civixBundle = await fetchCivixBundleForIngest(num);
+  }
+
   const r = await apiFetch("/api/ingest/refresh-once", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ electionId: id }),
+    body: JSON.stringify({
+      electionId: id,
+      ...(civixBundle ? { civixBundle } : {}),
+    }),
   });
   if (!r.ok && r.status !== 207) throw new Error(`HTTP ${r.status}`);
   return (await r.json()) as ForceRefreshResult;

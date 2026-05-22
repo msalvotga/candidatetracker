@@ -1001,7 +1001,7 @@ export async function getAppSettings() {
      WHERE setting_key IN (
        N'disable_auto_ingest', N'auto_refresh_enabled', N'auto_refresh_interval_sec', N'sos_countyinfo_url',
        N'harris_source_url', N'galveston_source_url', N'jefferson_source_url', N'montgomery_source_url', N'chambers_source_url',
-       N'display_time_zone'
+       N'display_time_zone', N'civix_cookie'
      )`,
   );
   const map = new Map(r.recordset.map((x) => [String(x.settingKey), String(x.valueJson)]));
@@ -1016,6 +1016,9 @@ export async function getAppSettings() {
     montgomerySourceUrl: map.get("montgomery_source_url") ?? "",
     chambersSourceUrl: map.get("chambers_source_url") ?? "",
     displayTimeZone: map.get("display_time_zone") ?? "America/Chicago",
+    /** Stored session cookie for Civix (not returned to clients). */
+    civixCookie: map.get("civix_cookie") ?? "",
+    civixCookieConfigured: Boolean(String(map.get("civix_cookie") ?? "").trim()),
   };
 }
 
@@ -1030,6 +1033,7 @@ export async function updateAppSettings({
   montgomerySourceUrl,
   chambersSourceUrl,
   displayTimeZone,
+  civixCookie,
 }) {
   const pool = await ensureDb();
   const upsert = async (key, value) => {
@@ -1055,7 +1059,21 @@ export async function updateAppSettings({
   if (montgomerySourceUrl != null) await upsert("montgomery_source_url", String(montgomerySourceUrl));
   if (chambersSourceUrl != null) await upsert("chambers_source_url", String(chambersSourceUrl));
   if (displayTimeZone != null) await upsert("display_time_zone", String(displayTimeZone || "America/Chicago"));
-  return getAppSettings();
+  if (civixCookie != null) await upsert("civix_cookie", String(civixCookie));
+  const settings = await getAppSettings();
+  return {
+    disableAutoIngest: settings.disableAutoIngest,
+    autoRefreshEnabled: settings.autoRefreshEnabled,
+    autoRefreshIntervalSec: settings.autoRefreshIntervalSec,
+    sosCountyInfoUrl: settings.sosCountyInfoUrl,
+    harrisSourceUrl: settings.harrisSourceUrl,
+    galvestonSourceUrl: settings.galvestonSourceUrl,
+    jeffersonSourceUrl: settings.jeffersonSourceUrl,
+    montgomerySourceUrl: settings.montgomerySourceUrl,
+    chambersSourceUrl: settings.chambersSourceUrl,
+    displayTimeZone: settings.displayTimeZone,
+    civixCookieConfigured: settings.civixCookieConfigured,
+  };
 }
 
 export async function clearLiveResultTables() {

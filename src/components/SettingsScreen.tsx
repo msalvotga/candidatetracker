@@ -67,7 +67,9 @@ export function SettingsScreen({
     jeffersonSourceUrl: "",
     montgomerySourceUrl: "",
     chambersSourceUrl: "",
+    civixCookieConfigured: false,
   });
+  const [civixCookieInput, setCivixCookieInput] = useState("");
   const [forceMsg, setForceMsg] = useState<string | null>(null);
   const [forceRefreshing, setForceRefreshing] = useState(false);
   const [ingestProgress, setIngestProgress] = useState<IngestProgress | null>(null);
@@ -137,6 +139,28 @@ export function SettingsScreen({
       setSaveMsg(updated.disableAutoIngest ? "Auto ingest disabled." : "Auto ingest enabled.");
     } catch (e) {
       setSaveMsg(e instanceof Error ? e.message : "Failed to update setting");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSaveCivixCookie() {
+    setBusy(true);
+    setSaveMsg(null);
+    try {
+      const updated = await updateAppSettings({
+        ...appSettings,
+        civixCookie: civixCookieInput.trim(),
+      });
+      setAppSettings(updated);
+      setCivixCookieInput("");
+      setSaveMsg(
+        civixCookieInput.trim()
+          ? "Civix session cookie saved. Force update can pull live SOS from Render."
+          : "Civix session cookie cleared.",
+      );
+    } catch (e) {
+      setSaveMsg(e instanceof Error ? e.message : "Failed to save Civix cookie");
     } finally {
       setBusy(false);
     }
@@ -402,6 +426,34 @@ export function SettingsScreen({
             <option value="America/Los_Angeles">America/Los_Angeles (Pacific, DST)</option>
             <option value="UTC">UTC</option>
           </select>
+        </label>
+        <label className="enr-field">
+          Civix session cookie (for live SOS on Render)
+          <textarea
+            className="enr-input"
+            rows={3}
+            placeholder={
+              appSettings.civixCookieConfigured
+                ? "Cookie is saved. Paste a new value to replace, or clear and Save."
+                : "On goelect.txelections.civixapps.com: DevTools → Network → countyInfo request → copy Cookie header"
+            }
+            value={civixCookieInput}
+            disabled={busy}
+            onChange={(e) => setCivixCookieInput(e.target.value)}
+            spellCheck={false}
+            autoComplete="off"
+          />
+          <button type="button" className="enr-secondaryBtn" disabled={busy} onClick={() => void onSaveCivixCookie()}>
+            Save Civix cookie
+          </button>
+          {appSettings.civixCookieConfigured ? (
+            <span className="enr-muted"> Live Civix ingest enabled on the API server.</span>
+          ) : (
+            <span className="enr-muted">
+              {" "}
+              Without this, Render uses the last SOS snapshot; your browser can still load countyInfo JSON directly.
+            </span>
+          )}
         </label>
         <div className="enr-settings__actions">
           <select
