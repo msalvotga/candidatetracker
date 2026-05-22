@@ -530,12 +530,20 @@ export async function discoverCountyFeedUrl(body: {
 }
 
 export async function deleteElectionSourceConfig(electionId: string): Promise<void> {
-  const r = await apiFetch(`/api/election-source-configs/${encodeURIComponent(electionId)}`, {
-    method: "DELETE",
-  });
+  const path = `/api/election-source-configs/${encodeURIComponent(electionId)}`;
+  let r = await apiFetch(`${path}/delete`, { method: "POST" });
+  if (r.status === 404) {
+    r = await apiFetch(path, { method: "DELETE" });
+  }
   if (!r.ok) {
-    const err = (await r.json().catch(() => ({}))) as { error?: string };
-    throw new Error(err.error ?? `HTTP ${r.status}`);
+    const err = (await r.json().catch(() => ({}))) as { error?: string; hint?: string };
+    const hint =
+      r.status === 404 && String(err.error ?? "").includes("No API route")
+        ? " Restart the API server (npm run dev:all) or redeploy Render so DELETE/POST delete routes are loaded."
+        : err.hint
+          ? ` ${err.hint}`
+          : "";
+    throw new Error((err.error ?? `HTTP ${r.status}`) + hint);
   }
 }
 

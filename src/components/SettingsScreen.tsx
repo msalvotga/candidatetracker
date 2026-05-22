@@ -630,7 +630,7 @@ export function SettingsScreen({
       </section>
 
       <section className="enr-panel enr-settings__section">
-        <h2>Elections</h2>
+        <SettingsCollapse title="Elections" badge={electionConfigs.length}>
         <p className="enr-muted">
           Choose whether this election uses <strong>Texas SOS / Civix</strong> statewide ingest. When it does, enter the
           Civix election id; when it does not, only a label is required (an internal catalog key is created). Configure
@@ -687,10 +687,11 @@ export function SettingsScreen({
             Add election
           </button>
         </div>
+        </SettingsCollapse>
       </section>
 
       <section className="enr-panel enr-settings__section">
-        <h2>Source configuration</h2>
+        <SettingsCollapse title="Source configuration" badge={electionConfigs.length}>
         <p className="enr-muted">
           Open an election for SOS / Civix options, county feed URLs, ingest processes, and bulk import. Use{" "}
           <strong>Set as default</strong> to choose which election opens first on the home page and in ingest controls below.
@@ -766,6 +767,7 @@ export function SettingsScreen({
             </li>
           ))}
         </ul>
+        </SettingsCollapse>
       </section>
 
       <section className="enr-panel enr-settings__section">

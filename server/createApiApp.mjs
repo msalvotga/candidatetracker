@@ -1196,10 +1196,10 @@ export function createApiApp() {
     }
   });
 
-  app.delete("/api/election-source-configs/:electionId", async (req, res) => {
+  async function handleDeleteElectionSourceConfig(req, res) {
     try {
       await ensureDb();
-      const electionId = String(req.params.electionId ?? "").trim();
+      const electionId = String(req.params.electionId ?? req.body?.electionId ?? "").trim();
       if (!electionId) return res.status(400).json({ error: "electionId required" });
       const result = await deleteElectionSourceConfig(electionId);
       res.json(result);
@@ -1208,7 +1208,11 @@ export function createApiApp() {
       const msg = String(e?.message || e);
       res.status(msg.includes("not found") ? 404 : 500).json({ error: msg });
     }
-  });
+  }
+
+  app.delete("/api/election-source-configs/:electionId", handleDeleteElectionSourceConfig);
+  /** Render/static rewrites often drop DELETE — POST alias for the same handler. */
+  app.post("/api/election-source-configs/:electionId/delete", handleDeleteElectionSourceConfig);
 
   app.post("/api/election-source-configs", async (req, res) => {
     try {
