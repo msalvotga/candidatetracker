@@ -491,10 +491,11 @@ export function ElectionSettingsDetail({
     try {
       const result = await forceRefreshAllSources(electionId);
       const countyParts = Object.entries(result.counties).map(([k, v]) => `${k}: ${v.inserted}`);
+      const warn = result.warnings?.length ? ` Note: ${result.warnings.join(" | ")}` : "";
       setMsg(
         result.errors.length
-          ? `Refresh finished with errors. SOS: ${result.sos.inserted}. ${countyParts.join(", ")}. ${result.errors.join(" | ")}`
-          : `OK. SOS: ${result.sos.inserted}. Counties: ${countyParts.join(", ") || "(none)"}.`,
+          ? `Refresh finished with errors. SOS: ${result.sos.inserted}. ${countyParts.join(", ")}. ${result.errors.join(" | ")}${warn}`
+          : `OK. SOS: ${result.sos.inserted}. Counties: ${countyParts.join(", ") || "(none)"}.${warn}`,
       );
       onSaved();
     } catch (e) {

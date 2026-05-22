@@ -118,6 +118,13 @@ function slugId(s) {
     .slice(0, 80);
 }
 
+function shouldPreferCivixCacheOnCloud() {
+  if (process.env.CIVIX_PREFER_CACHE === "1") return true;
+  if (process.env.CIVIX_PREFER_CACHE === "0") return false;
+  // Render sets RENDER=true; Civix often returns HTTP 403 from datacenter IPs.
+  return Boolean(process.env.RENDER) && !process.env.CIVIX_COOKIE?.trim();
+}
+
 /**
  * Civix blocks many cloud/datacenter IPs (HTTP 403). Fall back to the last sos_results snapshot when live fetch fails.
  * @param {string | number} electionId
@@ -125,18 +132,36 @@ function slugId(s) {
  */
 async function loadCivixBundleWithCacheFallback(electionId, countyInfoUrl = "") {
   const override = String(countyInfoUrl ?? "").trim();
+  const eid = String(electionId);
+
+  if (shouldPreferCivixCacheOnCloud()) {
+    const snap = await getLatestSosCivixSnapshot(eid);
+    if (snap) {
+      console.info(
+        `Civix: using stored sos_results for election ${eid} (${snap.fetchedAt || "unknown time"}); live API skipped on cloud host (set CIVIX_COOKIE to refresh from Civix on Render).`,
+      );
+      return {
+        election: snap.election,
+        county: snap.county,
+        sosCountyInfoUrlConfigured: override,
+        sosCountyInfoUrlUsed: snap.sosCountyInfoUrlUsed || "",
+        civixFromCache: true,
+        civixCacheNote: `SOS from stored snapshot${snap.fetchedAt ? ` (${snap.fetchedAt})` : ""}. Live Civix skipped on cloud host — set CIVIX_COOKIE on the API service to pull fresh statewide data on Render.`,
+      };
+    }
+  }
+
   try {
     const bundle = override
       ? await fetchCivixElectionBundleWithOverrides(electionId, { countyInfoUrl: override })
       : await fetchCivixElectionBundle(electionId);
     return { ...bundle, civixFromCache: false, civixCacheNote: null };
   } catch (e) {
-    const snap = await getLatestSosCivixSnapshot(String(electionId));
+    const snap = await getLatestSosCivixSnapshot(eid);
     if (!snap) throw e;
     const err = e instanceof Error ? e.message : String(e);
-    console.warn(
-      `Civix live fetch failed for election ${electionId}; using cached sos_results (${snap.fetchedAt || "unknown time"})`,
-      err,
+    console.info(
+      `Civix live fetch failed for election ${eid}; using cached sos_results (${snap.fetchedAt || "unknown time"}): ${err}`,
     );
     return {
       election: snap.election,
@@ -654,6 +679,7 @@ export function createApiApp() {
       sos: { inserted: 0 },
       counties: /** @type {Record<string, { inserted: number }>} */ ({}),
       errors: [],
+      warnings: [],
     };
     /** Built after all county fetches; committed in one DB transaction (see commitCountyResultsBatch). */
     const countySegments = [];
@@ -727,7 +753,7 @@ export function createApiApp() {
           ok: true,
           message: `OK: civix bundle + snapshot + ${sosCandidateRows.length} candidate rows + ${sosCountyRows.length} SOS county rows${sosLogSuffix}`,
         });
-        if (civixFromCache && civixCacheNote) result.errors.push(`SOS: ${civixCacheNote}`);
+        if (civixFromCache && civixCacheNote) result.warnings.push(civixCacheNote);
       } catch (e) {
         const msg = String(e?.message || e);
         result.errors.push(

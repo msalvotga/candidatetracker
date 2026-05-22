@@ -238,6 +238,8 @@ export interface ForceRefreshResult {
   /** County slug (e.g. harris) → row counts from latest ingest */
   counties: Record<string, { inserted: number }>;
   errors: string[];
+  /** Non-fatal notes (e.g. Civix 403 on Render with cached SOS) */
+  warnings?: string[];
 }
 
 /** One ingest process (stored as `ingest_vendors` — same process id for every county that shares the URL/steps). */

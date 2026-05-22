@@ -183,7 +183,10 @@ export function SettingsScreen({
       onCatalogChanged();
       const countyParts = Object.entries(result.counties).map(([k, v]) => `${k}: ${v.inserted}`);
       const base = `Updated election ${selectedElectionId}. SOS: ${result.sos.inserted}. Counties: ${countyParts.join(", ") || "none"}.`;
-      setForceMsg(result.errors.length ? `${base} Errors: ${result.errors.join(" | ")}` : base);
+      const warn =
+        result.warnings?.length ? ` Note: ${result.warnings.join(" | ")}` : "";
+      const err = result.errors.length ? ` Errors: ${result.errors.join(" | ")}` : "";
+      setForceMsg(`${base}${warn}${err}`);
     } catch (e) {
       setForceMsg(e instanceof Error ? e.message : "Force refresh failed");
     } finally {
