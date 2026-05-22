@@ -75,6 +75,7 @@ import {
   replaceElectionFeedSourcesForElection,
   flushPendingDatabasePersist,
   upsertElectionSourceConfig,
+  deleteElectionSourceConfig,
   setDefaultElectionCatalog,
   updateManualElection,
   updateAppSettings,
@@ -1192,6 +1193,20 @@ export function createApiApp() {
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.delete("/api/election-source-configs/:electionId", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      if (!electionId) return res.status(400).json({ error: "electionId required" });
+      const result = await deleteElectionSourceConfig(electionId);
+      res.json(result);
+    } catch (e) {
+      console.error(e);
+      const msg = String(e?.message || e);
+      res.status(msg.includes("not found") ? 404 : 500).json({ error: msg });
     }
   });
 

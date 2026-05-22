@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   forceRefreshAllSources,
   startIngestStatusPoll,
@@ -9,6 +9,7 @@ import {
   fetchImportLog,
   fetchIngestVendors,
   createElectionSourceConfig,
+  deleteElectionSourceConfig,
   setDefaultElectionCatalog,
   updateElectionSourceConfig,
   updateAppSettings,
@@ -26,6 +27,26 @@ import {
 } from "../lib/dataBackend";
 import { ElectionSettingsDetail } from "./ElectionSettingsDetail";
 import { IngestProgressStatus, IngestSpinner } from "./IngestProgressStatus";
+
+function SettingsCollapse({
+  title,
+  badge,
+  children,
+}: {
+  title: string;
+  badge?: string | number;
+  children: ReactNode;
+}) {
+  return (
+    <details className="enr-settingsCollapse">
+      <summary className="enr-settingsCollapse__summary">
+        <span>{title}</span>
+        {badge != null && badge !== "" ? <span className="enr-settingsCollapse__badge">{badge}</span> : null}
+      </summary>
+      <div className="enr-settingsCollapse__body">{children}</div>
+    </details>
+  );
+}
 
 function SourceImportAlert({
   sourceKey,
@@ -262,6 +283,27 @@ export function SettingsScreen({
     }
   }
 
+  async function onDeleteElection(cfg: ElectionSourceConfig) {
+    const ok = window.confirm(
+      `Delete "${cfg.label}" (${cfg.electionId})?\n\nThis removes the source configuration, county feeds, SOS/county results, and import log entries for this election.`,
+    );
+    if (!ok) return;
+    setBusy(true);
+    setSaveMsg(null);
+    try {
+      await deleteElectionSourceConfig(cfg.electionId);
+      if (detailElectionId === cfg.electionId) setDetailElectionId(null);
+      if (selectedElectionId === cfg.electionId) userPickedForceElection.current = false;
+      await refresh();
+      onCatalogChanged();
+      setSaveMsg(`Deleted election ${cfg.electionId}.`);
+    } catch (e) {
+      setSaveMsg(e instanceof Error ? e.message : "Failed to delete election");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onCreateElection() {
     const label = newElectionLabel.trim();
     let id = newElectionId.trim();
@@ -304,13 +346,12 @@ export function SettingsScreen({
     [dbOverview],
   );
 
-  function renderPreviewTable(preview: DbTablePreview | null, title: string) {
-    if (!preview) return <p>Loading preview…</p>;
-    if (!preview.rows.length) return <p className="enr-muted">{title} has no rows.</p>;
+  function renderPreviewTable(preview: DbTablePreview | null, emptyLabel: string) {
+    if (!preview) return <p className="enr-muted">Loading preview…</p>;
+    if (!preview.rows.length) return <p className="enr-muted">{emptyLabel}</p>;
     const columns = preview.columns;
     return (
       <div className="enr-tablewrap">
-        <h3>{title}</h3>
         <table className="enr-table">
           <thead>
             <tr>
@@ -538,7 +579,10 @@ export function SettingsScreen({
       </section>
 
       <section className="enr-panel enr-settings__section">
-        <h2>Ingest processes</h2>
+        <SettingsCollapse
+          title="Ingest processes"
+          badge={vendors.filter((v) => v.id !== "montgomery-pdf").length}
+        >
         <p className="enr-muted">
           Each <strong>process</strong> is how a URL is fetched and parsed. Assign the <strong>same process id</strong> to
           every county that uses the same steps (e.g. all Clarity ENR <code>summary.zip</code> counties share{" "}
@@ -582,6 +626,7 @@ export function SettingsScreen({
             </tbody>
           </table>
         </div>
+        </SettingsCollapse>
       </section>
 
       <section className="enr-panel enr-settings__section">
@@ -708,6 +753,15 @@ export function SettingsScreen({
                   />
                   <span>Include in automatic refresh</span>
                 </label>
+                <button
+                  type="button"
+                  className="enr-dangerBtn"
+                  disabled={busy}
+                  title="Remove this election configuration and its stored ingest data"
+                  onClick={() => void onDeleteElection(cfg)}
+                >
+                  Delete
+                </button>
               </div>
             </li>
           ))}
@@ -715,7 +769,7 @@ export function SettingsScreen({
       </section>
 
       <section className="enr-panel enr-settings__section">
-        <h2>Import log</h2>
+        <SettingsCollapse title="Import log" badge={importLog?.entries?.length ?? 0}>
         <p className="enr-muted">
           Per-source outcomes from the latest ingest runs (newest first). When one source fails, others still update and are
           logged here.
@@ -734,6 +788,7 @@ export function SettingsScreen({
             <p className="enr-muted">No log entries yet. Run a refresh from ingest controls to populate.</p>
           )}
         </div>
+        </SettingsCollapse>
       </section>
 
       <section className="enr-panel enr-settings__section">
@@ -763,8 +818,18 @@ export function SettingsScreen({
               ))}
             </ul>
             {dbPreviewErr ? <p className="enr-errorInline">{dbPreviewErr}</p> : null}
-            {renderPreviewTable(dataSourcesPreview, "data_sources preview")}
-            {renderPreviewTable(sosCountyPreview, "sos_county_results preview")}
+            <SettingsCollapse
+              title="data_sources preview"
+              badge={dataSourcesPreview?.rows?.length ?? "…"}
+            >
+              {renderPreviewTable(dataSourcesPreview, "data_sources has no rows.")}
+            </SettingsCollapse>
+            <SettingsCollapse
+              title="sos_county_results preview"
+              badge={sosCountyPreview?.rows?.length ?? "…"}
+            >
+              {renderPreviewTable(sosCountyPreview, "sos_county_results has no rows.")}
+            </SettingsCollapse>
           </>
         ) : (
           <p>Loading DB metadata…</p>

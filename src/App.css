@@ -778,6 +778,69 @@ button.enr-electionOpenBtn:disabled {
   margin-top: 8px;
 }
 
+.enr-dangerBtn {
+  padding: 6px 12px;
+  font-size: 13px;
+  border: 1px solid #b42318;
+  border-radius: 6px;
+  background: #fff;
+  color: #b42318;
+  cursor: pointer;
+}
+
+.enr-dangerBtn:hover:not(:disabled) {
+  background: #fef3f2;
+}
+
+.enr-dangerBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.enr-settingsCollapse {
+  margin-top: 12px;
+  border: 1px solid var(--tx-border, #d8e2ef);
+  border-radius: 8px;
+  background: #fafcfe;
+}
+
+.enr-settingsCollapse__summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--tx-navy, #0f2747);
+  list-style: none;
+}
+
+.enr-settingsCollapse__summary::-webkit-details-marker {
+  display: none;
+}
+
+.enr-settingsCollapse__summary::before {
+  content: "▸";
+  font-size: 12px;
+  color: var(--tx-muted, #5a6b7d);
+  transition: transform 0.15s ease;
+}
+
+.enr-settingsCollapse[open] > .enr-settingsCollapse__summary::before {
+  transform: rotate(90deg);
+}
+
+.enr-settingsCollapse__badge {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--tx-muted, #5a6b7d);
+}
+
+.enr-settingsCollapse__body {
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--tx-border, #d8e2ef);
+}
+
 .enr-inlineToggle {
   display: inline-flex;
   align-items: center;

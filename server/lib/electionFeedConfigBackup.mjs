@@ -52,6 +52,21 @@ export function writeElectionFeedBackupForElection(electionId, sources) {
   fs.writeFileSync(ELECTION_FEEDS_BACKUP_PATH, JSON.stringify(payload, null, 2), "utf8");
 }
 
+/** Remove one election from the feed-config sidecar (e.g. after deleting source configuration). */
+export function removeElectionFeedBackupForElection(electionId) {
+  const eid = String(electionId ?? "").trim();
+  if (!eid || !fs.existsSync(ELECTION_FEEDS_BACKUP_PATH)) return;
+  try {
+    const raw = JSON.parse(fs.readFileSync(ELECTION_FEEDS_BACKUP_PATH, "utf8"));
+    if (!raw?.elections || typeof raw.elections !== "object") return;
+    delete raw.elections[eid];
+    raw.savedAt = new Date().toISOString();
+    fs.writeFileSync(ELECTION_FEEDS_BACKUP_PATH, JSON.stringify(raw, null, 2), "utf8");
+  } catch {
+    /* ignore */
+  }
+}
+
 /** @returns {Record<string, { updatedAt: string, sources: object[] }>} */
 export function readElectionFeedBackupByElection() {
   if (!fs.existsSync(ELECTION_FEEDS_BACKUP_PATH)) return {};

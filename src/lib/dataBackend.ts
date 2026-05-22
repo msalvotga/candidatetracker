@@ -529,6 +529,16 @@ export async function discoverCountyFeedUrl(body: {
   return j;
 }
 
+export async function deleteElectionSourceConfig(electionId: string): Promise<void> {
+  const r = await apiFetch(`/api/election-source-configs/${encodeURIComponent(electionId)}`, {
+    method: "DELETE",
+  });
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `HTTP ${r.status}`);
+  }
+}
+
 export async function createElectionSourceConfig(body: {
   electionId: string;
   label?: string;

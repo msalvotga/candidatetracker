@@ -5,6 +5,7 @@ import { createCompatPool, getDatabaseUrl, runSchemaSql, sql } from "./lib/pgPoo
 import {
   readElectionFeedBackupByElection,
   writeElectionFeedBackupForElection,
+  removeElectionFeedBackupForElection,
 } from "./lib/electionFeedConfigBackup.mjs";
 import { resolveVoterActivityDate } from "./lib/evRosterVoterDates.mjs";
 import {
@@ -1255,6 +1256,39 @@ export async function upsertElectionSourceConfig(payload) {
         (@election_id, @label, @is_enabled, @auto_refresh_enabled, @uses_civix_sos, @show_in_catalog, @sos_countyinfo_url, @harris_source_url, @galveston_source_url, @jefferson_source_url, @montgomery_source_url, @chambers_source_url);
     `);
   return getElectionSourceConfig(electionId);
+}
+
+export async function deleteElectionSourceConfig(electionId) {
+  const pool = await ensureDb();
+  const id = String(electionId ?? "").trim();
+  if (!id) throw new Error("electionId is required");
+  const row = await getElectionSourceConfig(id);
+  if (!row) throw new Error(`Election ${id} not found`);
+  const wasDefault = !!row.isDefaultCatalog;
+  const importLike = `${id}:%`;
+
+  await pool.request().input("election_id", id).input("import_like", importLike).query(`
+    DELETE FROM dbo.county_sos_race_vote_source WHERE election_id = @election_id;
+    DELETE FROM dbo.county_sos_manual_votes WHERE election_id = @election_id;
+    DELETE FROM dbo.county_sos_race_links WHERE election_id = @election_id;
+    DELETE FROM dbo.election_feed_sources WHERE election_id = @election_id;
+    DELETE FROM dbo.county_results WHERE election_id = @election_id;
+    DELETE FROM dbo.sos_candidate_results WHERE election_id = @election_id;
+    DELETE FROM dbo.sos_county_results WHERE election_id = @election_id;
+    DELETE FROM dbo.sos_results WHERE election_id = @election_id;
+    DELETE FROM dbo.vote_update_history WHERE election_id = @election_id;
+    DELETE FROM dbo.source_import_log WHERE source_key LIKE @import_like;
+    DELETE FROM dbo.election_source_configs WHERE election_id = @election_id;
+  `);
+
+  removeElectionFeedBackupForElection(id);
+
+  if (wasDefault) {
+    const rest = await listElectionSourceConfigs();
+    if (rest.length) await setDefaultElectionCatalog(rest[0].electionId);
+  }
+
+  return { deleted: true, electionId: id };
 }
 
 export async function appendVoteHistoryIfChanged({ electionId, sourceKey, capturedAt, rows }) {
