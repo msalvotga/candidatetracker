@@ -1144,6 +1144,81 @@ button.enr-electionOpenBtn:disabled {
   vertical-align: top;
 }
 
+.enr-manualCountySection {
+  margin-top: 16px;
+}
+
+.enr-manualCountySection__title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--tx-navy);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.enr-manualCountyRaceCollapse {
+  margin-bottom: 10px;
+}
+
+.enr-manualCountyRaceCollapse > .enr-settingsCollapse__summary {
+  font-weight: 700;
+}
+
+.enr-manualCountyRace__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: flex-end;
+  margin-bottom: 12px;
+}
+
+.enr-manualCountyRace__addField {
+  min-width: 220px;
+}
+
+.enr-manualCountyRace__gridWrap {
+  max-height: min(70vh, 520px);
+}
+
+.enr-manualCountyGrid .enr-manualCellInput {
+  width: 5.5rem;
+  max-width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--tx-border);
+  border-radius: 4px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.enr-manualCountyGrid__actions {
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.enr-manualCountyGrid__actionsHead {
+  min-width: 7rem;
+}
+
+.enr-manualCountyGrid .enr-miniBtn {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.enr-manualCountyGrid .enr-miniBtn:last-child {
+  margin-bottom: 0;
+}
+
+.enr-miniBtn--danger {
+  color: #b00020;
+  border-color: #f0b4b4;
+}
+
+.enr-miniBtn--danger:hover:not(:disabled) {
+  background: #fff5f5;
+}
+
 .enr-manualVoteForm {
   margin-top: 12px;
   padding: 14px;

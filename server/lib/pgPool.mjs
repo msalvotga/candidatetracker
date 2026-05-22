@@ -25,6 +25,8 @@ export function normalizeSql(text) {
   let s = translateMergeForPg(String(text ?? ""));
   s = s.replace(/\bdbo\./gi, "");
   s = s.replace(/\bISNULL\s*\(/gi, "COALESCE(");
+  s = s.replace(/\bNVARCHAR\s*\(\s*\d+\s*\)/gi, "TEXT");
+  s = s.replace(/\bNVARCHAR\b/gi, "TEXT");
   s = s.replace(/\bN'/g, "'");
   s = s.replace(/\bSYSUTCDATETIME\(\)/gi, "(NOW() AT TIME ZONE 'UTC')");
   s = s.replace(/\bGETUTCDATE\(\)/gi, "(NOW() AT TIME ZONE 'UTC')");

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ManualCountyVotesSection } from "./ManualCountyVotesSection";
+import { SettingsCollapse } from "./SettingsCollapse";
 import {
   deleteCountyRaceLink,
   fetchCountyRaceMapping,
   saveCountyRaceLink,
-  saveCountyRaceManualVote,
   saveCountyRaceVoteSource,
   type CountyRaceMappingPayload,
   type CountyVoteSource,
@@ -64,7 +65,7 @@ export function CountyRaceMappingSection({
 
   const voteSourceFor = (countyKey: string, sosRaceId: string): CountyVoteSource => {
     const hit = data?.voteSources?.find((s) => s.countyKey === countyKey && s.sosRaceId === sosRaceId);
-    return (hit?.voteSource as CountyVoteSource) ?? "county_feed";
+    return (hit?.voteSource as CountyVoteSource) ?? "auto";
   };
 
   const sosRacesSorted = useMemo(() => {
@@ -100,12 +101,7 @@ export function CountyRaceMappingSection({
         sosRaceName,
         linkType: "manual",
       });
-      await saveCountyRaceVoteSource(electionId, {
-        countyKey,
-        sosRaceId,
-        voteSource: "county_feed",
-      });
-      onMessage(`Linked “${countyContestName}” to SOS race. Refresh the main page to see merged totals.`);
+      onMessage(`Linked “${countyContestName}” to SOS race. Totals use whichever source has more votes (SOS vs county feed) unless you override below.`);
       await reload();
     } catch (e) {
       onMessage(e instanceof Error ? e.message : "Link failed");
@@ -115,26 +111,35 @@ export function CountyRaceMappingSection({
   async function onSetVoteSource(countyKey: string, sosRaceId: string, voteSource: CountyVoteSource) {
     try {
       await saveCountyRaceVoteSource(electionId, { countyKey, sosRaceId, voteSource });
-      onMessage(`Vote source for ${countyKey} / race set to ${voteSource}.`);
+      onMessage(
+        voteSource === "auto"
+          ? `Vote source for ${countyKey} / race set to Auto (picks higher total).`
+          : `Vote source for ${countyKey} / race set to ${voteSource}.`,
+      );
       await reload();
     } catch (e) {
       onMessage(e instanceof Error ? e.message : "Save vote source failed");
     }
   }
 
+  const unlinkedCount = unlinkedByContest.length;
+  const linkedCount = data?.links?.length ?? 0;
+
   return (
-    <section className="enr-panel enr-settings__section enr-countyRaceMapping">
-      <h2>County results → SOS races</h2>
+    <SettingsCollapse
+      title="County results → SOS races"
+      badge={unlinkedCount ? `${unlinkedCount} unlinked` : linkedCount ? `${linkedCount} linked` : undefined}
+      className="enr-panel enr-settings__section enr-countyRaceMapping"
+    >
       <p className="enr-muted">
         County PDF feeds import <strong>all</strong> contests in the file. Only contests you link below are merged into
         Texas SOS races on the main dashboard. Contests that exist only in a county (not on the SOS ballot) stay in the
-        unlinked list — they are stored but not applied until you map them to an SOS race and click{" "}
-        <strong>Link & use county feed</strong>. The dropdown lists <strong>federal, statewide, district, and proposition</strong>{" "}
-        SOS races (same sections as the main Civix tabs). Suggestions treat <strong>REP</strong> / <strong>DEM</strong> in county
-        contest names (and <em>- Republican Party</em> / <em>- Democratic Party</em> suffixes) as the ballot party, aligned with
-        this election’s party when configured (e.g. Republican Primary Runoff). Click <strong>Link & use county feed</strong> to
-        apply. For each linked race, choose whether that county uses <strong>SOS</strong>, <strong>county feed</strong>, or{" "}
-        <strong>manual</strong> votes.
+        unlinked list — they are stored but not applied until you map them to an SOS race and click <strong>Link</strong>.
+        The dropdown lists <strong>federal, statewide, district, and proposition</strong> SOS races (same sections as the main Civix
+        tabs). Suggestions treat <strong>REP</strong> / <strong>DEM</strong> in county contest names as the ballot party. After linking,
+        ingest uses <strong>Auto</strong> by default: for each county and race it compares total votes on the SOS county file vs your
+        county feed and applies whichever is higher. Override with <strong>SOS</strong>, <strong>County feed</strong>, or{" "}
+        <strong>Manual</strong> if needed.
       </p>
       <button type="button" className="enr-secondaryBtn" disabled={busy || loading} onClick={() => void reload()}>
         {loading ? "Loading…" : "Reload mapping"}
@@ -151,7 +156,7 @@ export function CountyRaceMappingSection({
         </p>
       ) : null}
 
-      <h3 className="enr-countyRaceMapping__subtitle">Not applied to any SOS race</h3>
+      <SettingsCollapse title="Not applied to any SOS race" badge={unlinkedCount || undefined}>
       {!loading && unlinkedByContest.length === 0 ? (
         <p className="enr-muted">No unlinked county contests — either none ingested yet or everything is linked.</p>
       ) : null}
@@ -215,7 +220,7 @@ export function CountyRaceMappingSection({
                           void onLinkContest(countyKey, contestName, sosRaceId, sr.name);
                         }}
                       >
-                        Link & use county feed
+                        Link
                       </button>
                       {suggestionId ? (
                         <span className="enr-muted" style={{ display: "block", fontSize: 12, marginTop: 4 }}>
@@ -230,8 +235,9 @@ export function CountyRaceMappingSection({
           </table>
         </div>
       ) : null}
+      </SettingsCollapse>
 
-      <h3 className="enr-countyRaceMapping__subtitle">Linked races — vote source per county</h3>
+      <SettingsCollapse title="Linked races — vote source per county" badge={linkedCount || undefined}>
       {(data?.links ?? []).length === 0 ? (
         <p className="enr-muted">No manual links yet. SD4 may still merge automatically when contest names match.</p>
       ) : (
@@ -263,6 +269,7 @@ export function CountyRaceMappingSection({
                         void onSetVoteSource(l.countyKey, l.sosRaceId, e.target.value as CountyVoteSource)
                       }
                     >
+                      <option value="auto">Auto (higher vote total)</option>
                       <option value="sos">SOS / Civix</option>
                       <option value="county_feed">County feed</option>
                       <option value="manual">Manual entry</option>
@@ -286,166 +293,25 @@ export function CountyRaceMappingSection({
           </table>
         </div>
       )}
+      </SettingsCollapse>
 
-      <h3 className="enr-countyRaceMapping__subtitle">Manual county votes (linked SOS races)</h3>
-      <p className="enr-muted" style={{ fontSize: 13 }}>
-        Set a linked race’s vote source to <strong>Manual entry</strong>, then enter totals below. Used instead of SOS or
-        county PDF for that county and race.
-      </p>
-      <ManualVoteForm
-        electionId={electionId}
-        busy={busy}
-        sosRaces={data?.sosRaces ?? []}
-        links={data?.links ?? []}
-        manualVotes={data?.manualVotes ?? []}
-        onSaved={async () => {
-          onMessage("Manual votes saved.");
-          await reload();
-        }}
-        onError={(m) => onMessage(m)}
-      />
-    </section>
-  );
-}
-
-function ManualVoteForm({
-  electionId,
-  busy,
-  sosRaces,
-  links,
-  manualVotes,
-  onSaved,
-  onError,
-}: {
-  electionId: string;
-  busy: boolean;
-  sosRaces: CountyRaceMappingPayload["sosRaces"];
-  links: CountyRaceMappingPayload["links"];
-  manualVotes: CountyRaceMappingPayload["manualVotes"];
-  onSaved: () => void | Promise<void>;
-  onError: (msg: string) => void;
-}) {
-  const countyKeys = useMemo(() => [...new Set(links.map((l) => l.countyKey))].sort(), [links]);
-  const [countyKey, setCountyKey] = useState("");
-  const [sosRaceId, setSosRaceId] = useState("");
-  const [sosCandidateId, setSosCandidateId] = useState("");
-  const [earlyVotes, setEarlyVotes] = useState("0");
-  const [electionDayVotes, setElectionDayVotes] = useState("0");
-  const [totalVotes, setTotalVotes] = useState("0");
-
-  const race = sosRaces.find((r) => r.id === sosRaceId);
-
-  useEffect(() => {
-    if (!countyKey && countyKeys.length) setCountyKey(countyKeys[0]);
-  }, [countyKey, countyKeys]);
-
-  const existingForSelection = manualVotes.filter((m) => m.countyKey === countyKey && m.sosRaceId === sosRaceId);
-
-  return (
-    <div className="enr-manualVoteForm">
-      <div className="enr-manualVoteForm__row">
-        <label className="enr-field">
-          County
-          <select className="enr-input" value={countyKey} disabled={busy} onChange={(e) => setCountyKey(e.target.value)}>
-            <option value="">Select…</option>
-            {countyKeys.map((k) => (
-              <option key={k} value={k}>
-                {k}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="enr-field">
-          SOS race
-          <select
-            className="enr-input"
-            value={sosRaceId}
-            disabled={busy}
-            onChange={(e) => {
-              setSosRaceId(e.target.value);
-              setSosCandidateId("");
-            }}
-          >
-            <option value="">Select…</option>
-            {[...new Set(links.filter((l) => l.countyKey === countyKey).map((l) => l.sosRaceId))].map((rid) => {
-              const sr = sosRaces.find((r) => r.id === rid);
-              return (
-                <option key={rid} value={rid}>
-                  {sr?.name ?? rid}
-                </option>
-              );
-            })}
-          </select>
-        </label>
-        <label className="enr-field">
-          SOS candidate
-          <select
-            className="enr-input"
-            value={sosCandidateId}
-            disabled={busy || !race}
-            onChange={(e) => setSosCandidateId(e.target.value)}
-          >
-            <option value="">Select…</option>
-            {(race?.candidates ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} ({c.party})
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      <div className="enr-manualVoteForm__row">
-        <label className="enr-field">
-          Early / EV
-          <input className="enr-input" value={earlyVotes} disabled={busy} onChange={(e) => setEarlyVotes(e.target.value)} />
-        </label>
-        <label className="enr-field">
-          Election day
-          <input
-            className="enr-input"
-            value={electionDayVotes}
-            disabled={busy}
-            onChange={(e) => setElectionDayVotes(e.target.value)}
-          />
-        </label>
-        <label className="enr-field">
-          Total
-          <input className="enr-input" value={totalVotes} disabled={busy} onChange={(e) => setTotalVotes(e.target.value)} />
-        </label>
-        <button
-          type="button"
-          className="enr-primaryBtn"
-          disabled={busy || !countyKey || !sosRaceId || !sosCandidateId}
-          onClick={() => {
-            const c = race?.candidates?.find((x) => x.id === sosCandidateId);
-            void saveCountyRaceManualVote(electionId, {
-              countyKey,
-              sosRaceId,
-              sosCandidateId,
-              choiceName: c?.name ?? "",
-              partyName: c?.party ?? "",
-              earlyVotes: Number(earlyVotes) || 0,
-              electionDayVotes: Number(electionDayVotes) || 0,
-              totalVotes: Number(totalVotes) || 0,
-            })
-              .then(() => saveCountyRaceVoteSource(electionId, { countyKey, sosRaceId, voteSource: "manual" }))
-              .then(() => onSaved())
-              .catch((e) => onError(e instanceof Error ? e.message : "Save failed"));
-          }}
-        >
-          Save manual votes
-        </button>
-      </div>
-      {existingForSelection.length > 0 ? (
-        <ul className="enr-manualList enr-muted" style={{ fontSize: 13 }}>
-          {existingForSelection.map((m) => (
-            <li key={m.sosCandidateId}>
-              {m.choiceName}: {m.totalVotes.toLocaleString()} (EV {m.earlyVotes.toLocaleString()}, ED{" "}
-              {m.electionDayVotes.toLocaleString()})
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
+      <SettingsCollapse
+        title="Manual county votes"
+        badge={
+          data?.manualVotes?.length
+            ? `${new Set(data.manualVotes.map((m) => m.countyKey)).size} counties`
+            : undefined
+        }
+      >
+        <ManualCountyVotesSection
+          electionId={electionId}
+          busy={busy}
+          sosRaces={data?.sosRaces ?? []}
+          manualVotes={data?.manualVotes ?? []}
+          onMessage={onMessage}
+          onReload={reload}
+        />
+      </SettingsCollapse>
+    </SettingsCollapse>
   );
 }

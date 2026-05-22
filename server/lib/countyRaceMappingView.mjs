@@ -126,6 +126,6 @@ export async function buildCountyRaceMappingView(electionId, sosRaces, options =
     linkedCountyRows,
     electionParty: electionParty ?? null,
     note:
-      "SOS races include federal, statewide, district, and statewide proposition contests from Civix. Suggestions honor REP/DEM (and similar) in county contest names and your election’s party (e.g. Republican Primary Runoff). Click Link to apply.",
+      "SOS races include federal, statewide, district, and statewide proposition contests from Civix. After you link a contest, totals default to Auto: whichever of SOS county file vs county feed has more votes for that race. Override per county if needed.",
   };
 }

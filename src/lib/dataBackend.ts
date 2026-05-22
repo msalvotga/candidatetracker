@@ -382,7 +382,7 @@ export async function discoverCountyFeedUrlsBulk(body: {
 }
 
 /** Match preferred results links on a county election hub page (server fetch or optional pasted HTML for WAF-blocked sites). */
-export type CountyVoteSource = "sos" | "county_feed" | "manual";
+export type CountyVoteSource = "auto" | "sos" | "county_feed" | "manual";
 
 export interface CountyRaceMappingPayload {
   electionId?: string;
@@ -496,6 +496,19 @@ export async function saveCountyRaceManualVote(
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ row }),
+  });
+  const j = (await r.json().catch(() => ({}))) as { error?: string };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+}
+
+export async function deleteCountyRaceManualVote(
+  electionId: string,
+  body: { countyKey: string; sosRaceId: string; sosCandidateId?: string },
+): Promise<void> {
+  const r = await apiFetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/manual-vote`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
   const j = (await r.json().catch(() => ({}))) as { error?: string };
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);

@@ -18,6 +18,7 @@ import {
 import { parseBulkCountyFeedLines } from "../lib/countyFeedBulkParse";
 import { IngestProgressStatus, IngestSpinner } from "./IngestProgressStatus";
 import { CountyRaceMappingSection } from "./CountyRaceMappingSection";
+import { SettingsCollapse } from "./SettingsCollapse";
 import { TX_CIVIX_DEFAULT_COUNTYINFO_PREFIX, civixDefaultCountyInfoUrl } from "../lib/civix/urls";
 import { TEXAS_COUNTIES, TEXAS_COUNTY_KEY_SET } from "../lib/texasCounties";
 
@@ -659,8 +660,11 @@ export function ElectionSettingsDetail({
             ) : null}
           </section>
 
-          <section className="enr-panel enr-settings__section">
-            <h2>County feeds</h2>
+          <SettingsCollapse
+            title="County feeds"
+            badge={feeds.filter((r) => hasFeedOrHub(r)).length || feeds.length}
+            className="enr-panel enr-settings__section"
+          >
             <p className="enr-muted">
               <strong>Montgomery:</strong> use process <strong>Montgomery County eResults (live HTML)</strong> and paste the
               full browser URL while results are on screen (paths change between elections — you can start from{" "}
@@ -1064,8 +1068,7 @@ export function ElectionSettingsDetail({
                 main database is too large to flush immediately.
               </span>
             </div>
-            <div className="enr-bulkAdd">
-              <h3 className="enr-bulkAdd__title">Bulk add hub pages</h3>
+            <SettingsCollapse title="Bulk add hub pages" className="enr-bulkAdd">
               <p className="enr-muted">
                 Paste <strong>one hub per line</strong> — the election results <em>listing</em> page where file links appear (not the
                 PDF). Same format as bulk feeds, but column 3 is the <strong>Hub page</strong> URL. Updates existing rows or adds new
@@ -1118,9 +1121,8 @@ harris,harris-pdf,https://www.harrisvotes.com/election-results/`}
                 After discovery, click <strong>Save county feeds</strong>. Use per-row <strong>Fill URL</strong> or pasted HTML when a
                 hub fetch is blocked (WAF).
               </p>
-            </div>
-            <div className="enr-bulkAdd">
-              <h3 className="enr-bulkAdd__title">Bulk add county feeds</h3>
+            </SettingsCollapse>
+            <SettingsCollapse title="Bulk add county feeds" className="enr-bulkAdd">
               <p className="enr-muted">
                 Paste <strong>one feed per line</strong>. Commas separate the first two fields only; if the URL contains
                 commas, everything after the second comma is treated as the URL.
@@ -1199,8 +1201,8 @@ montgomery,montgomery-eresults-html,https://elections.mctx.org/...`}
               <p className="enr-muted" style={{ marginTop: 8, fontSize: 13 }}>
                 After applying, click <strong>Save county feeds</strong> so URLs survive a server restart.
               </p>
-            </div>
-          </section>
+            </SettingsCollapse>
+          </SettingsCollapse>
 
           <CountyRaceMappingSection
             electionId={electionId}

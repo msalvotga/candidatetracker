@@ -83,6 +83,8 @@ import {
   upsertCountySosRaceLink,
   deleteCountySosRaceLink,
   upsertCountySosManualVote,
+  deleteCountySosManualVote,
+  deleteCountySosManualVotesForCountyRace,
   upsertCountySosRaceVoteSource,
 } from "./db.mjs";
 import { catalogIdForSourceConfig, resolveDefaultCatalogId } from "./lib/electionCatalogId.mjs";
@@ -1345,6 +1347,28 @@ export function createApiApp() {
         return res.status(400).json({ error: "row.countyKey, row.sosRaceId, and row.sosCandidateId required" });
       }
       await upsertCountySosManualVote(electionId, row);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.delete("/api/elections/:electionId/county-race-mapping/manual-vote", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      const countyKey = String(req.body?.countyKey ?? "").trim();
+      const sosRaceId = String(req.body?.sosRaceId ?? "").trim();
+      const sosCandidateId = String(req.body?.sosCandidateId ?? "").trim();
+      if (!electionId || !countyKey || !sosRaceId) {
+        return res.status(400).json({ error: "countyKey and sosRaceId required" });
+      }
+      if (sosCandidateId) {
+        await deleteCountySosManualVote(electionId, countyKey, sosRaceId, sosCandidateId);
+      } else {
+        await deleteCountySosManualVotesForCountyRace(electionId, countyKey, sosRaceId);
+      }
       res.json({ ok: true });
     } catch (e) {
       console.error(e);

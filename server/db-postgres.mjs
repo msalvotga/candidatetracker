@@ -554,7 +554,7 @@ async function latestRowsForCounty(pool, countyId, electionId) {
         MAX(early_votes) AS earlyVotes,
         MAX(election_day_votes) AS electionDayVotes,
         MAX(total_votes) AS totalVotes,
-        CAST(NULL AS NVARCHAR(64)) AS percentOfVotes,
+        NULL::TEXT AS percentOfVotes,
         MAX(registered_voters) AS registeredVoters,
         MAX(ballots_cast) AS ballotsCast,
         MAX(precinct_total) AS precinctTotal,
@@ -562,10 +562,10 @@ async function latestRowsForCounty(pool, countyId, electionId) {
         MAX(over_votes) AS overVotes,
         MAX(under_votes) AS underVotes,
         MAX(fetched_at) AS fetchedAt,
-        CAST(NULL AS NVARCHAR(1024)) AS sourceUrl
+        NULL::TEXT AS sourceUrl
       FROM dbo.county_results
       WHERE county_id = @countyId AND election_id = @electionId
-      GROUP BY contest_name, choice_name, ISNULL(party_name, N'')
+      GROUP BY contest_name, choice_name, COALESCE(party_name, '')
       ORDER BY contest_name, choice_name
     `);
   return r.recordset.map((x) => ({
@@ -694,6 +694,34 @@ export async function listCountySosManualVotes(electionId) {
   }));
 }
 
+export async function deleteCountySosManualVote(electionId, countyKey, sosRaceId, sosCandidateId) {
+  const pool = await ensureDb();
+  await pool
+    .request()
+    .input("election_id", String(electionId))
+    .input("county_key", String(countyKey).toLowerCase().trim())
+    .input("sos_race_id", String(sosRaceId).trim())
+    .input("sos_candidate_id", String(sosCandidateId).trim())
+    .query(`
+      DELETE FROM dbo.county_sos_manual_votes
+      WHERE election_id = @election_id AND county_key = @county_key AND sos_race_id = @sos_race_id
+        AND sos_candidate_id = @sos_candidate_id
+    `);
+}
+
+export async function deleteCountySosManualVotesForCountyRace(electionId, countyKey, sosRaceId) {
+  const pool = await ensureDb();
+  await pool
+    .request()
+    .input("election_id", String(electionId))
+    .input("county_key", String(countyKey).toLowerCase().trim())
+    .input("sos_race_id", String(sosRaceId).trim())
+    .query(`
+      DELETE FROM dbo.county_sos_manual_votes
+      WHERE election_id = @election_id AND county_key = @county_key AND sos_race_id = @sos_race_id
+    `);
+}
+
 export async function upsertCountySosManualVote(electionId, row) {
   const pool = await ensureDb();
   await pool
@@ -732,10 +760,27 @@ export async function listCountySosRaceVoteSources(electionId) {
   }));
 }
 
+export async function deleteCountySosRaceVoteSource(electionId, countyKey, sosRaceId) {
+  const pool = await ensureDb();
+  await pool
+    .request()
+    .input("election_id", String(electionId))
+    .input("county_key", String(countyKey).toLowerCase().trim())
+    .input("sos_race_id", String(sosRaceId).trim())
+    .query(`
+      DELETE FROM dbo.county_sos_race_vote_source
+      WHERE election_id = @election_id AND county_key = @county_key AND sos_race_id = @sos_race_id
+    `);
+}
+
 export async function upsertCountySosRaceVoteSource(electionId, row) {
   const src = String(row.voteSource ?? "sos").toLowerCase();
-  if (!["sos", "county_feed", "manual"].includes(src)) {
-    throw new Error("voteSource must be sos, county_feed, or manual");
+  if (!["sos", "county_feed", "manual", "auto"].includes(src)) {
+    throw new Error("voteSource must be sos, county_feed, manual, or auto");
+  }
+  if (src === "auto") {
+    await deleteCountySosRaceVoteSource(electionId, row.countyKey, row.sosRaceId);
+    return;
   }
   const pool = await ensureDb();
   await pool

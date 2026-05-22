@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   forceRefreshAllSources,
   startIngestStatusPoll,
@@ -27,26 +27,7 @@ import {
 } from "../lib/dataBackend";
 import { ElectionSettingsDetail } from "./ElectionSettingsDetail";
 import { IngestProgressStatus, IngestSpinner } from "./IngestProgressStatus";
-
-function SettingsCollapse({
-  title,
-  badge,
-  children,
-}: {
-  title: string;
-  badge?: string | number;
-  children: ReactNode;
-}) {
-  return (
-    <details className="enr-settingsCollapse">
-      <summary className="enr-settingsCollapse__summary">
-        <span>{title}</span>
-        {badge != null && badge !== "" ? <span className="enr-settingsCollapse__badge">{badge}</span> : null}
-      </summary>
-      <div className="enr-settingsCollapse__body">{children}</div>
-    </details>
-  );
-}
+import { SettingsCollapse } from "./SettingsCollapse";
 
 function SourceImportAlert({
   sourceKey,

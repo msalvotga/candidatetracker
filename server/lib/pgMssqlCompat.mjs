@@ -24,12 +24,12 @@ export function translateMergeForPg(sql) {
   const conflictCols = [];
   for (const part of onClause.split(/\s+AND\s+/i)) {
     const trimmed = part.trim();
-    let m = trimmed.match(/target\.(\w+)\s*=\s*source\.\1/i);
+    let m = trimmed.match(/(?:target|t)\.(\w+)\s*=\s*(?:source|s)\.\1/i);
     if (m) {
       conflictCols.push(m[1]);
       continue;
     }
-    m = trimmed.match(/target\.(\w+)\s*=\s*@(\w+)/i);
+    m = trimmed.match(/(?:target|t)\.(\w+)\s*=\s*@(\w+)/i);
     if (m && m[1] === m[2]) conflictCols.push(m[1]);
   }
   if (!conflictCols.length) return sql;
@@ -49,7 +49,7 @@ export function translateMergeForPg(sql) {
   const insertVals = insertBlock[2].split(",").map((s) => s.trim());
 
   const valuesList = insertVals.map((v) => {
-    const src = v.match(/^source\.(\w+)$/i);
+    const src = v.match(/^(?:source|s)\.(\w+)$/i);
     if (src) return sourceToParam.get(src[1].toLowerCase()) ?? v;
     return v;
   });
@@ -65,10 +65,10 @@ export function translateMergeForPg(sql) {
       const col = assignment.slice(0, eq).trim();
       const rhs = assignment.slice(eq + 1).trim();
 
-      if (/^@\w+$/i.test(rhs) || /^source\.\w+$/i.test(rhs)) {
+      if (/^@\w+$/i.test(rhs) || /^(?:source|s)\.\w+$/i.test(rhs)) {
         return `${col} = EXCLUDED.${col}`;
       }
-      const coalesce = rhs.match(/^COALESCE\s*\(\s*(@\w+)\s*,\s*target\.(\w+)\s*\)$/i);
+      const coalesce = rhs.match(/^COALESCE\s*\(\s*(@\w+)\s*,\s*(?:target|t)\.(\w+)\s*\)$/i);
       if (coalesce) {
         return `${col} = COALESCE(EXCLUDED.${col}, ${table}.${coalesce[2]})`;
       }
@@ -93,6 +93,8 @@ function translateSqlForPg(sql) {
   q = q.replace(/\bdbo\./gi, "");
   q = q.replace(/SYSUTCDATETIME\s*\(\s*\)/gi, "CURRENT_TIMESTAMP");
   q = q.replace(/\bISNULL\s*\(/gi, "COALESCE(");
+  q = q.replace(/\bNVARCHAR\s*\(\s*\d+\s*\)/gi, "TEXT");
+  q = q.replace(/\bNVARCHAR\b/gi, "TEXT");
   q = q.replace(/\bN'/g, "'");
   q = q.replace(/^\s*;\s*WITH\b/i, "WITH");
 
