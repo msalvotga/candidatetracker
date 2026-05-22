@@ -1352,6 +1352,35 @@ export async function insertSosResultSnapshot({ electionId, electionLabel, paylo
   persistDb(db);
 }
 
+/** Last stored Civix election + countyInfo JSON (from a prior successful ingest). */
+export async function getLatestSosCivixSnapshot(electionId) {
+  const db = await ensureDb();
+  const stmt = db.prepare(
+    `SELECT payload_json, fetched_at FROM sos_results WHERE election_id = ? ORDER BY fetched_at DESC LIMIT 1`,
+  );
+  stmt.bind([String(electionId)]);
+  if (!stmt.step()) {
+    stmt.free();
+    return null;
+  }
+  const row = stmt.getAsObject();
+  stmt.free();
+  try {
+    const payload = JSON.parse(String(row.payload_json ?? "{}"));
+    const election = payload?.election;
+    const county = payload?.county;
+    if (!election || !county) return null;
+    return {
+      election,
+      county,
+      fetchedAt: String(row.fetched_at ?? ""),
+      sosCountyInfoUrlUsed: String(payload?.sosCountyInfoUrlUsed ?? ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function normalizeCountyCandidateName(value) {
   const raw = String(value ?? "").toUpperCase();
   const stripped = raw

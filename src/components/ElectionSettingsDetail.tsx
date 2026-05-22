@@ -50,6 +50,15 @@ function hasFeedUrl(r: Pick<FeedDraft, "sourceUrl">) {
   return !!String(r.sourceUrl ?? "").trim();
 }
 
+function hasHubPage(r: Pick<FeedDraft, "hubPageUrl">) {
+  return !!String(r.hubPageUrl ?? "").trim();
+}
+
+/** Row has something worth showing/editing (feed URL and/or hub page). */
+function hasFeedOrHub(r: Pick<FeedDraft, "sourceUrl" | "hubPageUrl">) {
+  return hasFeedUrl(r) || hasHubPage(r);
+}
+
 function mapSourceToFeedDraft(s: ElectionFeedSourceRow): FeedDraft {
   const sourceUrl = s.sourceUrl ?? "";
   return {
@@ -133,10 +142,10 @@ export function ElectionSettingsDetail({
   const visibleFeedIndices = useMemo(() => {
     return feeds
       .map((_, i) => i)
-      .filter((i) => !hideNoFeedUrl || hasFeedUrl(feeds[i]));
+      .filter((i) => !hideNoFeedUrl || hasFeedOrHub(feeds[i]));
   }, [feeds, hideNoFeedUrl]);
 
-  const hiddenNoUrlCount = useMemo(() => feeds.filter((r) => !hasFeedUrl(r)).length, [feeds]);
+  const hiddenNoUrlCount = useMemo(() => feeds.filter((r) => !hasFeedOrHub(r)).length, [feeds]);
 
   const copySourceOptions = useMemo(
     () => allElections.filter((e) => e.electionId !== electionId).sort((a, b) => a.label.localeCompare(b.label, "en")),
@@ -785,7 +794,7 @@ export function ElectionSettingsDetail({
                   onChange={(e) => setHideNoFeedUrl(e.target.checked)}
                   disabled={busy}
                 />
-                <span>Hide rows without a feed URL</span>
+                <span>Hide empty rows (no feed URL or hub page)</span>
               </label>
               <span className="enr-muted" style={{ fontSize: 13 }}>
                 Showing {visibleFeedIndices.length} of {feeds.length}
@@ -818,7 +827,7 @@ export function ElectionSettingsDetail({
                       <td colSpan={usesCivixSos ? 8 : 7} className="enr-muted">
                         {feeds.length === 0
                           ? "No county feeds yet — add a row or copy from another election."
-                          : "All rows are hidden (no feed URL). Uncheck “Hide rows without a feed URL” or add URLs."}
+                          : "All rows are hidden (no feed URL or hub). Uncheck the filter above or add hub/feed URLs."}
                       </td>
                     </tr>
                   ) : null}

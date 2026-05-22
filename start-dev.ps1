@@ -22,11 +22,11 @@ or run this script again.
 If Node is already installed, open a new PowerShell window (PATH refresh) and run:
   cd `"$PSScriptRoot`"
   npm install
-  npm run dev
+  npm run dev:all
 "@
   exit 1
 }
 
 Write-Host "Using: $npm"
 & $npm install
-& $npm run dev
+& $npm run dev:all

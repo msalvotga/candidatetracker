@@ -1,5 +1,6 @@
 import type { CivixElectionListItem } from "./civix/api";
 import type { ElectionFile, LoadedElection } from "../types/election";
+import { apiFetch } from "./apiBase";
 import { mapCivixPayloadToElectionFile } from "./civix/mapCivixElection";
 
 /** One row in the election dropdown (Civix or manual). */
@@ -15,7 +16,7 @@ export async function probeBackend(): Promise<boolean> {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 12_000);
-      const r = await fetch("/api/health", { cache: "no-store", signal: ctrl.signal });
+      const r = await apiFetch("/api/health", { cache: "no-store", signal: ctrl.signal });
       clearTimeout(timer);
       if (!r.ok) {
         await sleep(1500);
@@ -45,7 +46,7 @@ export async function fetchCatalogFromBackend(): Promise<{
 }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 60_000);
-  const r = await fetch("/api/catalog", { cache: "no-store", signal: ctrl.signal });
+  const r = await apiFetch("/api/catalog", { cache: "no-store", signal: ctrl.signal });
   clearTimeout(timer);
   if (!r.ok) throw new Error(`Catalog HTTP ${r.status}`);
   const j = (await r.json()) as {
@@ -69,7 +70,7 @@ export async function fetchCatalogFromBackend(): Promise<{
 }
 
 export async function setDefaultElectionCatalog(electionId: string): Promise<ElectionSourceConfig> {
-  const r = await fetch(`/api/election-source-configs/${encodeURIComponent(electionId)}/set-default`, {
+  const r = await apiFetch(`/api/election-source-configs/${encodeURIComponent(electionId)}/set-default`, {
     method: "POST",
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -86,7 +87,7 @@ export function civixListToOptions(items: CivixElectionListItem[]): ElectionOpti
 }
 
 export async function loadElectionFromBackend(catalogId: string, catalogLabel: string): Promise<LoadedElection> {
-  const r = await fetch("/api/election?" + new URLSearchParams({ id: catalogId }), { cache: "no-store" });
+  const r = await apiFetch("/api/election?" + new URLSearchParams({ id: catalogId }), { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status} loading ${catalogId}`);
   const body = (await r.json()) as
     | { provider: "manual"; electionFile: ElectionFile }
@@ -176,31 +177,31 @@ export interface ElectionSourceConfig {
 }
 
 export async function fetchSources(): Promise<SourceRegistry> {
-  const r = await fetch("/api/sources", { cache: "no-store" });
+  const r = await apiFetch("/api/sources", { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json() as Promise<SourceRegistry>;
 }
 
 export async function fetchDbOverview(): Promise<DbOverview> {
-  const r = await fetch("/api/db/overview", { cache: "no-store" });
+  const r = await apiFetch("/api/db/overview", { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json() as Promise<DbOverview>;
 }
 
 export async function fetchDbTablePreview(table: "data_sources" | "sos_county_results", limit = 20): Promise<DbTablePreview> {
-  const r = await fetch("/api/db/preview?" + new URLSearchParams({ table, limit: String(limit) }), { cache: "no-store" });
+  const r = await apiFetch("/api/db/preview?" + new URLSearchParams({ table, limit: String(limit) }), { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json() as Promise<DbTablePreview>;
 }
 
 export async function fetchAppSettings(): Promise<AppSettings> {
-  const r = await fetch("/api/settings", { cache: "no-store" });
+  const r = await apiFetch("/api/settings", { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json() as Promise<AppSettings>;
 }
 
 export async function updateAppSettings(settings: AppSettings): Promise<AppSettings> {
-  const r = await fetch("/api/settings", {
+  const r = await apiFetch("/api/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
@@ -210,7 +211,7 @@ export async function updateAppSettings(settings: AppSettings): Promise<AppSetti
 }
 
 export async function fetchElectionSourceConfigs(): Promise<{ elections: ElectionSourceConfig[] }> {
-  const r = await fetch("/api/election-source-configs", { cache: "no-store" });
+  const r = await apiFetch("/api/election-source-configs", { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json() as Promise<{ elections: ElectionSourceConfig[] }>;
 }
@@ -219,7 +220,7 @@ export async function updateElectionSourceConfig(
   electionId: string,
   patch: Partial<ElectionSourceConfig>,
 ): Promise<ElectionSourceConfig> {
-  const r = await fetch(`/api/election-source-configs/${encodeURIComponent(electionId)}`, {
+  const r = await apiFetch(`/api/election-source-configs/${encodeURIComponent(electionId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
@@ -250,7 +251,7 @@ export interface IngestVendor {
 export type IngestProcess = IngestVendor;
 
 export async function fetchIngestVendors(): Promise<{ vendors: IngestVendor[] }> {
-  const r = await fetch("/api/ingest-vendors", { cache: "no-store" });
+  const r = await apiFetch("/api/ingest-vendors", { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json() as Promise<{ vendors: IngestVendor[] }>;
 }
@@ -291,13 +292,13 @@ export interface Sd4HistoricalGeCountyTotalsPayload {
 }
 
 export async function fetchSd4HistoricalGeCountyTotals(): Promise<Sd4HistoricalGeCountyTotalsPayload> {
-  const r = await fetch("/api/historical/sd4-ge-county-totals", { cache: "no-store" });
+  const r = await apiFetch("/api/historical/sd4-ge-county-totals", { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json() as Promise<Sd4HistoricalGeCountyTotalsPayload>;
 }
 
 export async function fetchElectionFeedSources(electionId: string): Promise<{ sources: ElectionFeedSourceRow[] }> {
-  const r = await fetch(`/api/election-feed-sources/${encodeURIComponent(electionId)}`, { cache: "no-store" });
+  const r = await apiFetch(`/api/election-feed-sources/${encodeURIComponent(electionId)}`, { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json() as Promise<{ sources: ElectionFeedSourceRow[] }>;
 }
@@ -311,7 +312,7 @@ export async function saveElectionFeedSources(
     >
   >,
 ): Promise<{ sources: ElectionFeedSourceRow[]; persistedToDisk?: boolean; warning?: string }> {
-  const r = await fetch(`/api/election-feed-sources/${encodeURIComponent(electionId)}`, {
+  const r = await apiFetch(`/api/election-feed-sources/${encodeURIComponent(electionId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sources }),
@@ -346,7 +347,7 @@ export interface DiscoverCountyFeedUrlBulkItemResult extends DiscoverCountyFeedU
 }
 
 export async function fetchHubDiscoveryCountyKeys(): Promise<{ countyKeys: string[] }> {
-  const r = await fetch("/api/county-feed/hub-discovery-counties", { cache: "no-store" });
+  const r = await apiFetch("/api/county-feed/hub-discovery-counties", { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json() as Promise<{ countyKeys: string[] }>;
 }
@@ -354,7 +355,7 @@ export async function fetchHubDiscoveryCountyKeys(): Promise<{ countyKeys: strin
 export async function discoverCountyFeedUrlsBulk(body: {
   items: Array<{ hubUrl: string; countyKey: string; vendorId?: string; html?: string }>;
 }): Promise<{ results: DiscoverCountyFeedUrlBulkItemResult[]; okCount: number; total: number }> {
-  const r = await fetch("/api/county-feed/discover-urls-bulk", {
+  const r = await apiFetch("/api/county-feed/discover-urls-bulk", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -432,7 +433,7 @@ export interface CountyRaceMappingPayload {
 }
 
 export async function fetchCountyRaceMapping(electionId: string): Promise<CountyRaceMappingPayload> {
-  const r = await fetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping`, { cache: "no-store" });
+  const r = await apiFetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping`, { cache: "no-store" });
   const j = (await r.json().catch(() => ({}))) as CountyRaceMappingPayload & { error?: string };
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
   return j;
@@ -448,7 +449,7 @@ export async function saveCountyRaceLink(
     linkType?: string;
   },
 ): Promise<void> {
-  const r = await fetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/link`, {
+  const r = await apiFetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/link`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ link }),
@@ -462,7 +463,7 @@ export async function deleteCountyRaceLink(
   countyKey: string,
   countyContestName: string,
 ): Promise<void> {
-  const r = await fetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/link`, {
+  const r = await apiFetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/link`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ countyKey, countyContestName }),
@@ -484,7 +485,7 @@ export async function saveCountyRaceManualVote(
     totalVotes: number;
   },
 ): Promise<void> {
-  const r = await fetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/manual-vote`, {
+  const r = await apiFetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/manual-vote`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ row }),
@@ -497,7 +498,7 @@ export async function saveCountyRaceVoteSource(
   electionId: string,
   row: { countyKey: string; sosRaceId: string; voteSource: CountyVoteSource },
 ): Promise<void> {
-  const r = await fetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/vote-source`, {
+  const r = await apiFetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/vote-source`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ row }),
@@ -511,7 +512,7 @@ export async function discoverCountyFeedUrl(body: {
   countyKey: string;
   html?: string;
 }): Promise<DiscoverCountyFeedUrlResult> {
-  const r = await fetch("/api/county-feed/discover-url", {
+  const r = await apiFetch("/api/county-feed/discover-url", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -527,7 +528,7 @@ export async function createElectionSourceConfig(body: {
   usesCivixSos?: boolean;
   showInCatalog?: boolean;
 }): Promise<ElectionSourceConfig> {
-  const r = await fetch("/api/election-source-configs", {
+  const r = await apiFetch("/api/election-source-configs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -560,7 +561,7 @@ export interface IngestStatus {
 }
 
 export async function fetchIngestStatus(): Promise<IngestStatus> {
-  const r = await fetch("/api/ingest/status", { cache: "no-store" });
+  const r = await apiFetch("/api/ingest/status", { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json() as Promise<IngestStatus>;
 }
@@ -603,7 +604,7 @@ export interface ImportLogPayload {
 }
 
 export async function fetchImportLog(limit = 200): Promise<ImportLogPayload> {
-  const r = await fetch("/api/import-log?" + new URLSearchParams({ limit: String(limit) }), { cache: "no-store" });
+  const r = await apiFetch("/api/import-log?" + new URLSearchParams({ limit: String(limit) }), { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json() as Promise<ImportLogPayload>;
 }
@@ -614,7 +615,7 @@ export async function forceRefreshAllSources(electionId: string | number = 56181
       ? String(electionId)
       : String(electionId ?? "").trim();
   if (!id) throw new Error("electionId required");
-  const r = await fetch("/api/ingest/refresh-once", {
+  const r = await apiFetch("/api/ingest/refresh-once", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ electionId: id }),
@@ -628,7 +629,7 @@ export async function saveManualElection(body: {
   label: string;
   electionFile: ElectionFile;
 }): Promise<void> {
-  const r = await fetch("/api/manual-elections", {
+  const r = await apiFetch("/api/manual-elections", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -647,7 +648,7 @@ export async function saveManualElection(body: {
 }
 
 export async function deleteManualElection(id: string): Promise<void> {
-  const r = await fetch(`/api/manual-elections/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const r = await apiFetch(`/api/manual-elections/${encodeURIComponent(id)}`, { method: "DELETE" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
 }
 
@@ -656,7 +657,7 @@ export async function updateManualElection(body: {
   label: string;
   electionFile: ElectionFile;
 }): Promise<void> {
-  const r = await fetch(`/api/manual-elections/${encodeURIComponent(body.id)}`, {
+  const r = await apiFetch(`/api/manual-elections/${encodeURIComponent(body.id)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ label: body.label, electionFile: body.electionFile }),

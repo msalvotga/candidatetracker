@@ -1,3 +1,4 @@
+import "dotenv/config";
 import dns from "node:dns";
 import { createApiApp } from "./createApiApp.mjs";
 import { ensureDb, getDbInfo } from "./db.mjs";

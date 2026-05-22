@@ -2,6 +2,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sql from "mssql";
+import { createPgPool, isPostgresMode, PgTransaction } from "./lib/pgMssqlCompat.mjs";
+import {
+  readElectionFeedBackupByElection,
+  writeElectionFeedBackupForElection,
+} from "./lib/electionFeedConfigBackup.mjs";
+
+/** @param {Awaited<ReturnType<typeof ensureDb>>} pool */
+function dbTransaction(pool) {
+  return isPostgresMode() ? new PgTransaction(pool) : new sql.Transaction(pool);
+}
+
+/** @param {PgTransaction | import("mssql").Transaction} parent */
+function dbRequest(parent) {
+  if (parent instanceof PgTransaction) return parent.request();
+  return new sql.Request(parent);
+}
 import { resolveVoterActivityDate } from "./lib/evRosterVoterDates.mjs";
 import {
   EV_ROSTER_SUMMARY_CACHE_DDL_MSSQL,
@@ -1034,6 +1050,16 @@ export async function ensureDb() {
   if (_init) return _init;
 
   _init = (async () => {
+    if (isPostgresMode()) {
+      _pool = createPgPool();
+      await _pool.connect();
+      const restoredFeeds = await restoreElectionFeedsFromBackupMssql();
+      if (restoredFeeds > 0) {
+        console.warn(`Restored ${restoredFeeds} county feed row(s) from election-feed-configs.json into PostgreSQL`);
+      }
+      // Postgres schema/data are managed on the host (e.g. Render) — skip T-SQL seed/migration helpers.
+      return _pool;
+    }
     const { config } = buildConfig();
     _pool = new sql.ConnectionPool(config);
     await _pool.connect();
@@ -1047,6 +1073,22 @@ export async function ensureDb() {
 }
 
 export function getDbInfo() {
+  if (isPostgresMode()) {
+    let host = "";
+    try {
+      host = new URL(process.env.DATABASE_URL ?? "").hostname;
+    } catch {
+      host = "(DATABASE_URL)";
+    }
+    return {
+      engine: "postgresql",
+      server: host,
+      database: "electionnight_db",
+      driver: "pg",
+      ssms: false,
+      hint: "PostgreSQL via DATABASE_URL (Render). Schema is not auto-created — manage tables in your hosted database.",
+    };
+  }
   const server = process.env.MSSQL_SERVER?.trim() || "";
   const database = process.env.MSSQL_DATABASE?.trim() || "electionnighttracker";
   return {
@@ -1128,16 +1170,22 @@ export async function updateManualElection(id, label, electionFileObj) {
 
 export async function listDbTablesWithCounts() {
   const pool = await ensureDb();
-  const r = await pool.request().query(`
-    SELECT t.name, CAST(SUM(p.row_count) AS BIGINT) AS row_count
-    FROM sys.tables t
-    JOIN sys.dm_db_partition_stats p ON p.object_id = t.object_id AND p.index_id IN (0, 1)
-    GROUP BY t.name
-    ORDER BY t.name
-  `);
+  const r = isPostgresMode()
+    ? await pool.request().query(`
+        SELECT relname AS name, COALESCE(n_live_tup, 0)::bigint AS row_count
+        FROM pg_stat_user_tables
+        ORDER BY relname
+      `)
+    : await pool.request().query(`
+        SELECT t.name, CAST(SUM(p.row_count) AS BIGINT) AS row_count
+        FROM sys.tables t
+        JOIN sys.dm_db_partition_stats p ON p.object_id = t.object_id AND p.index_id IN (0, 1)
+        GROUP BY t.name
+        ORDER BY t.name
+      `);
   return r.recordset.map((row) => ({
-    name: String(row.name),
-    rowCount: Number(row.row_count ?? 0),
+    name: String(row.name ?? row.Name ?? ""),
+    rowCount: Number(row.row_count ?? row.rowCount ?? 0),
   }));
 }
 
@@ -1167,6 +1215,34 @@ export async function insertSosResultSnapshot({ electionId, electionLabel, paylo
     .query(`INSERT INTO dbo.sos_results (election_id, election_label, payload_json) VALUES (@election_id, @election_label, @payload_json)`);
 }
 
+/** Last stored Civix election + countyInfo JSON (from a prior successful ingest). */
+export async function getLatestSosCivixSnapshot(electionId) {
+  const pool = await ensureDb();
+  const r = await pool.request().input("election_id", sql.NVarChar(128), String(electionId)).query(`
+    SELECT TOP 1 payload_json AS payloadJson, fetched_at AS fetchedAt
+    FROM dbo.sos_results WHERE election_id = @election_id
+    ORDER BY fetched_at DESC
+  `);
+  const row = r.recordset?.[0];
+  if (!row) return null;
+  try {
+    const payload = JSON.parse(String(row.payloadJson ?? "{}"));
+    const election = payload?.election;
+    const county = payload?.county;
+    if (!election || !county) return null;
+    const fetchedAt =
+      row.fetchedAt instanceof Date ? row.fetchedAt.toISOString() : String(row.fetchedAt ?? "");
+    return {
+      election,
+      county,
+      fetchedAt,
+      sosCountyInfoUrlUsed: String(payload?.sosCountyInfoUrlUsed ?? ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function normalizeCountyCandidateName(value) {
   const raw = String(value ?? "").toUpperCase();
   const stripped = raw
@@ -1194,18 +1270,18 @@ export async function commitCountyResultsBatch({ electionId, batchAt, segments }
     batchAt != null ? (typeof batchAt === "string" ? new Date(batchAt) : batchAt) : new Date();
   const segs = segments ?? [];
 
-  const transaction = new sql.Transaction(pool);
+  const transaction = dbTransaction(pool);
   await transaction.begin();
   try {
     // Replace county rows atomically: delete then insert before commit.
-    await new sql.Request(transaction)
+    await dbRequest(transaction)
       .input("election_id", sql.NVarChar(128), electionKey)
       .query(`DELETE FROM dbo.county_results WHERE election_id = @election_id`);
 
     for (const seg of segs) {
       for (const row of seg.rows ?? []) {
         const normalizedChoice = normalizeCountyCandidateName(row.choiceName);
-        await new sql.Request(transaction)
+        await dbRequest(transaction)
           .input("county_id", sql.NVarChar(64), seg.countyId)
           .input("election_id", sql.NVarChar(128), electionKey)
           .input("contest_name", sql.NVarChar(512), row.contestName ?? "")
@@ -1283,15 +1359,15 @@ export async function insertSosCandidateRows({ electionId, electionLabel, source
 export async function insertSosCountyRows({ electionId, electionLabel, sourceUrl, rows }) {
   const pool = await ensureDb();
   const electionKey = String(electionId ?? "56181");
-  const transaction = new sql.Transaction(pool);
+  const transaction = dbTransaction(pool);
   await transaction.begin();
   try {
     // Atomic replace so readers don't see a partial clear/insert sequence.
-    await new sql.Request(transaction)
+    await dbRequest(transaction)
       .input("election_id", sql.NVarChar(128), electionKey)
       .query(`DELETE FROM dbo.sos_county_results WHERE election_id = @election_id`);
     for (const row of rows ?? []) {
-      await new sql.Request(transaction)
+      await dbRequest(transaction)
         .input("election_id", sql.NVarChar(128), String(electionId))
         .input("election_label", sql.NVarChar(512), electionLabel ?? null)
         .input("county_name", sql.NVarChar(128), row.countyName ?? "")
@@ -1646,11 +1722,53 @@ export async function listIngestVendors() {
   }));
 }
 
-async function ensureElectionFeedsSeededFromLegacyMssql(pool, electionId) {
+async function feedCountForElection(pool, electionId) {
   const c = await pool.request().input("election_id", sql.NVarChar(128), electionId).query(`
-    SELECT COUNT(*) AS n FROM dbo.election_feed_sources WHERE election_id = @election_id
+    SELECT COUNT(*)::bigint AS n FROM dbo.election_feed_sources WHERE election_id = @election_id
   `);
-  if (Number(c.recordset?.[0]?.n ?? 0) > 0) return;
+  const row = c.recordset?.[0] ?? {};
+  return Number(row.n ?? row.N ?? 0);
+}
+
+/** Restore county feeds from JSON sidecar when backup is newer or DB rows are missing (PostgreSQL startup). */
+async function restoreElectionFeedsFromBackupMssql() {
+  if (!isPostgresMode()) return 0;
+  const pool = await ensureDb();
+  const byElection = readElectionFeedBackupByElection();
+  let restoredRows = 0;
+
+  for (const [eid, block] of Object.entries(byElection)) {
+    const sources = Array.isArray(block?.sources) ? block.sources : [];
+    if (!sources.length) continue;
+
+    const countR = await pool
+      .request()
+      .input("election_id", sql.NVarChar(128), eid)
+      .query(`
+        SELECT COUNT(*)::bigint AS n, MAX(updated_at) AS maxAt
+        FROM dbo.election_feed_sources WHERE election_id = @election_id
+      `);
+    const row = countR.recordset?.[0] ?? {};
+    const dbCount = Number(row.n ?? 0);
+    const dbMax = row.maxAt instanceof Date ? row.maxAt.toISOString() : String(row.maxAt ?? "");
+    const backupAt = String(block.updatedAt ?? "");
+
+    const shouldRestore =
+      dbCount === 0 ||
+      (backupAt && (!dbMax || backupAt > dbMax)) ||
+      (sources.length > dbCount && backupAt >= dbMax);
+
+    if (!shouldRestore) continue;
+
+    await replaceElectionFeedSourcesForElection(eid, sources);
+    restoredRows += sources.length;
+  }
+
+  return restoredRows;
+}
+
+async function ensureElectionFeedsSeededFromLegacyMssql(pool, electionId) {
+  if ((await feedCountForElection(pool, electionId)) > 0) return;
 
   const cfgR = await pool.request().input("election_id", sql.NVarChar(128), electionId).query(`
     SELECT harris_source_url AS harrisSourceUrl, galveston_source_url AS galvestonSourceUrl, jefferson_source_url AS jeffersonSourceUrl,
@@ -1720,10 +1838,10 @@ export async function replaceElectionFeedSourcesForElection(electionId, sources)
   const eid = String(electionId ?? "").trim();
   if (!eid) throw new Error("electionId is required");
 
-  const transaction = new sql.Transaction(pool);
+  const transaction = dbTransaction(pool);
   await transaction.begin();
   try {
-    await new sql.Request(transaction).input("election_id", sql.NVarChar(128), eid).query(`
+    await dbRequest(transaction).input("election_id", sql.NVarChar(128), eid).query(`
       DELETE FROM dbo.election_feed_sources WHERE election_id = @election_id
     `);
     let ord = 0;
@@ -1732,7 +1850,7 @@ export async function replaceElectionFeedSourcesForElection(electionId, sources)
       if (!countyKey) continue;
       const civix =
         s.civixCountyName != null && String(s.civixCountyName).trim() ? String(s.civixCountyName).trim() : null;
-      await new sql.Request(transaction)
+      await dbRequest(transaction)
         .input("election_id", sql.NVarChar(128), eid)
         .input("county_key", sql.NVarChar(64), countyKey)
         .input("civix_county_name", sql.NVarChar(128), civix)
@@ -1753,7 +1871,16 @@ export async function replaceElectionFeedSourcesForElection(electionId, sources)
     await transaction.rollback();
     throw e;
   }
+  try {
+    writeElectionFeedBackupForElection(eid, sources);
+  } catch (e) {
+    console.warn("election feed backup write failed:", e?.message ?? e);
+  }
   return listElectionFeedSources(eid);
+}
+
+export function flushPendingDatabasePersist() {
+  return true;
 }
 
 export async function updateElectionFeedSourceUrl(electionId, feedId, sourceUrl) {
@@ -2327,10 +2454,10 @@ export async function saveEvRosterPull(payload, options = {}) {
     ...preservedSummaries,
   ];
   const votersToWrite = filterVotersForLocked(voters, locked);
-  const transaction = new sql.Transaction(pool);
+  const transaction = dbTransaction(pool);
   await transaction.begin();
   try {
-    const req = () => new sql.Request(transaction);
+    const req = () => dbRequest(transaction);
     await req()
       .input("evr_election_id", sql.Int, eid)
       .input("voting_date", sql.NVarChar(16), vDate)

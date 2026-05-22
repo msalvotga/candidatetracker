@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { listCivixElectionSummaries, fetchCivixElectionBundle, fetchCivixElectionBundleWithOverrides } from "./lib/civixServer.mjs";
@@ -42,6 +43,7 @@ import {
   insertSosCountyRows,
   insertSosCandidateRows,
   insertSosResultSnapshot,
+  getLatestSosCivixSnapshot,
   insertManualElection,
   listDbTablesWithCounts,
   listManualElectionsMeta,
@@ -112,6 +114,37 @@ function slugId(s) {
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
+}
+
+/**
+ * Civix blocks many cloud/datacenter IPs (HTTP 403). Fall back to the last sos_results snapshot when live fetch fails.
+ * @param {string | number} electionId
+ * @param {string} [countyInfoUrl]
+ */
+async function loadCivixBundleWithCacheFallback(electionId, countyInfoUrl = "") {
+  const override = String(countyInfoUrl ?? "").trim();
+  try {
+    const bundle = override
+      ? await fetchCivixElectionBundleWithOverrides(electionId, { countyInfoUrl: override })
+      : await fetchCivixElectionBundle(electionId);
+    return { ...bundle, civixFromCache: false, civixCacheNote: null };
+  } catch (e) {
+    const snap = await getLatestSosCivixSnapshot(String(electionId));
+    if (!snap) throw e;
+    const err = e instanceof Error ? e.message : String(e);
+    console.warn(
+      `Civix live fetch failed for election ${electionId}; using cached sos_results (${snap.fetchedAt || "unknown time"})`,
+      err,
+    );
+    return {
+      election: snap.election,
+      county: snap.county,
+      sosCountyInfoUrlConfigured: override,
+      sosCountyInfoUrlUsed: snap.sosCountyInfoUrlUsed || "",
+      civixFromCache: true,
+      civixCacheNote: `Live Civix API unavailable (${err}). Using last stored SOS snapshot${snap.fetchedAt ? ` from ${snap.fetchedAt}` : ""}.`,
+    };
+  }
 }
 
 function validateElectionFile(obj) {
@@ -483,11 +516,19 @@ export function createApiApp() {
   const PORT = Number(process.env.PORT || 3847);
 
   const app = express();
-  app.use(
-    cors({
-      origin: [/localhost:\d+$/, /^127\.0\.0\.1:\d+$/],
-    }),
-  );
+  const corsOrigins = [/localhost:\d+$/, /^127\.0\.0\.1:\d+$/, /^https:\/\/[a-z0-9-]+\.onrender\.com$/i];
+  const extra = String(process.env.CORS_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const o of extra) {
+    try {
+      corsOrigins.push(new RegExp(`^${o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"));
+    } catch {
+      corsOrigins.push(o);
+    }
+  }
+  app.use(cors({ origin: corsOrigins }));
   app.use(express.json({ limit: "80mb" }));
 
   async function shouldAutoIngest() {
@@ -635,9 +676,8 @@ export function createApiApp() {
       });
       try {
         const countyInfoUrl = cfg.sosCountyInfoUrl;
-        const { election, county } = countyInfoUrl
-          ? await fetchCivixElectionBundleWithOverrides(electionId, { countyInfoUrl })
-          : await fetchCivixElectionBundle(electionId);
+        const bundle = await loadCivixBundleWithCacheFallback(electionId, countyInfoUrl);
+        const { election, county, civixFromCache, civixCacheNote } = bundle;
         const sosCandidateRows = extractSd4SosCandidateRowsFromCivix({
           electionId,
           electionLabel: `civix:${electionId}`,
@@ -674,14 +714,18 @@ export function createApiApp() {
           capturedAt: countyBatchAt,
           rows: sosCandidateRows,
         });
+        const sosLogSuffix = civixFromCache && civixCacheNote ? ` — ${civixCacheNote}` : "";
         await appendSourceImportLog({
           sourceKey: sourceLogKey("sos"),
           ok: true,
-          message: `OK: civix bundle + snapshot + ${sosCandidateRows.length} candidate rows + ${sosCountyRows.length} SOS county rows`,
+          message: `OK: civix bundle + snapshot + ${sosCandidateRows.length} candidate rows + ${sosCountyRows.length} SOS county rows${sosLogSuffix}`,
         });
+        if (civixFromCache && civixCacheNote) result.errors.push(`SOS: ${civixCacheNote}`);
       } catch (e) {
         const msg = String(e?.message || e);
-        result.errors.push(`SOS pull failed: ${msg}`);
+        result.errors.push(
+          `SOS pull failed: ${msg}. County feeds can still update. Run a successful ingest once from a network that can reach Civix, or rely on county feeds only.`,
+        );
         await appendSourceImportLog({ sourceKey: sourceLogKey("sos"), ok: false, message: msg });
       }
     } else {
@@ -1150,9 +1194,7 @@ export function createApiApp() {
         return res.status(400).json({ error: "County race mapping requires a Civix numeric election id" });
       }
       const cfg = await getElectionIngestConfig(num);
-      const bundle = cfg.sosCountyInfoUrl
-        ? await fetchCivixElectionBundleWithOverrides(num, { countyInfoUrl: cfg.sosCountyInfoUrl })
-        : await fetchCivixElectionBundle(num);
+      const bundle = await loadCivixBundleWithCacheFallback(num, cfg.sosCountyInfoUrl);
       const sosRaces = collectCivixSosRaces(bundle.election);
       const electionParty = inferElectionPartyFromConfig({
         electionId: cfg.electionId ?? electionId,
@@ -1245,7 +1287,7 @@ export function createApiApp() {
       const persistedToDisk = await flushPendingDatabasePersist();
       const warning = persistedToDisk
         ? undefined
-        : "County feeds are saved to election-feed-configs.json. Full elections.db write was skipped or delayed (large database) — feeds will reload from the JSON backup after restart.";
+        : "County feeds were written to election-feed-configs.json. The main SQLite database file was not flushed yet (large database) — feeds will reload from that JSON backup after restart.";
       res.json({ electionId, sources: updated, persistedToDisk, ...(warning ? { warning } : {}) });
     } catch (e) {
       console.error(e);
@@ -1467,10 +1509,9 @@ export function createApiApp() {
   async function civixElectionHttpPayload(num) {
     const cfg = await getElectionIngestConfig(num);
     const countyInfoUrl = cfg.sosCountyInfoUrl;
-    const bundle = countyInfoUrl
-      ? await fetchCivixElectionBundleWithOverrides(num, { countyInfoUrl })
-      : await fetchCivixElectionBundle(num);
-    const { election, county, sosCountyInfoUrlConfigured, sosCountyInfoUrlUsed } = bundle;
+    const bundle = await loadCivixBundleWithCacheFallback(num, countyInfoUrl);
+    const { election, county, sosCountyInfoUrlConfigured, sosCountyInfoUrlUsed, civixFromCache, civixCacheNote } =
+      bundle;
     const mergedSd4 = await mergeSd4CountyOverridesIntoCivix(num, election, county);
     const merged = await mergeLinkedCountyOverridesIntoCivix(num, mergedSd4.electionPayload, mergedSd4.countyDoc);
     return {
@@ -1480,10 +1521,11 @@ export function createApiApp() {
       sosCountyInfoUrlUsed,
       election: merged.electionPayload,
       county: merged.countyDoc,
+      ...(civixFromCache ? { civixFromCache: true, civixCacheNote } : {}),
     };
   }
 
-  app.get("/api/election", async (req, res) => {
+  async function respondElectionByCatalogId(req, res) {
     const id = req.query.id;
     if (typeof id !== "string" || !id.includes(":")) {
       return res.status(400).json({ error: "Query `id` must be like civix:…, manual:…, or election:…" });
@@ -1533,7 +1575,11 @@ export function createApiApp() {
       console.error(e);
       res.status(502).json({ error: String(e.message || e) });
     }
-  });
+  }
+
+  app.get("/api/election", respondElectionByCatalogId);
+  /** Legacy path used by some Render deployments. */
+  app.get("/api/election-data", respondElectionByCatalogId);
 
   app.post("/api/manual-elections", async (req, res) => {
     try {

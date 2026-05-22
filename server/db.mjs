@@ -2,7 +2,8 @@ import * as sqlite from "./db-sqlite.mjs";
 import * as mssql from "./db-mssql.mjs";
 
 function backend() {
-  return process.env.MSSQL_SERVER?.trim() ? mssql : sqlite;
+  if (process.env.DATABASE_URL?.trim() || process.env.MSSQL_SERVER?.trim()) return mssql;
+  return sqlite;
 }
 
 /** On-disk folder for legacy JSON migration (SQLite file also lives under `server/data/`). */
@@ -54,6 +55,10 @@ export async function getDbTablePreview(tableName, limit) {
 
 export async function insertSosResultSnapshot(row) {
   return backend().insertSosResultSnapshot(row);
+}
+
+export async function getLatestSosCivixSnapshot(electionId) {
+  return backend().getLatestSosCivixSnapshot(electionId);
 }
 
 export async function insertCountyResultRows(payload) {

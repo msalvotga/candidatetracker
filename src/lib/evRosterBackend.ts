@@ -1,3 +1,5 @@
+import { apiFetch } from "./apiBase";
+
 async function readEvRosterJson<T extends { error?: string }>(
   r: Response,
   label: string,
@@ -181,7 +183,7 @@ export async function fetchEvRosterVoters(
     for (const county of options.counties) q.append("county", county);
   }
   if (options?.q) q.set("q", options.q);
-  const r = await fetch(`/api/ev-roster/voters?${q}`, { cache: "no-store" });
+  const r = await apiFetch(`/api/ev-roster/voters?${q}`, { cache: "no-store" });
   const body = await readEvRosterJson<{
     evrElectionId?: number;
     votingDate?: string;
@@ -206,7 +208,7 @@ export async function fetchEvRosterConfigs(): Promise<{
   configs: EvRosterConfig[];
   runoffs: EvRosterRunoff[];
 }> {
-  const r = await fetch("/api/ev-roster/configs", { cache: "no-store" });
+  const r = await apiFetch("/api/ev-roster/configs", { cache: "no-store" });
   const body = await readEvRosterJson<{
     configs?: EvRosterConfig[];
     runoffs?: EvRosterRunoff[];
@@ -217,7 +219,7 @@ export async function fetchEvRosterConfigs(): Promise<{
 }
 
 export async function fetchEvRosterPullDates(evrElectionId: number) {
-  const r = await fetch(`/api/ev-roster/pulls?evrElectionId=${evrElectionId}`, { cache: "no-store" });
+  const r = await apiFetch(`/api/ev-roster/pulls?evrElectionId=${evrElectionId}`, { cache: "no-store" });
   const body = await readEvRosterJson<{
     evrElectionId?: number;
     pulls?: Array<{
@@ -259,7 +261,7 @@ export async function fetchEvRosterSummary(
   if (options.dateTo) q.set("dateTo", options.dateTo);
   q.set("party", options.party ?? "ALL");
   if (options.votingDate) q.set("votingDate", options.votingDate);
-  const r = await fetch(`/api/ev-roster/summary?${q}`, { cache: "no-store" });
+  const r = await apiFetch(`/api/ev-roster/summary?${q}`, { cache: "no-store" });
   if (r.status === 404) return null;
   const body = await readEvRosterJson<
     EvRosterSummaryPayload & { pull?: EvRosterSummaryPayload["pull"] | null; error?: string }
@@ -314,7 +316,7 @@ export interface EvRosterPullProgress {
 
 export async function fetchEvRosterPullProgress(jobId: string): Promise<EvRosterPullProgress> {
   const q = new URLSearchParams({ jobId });
-  const r = await fetch(`/api/ev-roster/pull/progress?${q}`, { cache: "no-store" });
+  const r = await apiFetch(`/api/ev-roster/pull/progress?${q}`, { cache: "no-store" });
   const body = await readEvRosterJson<EvRosterPullProgress & { error?: string }>(r, "pull-progress");
   if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
   return body;
@@ -350,7 +352,7 @@ export async function runEvRosterPull(
   },
 ) {
   const jobId = options?.jobId ?? crypto.randomUUID();
-  const r = await fetch("/api/ev-roster/pull", {
+  const r = await apiFetch("/api/ev-roster/pull", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ evrElectionId, pullThroughToday: true, jobId, ...options }),
@@ -392,7 +394,7 @@ export async function confirmEvRosterCountyPull(
   votingDate: string,
   countyName: string,
 ): Promise<EvRosterSummaryPayload | null> {
-  const r = await fetch("/api/ev-roster/county-confirm", {
+  const r = await apiFetch("/api/ev-roster/county-confirm", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ evrElectionId, votingDate, countyName }),
@@ -410,21 +412,21 @@ export function evRosterExportCsvUrl(evrElectionId: number, votingDate: string) 
 }
 
 export async function fetchEvRosterCountySources(evrElectionId: number): Promise<EvRosterCountySource[]> {
-  const r = await fetch(`/api/ev-roster/county-sources?evrElectionId=${evrElectionId}`, { cache: "no-store" });
+  const r = await apiFetch(`/api/ev-roster/county-sources?evrElectionId=${evrElectionId}`, { cache: "no-store" });
   const body = await readEvRosterJson<{ sources?: EvRosterCountySource[]; error?: string }>(r, "county-sources");
   if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
   return body.sources ?? [];
 }
 
 export async function fetchEvRosterHandlers(): Promise<EvRosterHandler[]> {
-  const r = await fetch("/api/ev-roster/handlers", { cache: "no-store" });
+  const r = await apiFetch("/api/ev-roster/handlers", { cache: "no-store" });
   const body = await readEvRosterJson<{ handlers?: EvRosterHandler[]; error?: string }>(r, "handlers");
   if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
   return body.handlers ?? [];
 }
 
 export async function fetchEvRosterSourceOptions(): Promise<EvRosterSourceOptionsPayload> {
-  const r = await fetch("/api/ev-roster/source-options", { cache: "no-store" });
+  const r = await apiFetch("/api/ev-roster/source-options", { cache: "no-store" });
   const body = await readEvRosterJson<EvRosterSourceOptionsPayload & { error?: string }>(r, "source-options");
   if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
   return body;
@@ -448,7 +450,7 @@ export async function saveEvRosterCountySource(payload: {
   trainingNotes?: string | null;
   isEnabled?: boolean;
 }): Promise<EvRosterCountySource[]> {
-  const r = await fetch("/api/ev-roster/county-sources", {
+  const r = await apiFetch("/api/ev-roster/county-sources", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -484,7 +486,7 @@ export async function discoverEvRosterCountyUrl(
   countyKey: string,
   methodScope?: string,
 ) {
-  const r = await fetch("/api/ev-roster/discover", {
+  const r = await apiFetch("/api/ev-roster/discover", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ hubPageUrl, countyKey, methodScope }),
@@ -501,7 +503,7 @@ export async function discoverEvRosterCountyUrls(
   countyKey: string,
   options?: { evrElectionId?: number; electionDate?: string },
 ) {
-  const r = await fetch("/api/ev-roster/discover", {
+  const r = await apiFetch("/api/ev-roster/discover", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

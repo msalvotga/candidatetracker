@@ -1,15 +1,34 @@
 import { decodeUploadPayload } from "./b64.mjs";
 
-const CIVIX_API = "https://goelect.txelections.civixapps.com/api-ivis-system/api";
+const CIVIX_API =
+  process.env.CIVIX_API_BASE?.trim() ||
+  "https://goelect.txelections.civixapps.com/api-ivis-system/api";
+
+function civixFetchHeaders() {
+  /** @type {Record<string, string>} */
+  const headers = {
+    Accept: "application/json, text/plain, */*",
+    "User-Agent":
+      process.env.CIVIX_USER_AGENT?.trim() ||
+      "Mozilla/5.0 (compatible; electionnighttracker/1.0; +https://github.com/)",
+    Referer:
+      process.env.CIVIX_REFERER?.trim() || "https://goelect.txelections.civixapps.com/ivis-enr-ui/",
+    Origin: process.env.CIVIX_ORIGIN?.trim() || "https://goelect.txelections.civixapps.com",
+  };
+  const cookie = process.env.CIVIX_COOKIE?.trim();
+  if (cookie) headers.Cookie = cookie;
+  return headers;
+}
 
 async function fetchJson(url) {
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      "User-Agent": "electionnighttracker-server/1.0",
-    },
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  const res = await fetch(url, { headers: civixFetchHeaders() });
+  if (!res.ok) {
+    const hint =
+      res.status === 403
+        ? " (Civix often returns 403 from cloud/datacenter IPs — use county feeds, run ingest from a network that can reach Civix, or set CIVIX_COOKIE from a browser session)"
+        : "";
+    throw new Error(`HTTP ${res.status} for ${url}${hint}`);
+  }
   return res.json();
 }
 
@@ -19,12 +38,7 @@ async function fetchJson(url) {
  * @returns {{ ok: true, data: unknown } | { ok: false, error: string }}
  */
 async function tryFetchCountyJson(url) {
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      "User-Agent": "electionnighttracker-server/1.0",
-    },
-  });
+  const res = await fetch(url, { headers: civixFetchHeaders() });
   if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
   const ct = (res.headers.get("content-type") || "").toLowerCase();
   if (ct.includes("pdf")) return { ok: false, error: "content-type is PDF" };
