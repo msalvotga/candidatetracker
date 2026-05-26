@@ -124,14 +124,6 @@ function slugId(s) {
     .slice(0, 80);
 }
 
-async function shouldPreferCivixCacheOnCloud() {
-  if (process.env.CIVIX_PREFER_CACHE === "1") return true;
-  if (process.env.CIVIX_PREFER_CACHE === "0") return false;
-  const { resolveCivixCookie } = await import("./lib/civixCredentials.mjs");
-  if (await resolveCivixCookie()) return false;
-  return Boolean(process.env.RENDER);
-}
-
 /** @param {unknown} raw */
 function normalizeClientCivixBundle(raw) {
   if (!raw || typeof raw !== "object") return null;
@@ -139,6 +131,47 @@ function normalizeClientCivixBundle(raw) {
   const county = raw.county;
   if (!election || typeof election !== "object" || !county || typeof county !== "object") return null;
   return { election, county };
+}
+
+/**
+ * Same Civix resolution as GET /api/civix/fetch-bundle and force update: try live API first, then sos_results snapshot.
+ * @param {string | number} electionId
+ * @param {string} [countyInfoUrl]
+ */
+async function resolveCivixBundleForIngest(electionId, countyInfoUrl = "") {
+  const override = String(countyInfoUrl ?? "").trim();
+  const eid = String(electionId);
+  const num = Number(eid);
+  try {
+    const bundle = Number.isFinite(num)
+      ? await fetchCivixElectionBundleWithOverrides(num, { countyInfoUrl: override || undefined })
+      : await fetchCivixElectionBundle(electionId);
+    return {
+      election: bundle.election,
+      county: bundle.county,
+      sosCountyInfoUrlConfigured: override,
+      sosCountyInfoUrlUsed: bundle.sosCountyInfoUrlUsed ?? "",
+      live: true,
+      fetchedAt: null,
+      note: null,
+    };
+  } catch (liveErr) {
+    const snap = await getLatestSosCivixSnapshot(eid);
+    if (!snap) throw liveErr;
+    const err = liveErr instanceof Error ? liveErr.message : String(liveErr);
+    console.info(
+      `Civix live fetch failed for election ${eid}; using cached sos_results (${snap.fetchedAt || "unknown time"}): ${err}`,
+    );
+    return {
+      election: snap.election,
+      county: snap.county,
+      sosCountyInfoUrlConfigured: override,
+      sosCountyInfoUrlUsed: snap.sosCountyInfoUrlUsed || "",
+      live: false,
+      fetchedAt: snap.fetchedAt,
+      note: `Civix live API unavailable (${err}). Using last stored SOS snapshot${snap.fetchedAt ? ` from ${snap.fetchedAt}` : ""}.`,
+    };
+  }
 }
 
 /**
@@ -160,15 +193,17 @@ async function loadCivixBundleWithCacheFallback(electionId, countyInfoUrl = "", 
         override ||
         `https://goelect.txelections.civixapps.com/api-ivis-system/api/s3/enr/election/countyInfo/${eid}`,
       civixFromCache: false,
-      civixCacheNote: "SOS loaded from browser (live Civix JSON posted with force update).",
+      civixCacheNote:
+        opts.clientBundleNote ??
+        "SOS loaded from browser (live Civix JSON posted with force update).",
     };
   }
 
-  if (await shouldPreferCivixCacheOnCloud()) {
+  if (process.env.CIVIX_PREFER_CACHE === "1") {
     const snap = await getLatestSosCivixSnapshot(eid);
     if (snap) {
       console.info(
-        `Civix: using stored sos_results for election ${eid} (${snap.fetchedAt || "unknown time"}); live API skipped on cloud host (set CIVIX_COOKIE to refresh from Civix on Render).`,
+        `Civix: using stored sos_results for election ${eid} (${snap.fetchedAt || "unknown time"}); live API skipped (CIVIX_PREFER_CACHE=1).`,
       );
       return {
         election: snap.election,
@@ -176,32 +211,20 @@ async function loadCivixBundleWithCacheFallback(electionId, countyInfoUrl = "", 
         sosCountyInfoUrlConfigured: override,
         sosCountyInfoUrlUsed: snap.sosCountyInfoUrlUsed || "",
         civixFromCache: true,
-        civixCacheNote: `SOS from stored snapshot${snap.fetchedAt ? ` (${snap.fetchedAt})` : ""}. Live Civix skipped on cloud host — set CIVIX_COOKIE on the API service to pull fresh statewide data on Render.`,
+        civixCacheNote: `SOS from stored snapshot${snap.fetchedAt ? ` (${snap.fetchedAt})` : ""}. Live Civix skipped (CIVIX_PREFER_CACHE=1).`,
       };
     }
   }
 
-  try {
-    const bundle = override
-      ? await fetchCivixElectionBundleWithOverrides(electionId, { countyInfoUrl: override })
-      : await fetchCivixElectionBundle(electionId);
-    return { ...bundle, civixFromCache: false, civixCacheNote: null };
-  } catch (e) {
-    const snap = await getLatestSosCivixSnapshot(eid);
-    if (!snap) throw e;
-    const err = e instanceof Error ? e.message : String(e);
-    console.info(
-      `Civix live fetch failed for election ${eid}; using cached sos_results (${snap.fetchedAt || "unknown time"}): ${err}`,
-    );
-    return {
-      election: snap.election,
-      county: snap.county,
-      sosCountyInfoUrlConfigured: override,
-      sosCountyInfoUrlUsed: snap.sosCountyInfoUrlUsed || "",
-      civixFromCache: true,
-      civixCacheNote: `Live Civix API unavailable (${err}). Using last stored SOS snapshot${snap.fetchedAt ? ` from ${snap.fetchedAt}` : ""}.`,
-    };
-  }
+  const resolved = await resolveCivixBundleForIngest(electionId, countyInfoUrl);
+  return {
+    election: resolved.election,
+    county: resolved.county,
+    sosCountyInfoUrlConfigured: resolved.sosCountyInfoUrlConfigured,
+    sosCountyInfoUrlUsed: resolved.sosCountyInfoUrlUsed,
+    civixFromCache: !resolved.live,
+    civixCacheNote: resolved.note,
+  };
 }
 
 function validateElectionFile(obj) {
@@ -701,6 +724,23 @@ export function createApiApp() {
     return next;
   }
 
+  /**
+   * One full ingest (SOS + enabled county feeds) — same steps as force update on the server.
+   * Force update may pass a browser-posted civixBundle; auto refresh resolves Civix the same way as /api/civix/fetch-bundle.
+   */
+  async function runIngestForElection(electionId) {
+    const cfg = await getElectionIngestConfig(electionId);
+    const ingestOpts = {};
+    if (cfg.usesCivixSos !== false && /^\d+$/.test(String(electionId).trim())) {
+      const resolved = await resolveCivixBundleForIngest(electionId, cfg.sosCountyInfoUrl);
+      ingestOpts.clientBundle = { election: resolved.election, county: resolved.county };
+      ingestOpts.clientBundleNote = resolved.live
+        ? "Live Civix JSON loaded for statewide SOS (same as force update)."
+        : resolved.note;
+    }
+    return runFullIngestRefresh(String(electionId), ingestOpts);
+  }
+
   async function runFullIngestRefresh(electionId, ingestOpts = {}) {
     const cfg = await getElectionIngestConfig(electionId);
     if (!cfg.isEnabled) {
@@ -776,7 +816,8 @@ export function createApiApp() {
         const countyInfoUrl = cfg.sosCountyInfoUrl;
         let t0 = Date.now();
         const bundle = await loadCivixBundleWithCacheFallback(electionId, countyInfoUrl, {
-          clientBundle: ingestOpts.clientCivixBundle,
+          clientBundle: ingestOpts.clientBundle,
+          clientBundleNote: ingestOpts.clientBundleNote,
         });
         recordStepTiming({
           phase: "sos",
@@ -1091,7 +1132,7 @@ export function createApiApp() {
     const intervalMs = intervalSec * 1000;
     const now = Date.now();
     let nextRunAt = null;
-    if (settings.autoRefreshEnabled) {
+    if (settings.autoRefreshEnabled && !settings.disableAutoIngest) {
       if (ingestState.nextScheduledRunAt != null) {
         nextRunAt = ingestState.nextScheduledRunAt;
       } else {
@@ -1119,7 +1160,7 @@ export function createApiApp() {
       try {
         const settings = await getAppSettings();
         const intervalMs = Math.max(15, Number(settings.autoRefreshIntervalSec) || 60) * 1000;
-        if (!settings.autoRefreshEnabled) {
+        if (!settings.autoRefreshEnabled || settings.disableAutoIngest) {
           ingestState.nextScheduledRunAt = null;
           return;
         }
@@ -1133,7 +1174,7 @@ export function createApiApp() {
 
         await withIngestLock(async () => {
           const s = await getAppSettings();
-          if (!s.autoRefreshEnabled) {
+          if (!s.autoRefreshEnabled || s.disableAutoIngest) {
             ingestState.nextScheduledRunAt = null;
             return;
           }
@@ -1156,7 +1197,7 @@ export function createApiApp() {
                 step: i + 1,
                 totalSteps: active.length,
               });
-              batch.push(await runFullIngestRefresh(String(c.electionId)));
+              batch.push(await runIngestForElection(String(c.electionId)));
             }
             ingestState.lastRunEndTime = Date.now();
             ingestState.lastResult = { ok: batch.every((r) => r.ok), elections: batch };
@@ -1694,29 +1735,18 @@ export function createApiApp() {
       if (!Number.isFinite(num)) return res.status(400).json({ error: "electionId required" });
       const cfg = await getElectionIngestConfig(String(num));
       try {
-        const bundle = await fetchCivixElectionBundleWithOverrides(num, {
-          countyInfoUrl: cfg.sosCountyInfoUrl,
-        });
+        const resolved = await resolveCivixBundleForIngest(String(num), cfg.sosCountyInfoUrl);
         return res.json({
-          live: true,
-          election: bundle.election,
-          county: bundle.county,
+          live: resolved.live,
+          election: resolved.election,
+          county: resolved.county,
+          ...(resolved.fetchedAt ? { fetchedAt: resolved.fetchedAt } : {}),
+          ...(resolved.note ? { note: resolved.note } : {}),
         });
       } catch (liveErr) {
-        const snap = await getLatestSosCivixSnapshot(String(num));
-        if (!snap) {
-          return res.status(502).json({
-            live: false,
-            error: String(liveErr?.message || liveErr),
-          });
-        }
-        const err = liveErr instanceof Error ? liveErr.message : String(liveErr);
-        return res.json({
+        return res.status(502).json({
           live: false,
-          election: snap.election,
-          county: snap.county,
-          fetchedAt: snap.fetchedAt,
-          note: `Civix live API unavailable (${err}). Using last stored SOS snapshot${snap.fetchedAt ? ` from ${snap.fetchedAt}` : ""}.`,
+          error: String(liveErr?.message || liveErr),
         });
       }
     } catch (e) {
@@ -1753,9 +1783,14 @@ export function createApiApp() {
       ingestState.running = true;
       ingestState.lastResult = null;
       try {
-        const result = await runFullIngestRefresh(String(electionId), {
-          clientCivixBundle: normalizeClientCivixBundle(civixBundle),
-        });
+        const normalized = normalizeClientCivixBundle(civixBundle);
+        const result = normalized
+          ? await runFullIngestRefresh(String(electionId), {
+              clientBundle: normalized,
+              clientBundleNote:
+                "SOS loaded from browser (live Civix JSON posted with force update).",
+            })
+          : await runIngestForElection(String(electionId));
         ingestState.lastRunEndTime = Date.now();
         ingestState.lastResult = result;
         const settings = await getAppSettings();

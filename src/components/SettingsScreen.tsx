@@ -444,8 +444,9 @@ export function SettingsScreen({
           Enable automatic refresh cycle (clear + repull all sources each interval)
         </label>
         <p className="enr-muted" style={{ marginTop: -4, marginBottom: 12 }}>
-          If a refresh is still running when the next interval hits, that cycle is skipped (no overlapping runs). Step
-          timings appear under Force update while ingest runs.
+          Timed refresh runs the same full ingest as <strong>Force update (SOS + counties)</strong> on the server (live
+          Civix when possible, then each enabled county feed). If a run is still in progress when the next interval hits,
+          that cycle is skipped.
         </p>
         <label className="enr-field">
           Auto refresh interval (seconds)
