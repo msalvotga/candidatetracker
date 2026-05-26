@@ -15,12 +15,9 @@ export interface CivixElectionConstantsInner {
 
 async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
   const res = await fetch(url, {
-    method: "GET",
-    credentials: "omit",
-    headers: {
-      Accept: "application/json",
-    },
     ...init,
+    method: init?.method ?? "GET",
+    credentials: init?.credentials ?? "omit",
     headers: {
       Accept: "application/json",
       ...(init?.headers ?? {}),
@@ -111,15 +108,6 @@ export async function fetchCivixElectionPayload(civixElectionId: number): Promis
     fetchJson(civixApiUrl(`/s3/enr/election/countyInfo/${civixElectionId}`)),
   ]);
   return { election: election as Record<string, unknown>, county: county as Record<string, unknown> };
-}
-
-function resolveCountyInfoUrl(override: string | undefined, civixElectionId: number): string {
-  const base = `${TX_CIVIX_ORIGIN}${TX_CIVIX_API}/s3/enr`;
-  const trimmed = String(override ?? "").trim();
-  if (!trimmed) return `${base}/election/countyInfo/${civixElectionId}`;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  const path = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return `${TX_CIVIX_ORIGIN}${path}`;
 }
 
 /**
