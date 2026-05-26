@@ -13,16 +13,56 @@ export interface CivixElectionConstantsInner {
   electionInfo: Record<string, Record<string, Record<string, { ID: number; N: string }>>>;
 }
 
-async function fetchJson(url: string): Promise<unknown> {
+async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
   const res = await fetch(url, {
     method: "GET",
     credentials: "omit",
     headers: {
       Accept: "application/json",
     },
+    ...init,
+    headers: {
+      Accept: "application/json",
+      ...(init?.headers ?? {}),
+    },
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
+}
+
+function proxyCountyInfoPath(override: string | undefined, civixElectionId: number): string {
+  const trimmed = String(override ?? "").trim();
+  if (!trimmed) return `/s3/enr/election/countyInfo/${civixElectionId}`;
+  const idx = trimmed.indexOf("/api-ivis-system");
+  if (idx >= 0) {
+    const rest = trimmed.slice(idx + "/api-ivis-system".length);
+    return rest.startsWith("/") ? rest : `/${rest}`;
+  }
+  return `/s3/enr/election/countyInfo/${civixElectionId}`;
+}
+
+/** Same-origin Civix proxy on the app host (uses saved CIVIX_COOKIE on the API). */
+async function fetchCivixBundleViaAppProxy(
+  civixElectionId: number,
+  countyInfoUrlOverride?: string,
+): Promise<{ election: Record<string, unknown>; county: Record<string, unknown> }> {
+  const election = (await fetchJson(civixApiUrl(`/s3/enr/election/${civixElectionId}`))) as Record<
+    string,
+    unknown
+  >;
+  const countyPath = proxyCountyInfoPath(countyInfoUrlOverride, civixElectionId);
+  const defaultPath = `/s3/enr/election/countyInfo/${civixElectionId}`;
+  let county: Record<string, unknown>;
+  try {
+    county = (await fetchJson(civixApiUrl(countyPath))) as Record<string, unknown>;
+  } catch {
+    if (countyPath !== defaultPath) {
+      county = (await fetchJson(civixApiUrl(defaultPath))) as Record<string, unknown>;
+    } else {
+      throw new Error(`Could not load Civix countyInfo for election ${civixElectionId}`);
+    }
+  }
+  return { election, county };
 }
 
 export async function listCivixElections(): Promise<CivixElectionListItem[]> {
@@ -73,21 +113,41 @@ export async function fetchCivixElectionPayload(civixElectionId: number): Promis
   return { election: election as Record<string, unknown>, county: county as Record<string, unknown> };
 }
 
+function resolveCountyInfoUrl(override: string | undefined, civixElectionId: number): string {
+  const base = `${TX_CIVIX_ORIGIN}${TX_CIVIX_API}/s3/enr`;
+  const trimmed = String(override ?? "").trim();
+  if (!trimmed) return `${base}/election/countyInfo/${civixElectionId}`;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  const path = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return `${TX_CIVIX_ORIGIN}${path}`;
+}
+
 /**
- * For force update: try browser → Civix (home IP), then API proxy (cookie on server).
- * Returns null when both fail (server will use DB snapshot).
+ * For force update: fetch Civix JSON via same-origin /api-ivis-system proxy only.
+ * Direct cross-origin calls to goelect add an Origin header and Civix returns HTTP 500/503.
  */
-export async function fetchCivixBundleForIngest(civixElectionId: number): Promise<{
+export async function fetchCivixBundleFromBrowser(
+  civixElectionId: number,
+  countyInfoUrlOverride?: string,
+): Promise<{
+  election: Record<string, unknown>;
+  county: Record<string, unknown>;
+}> {
+  return fetchCivixBundleViaAppProxy(civixElectionId, countyInfoUrlOverride);
+}
+
+/**
+ * For force update: try browser → Civix (user IP). API proxy is server IP and usually fails on Render.
+ */
+export async function fetchCivixBundleForIngest(
+  civixElectionId: number,
+  countyInfoUrlOverride?: string,
+): Promise<{
   election: Record<string, unknown>;
   county: Record<string, unknown>;
 } | null> {
   try {
-    return await fetchCivixElectionPayloadDirect(civixElectionId);
-  } catch {
-    /* CORS or network — try API proxy */
-  }
-  try {
-    return await fetchCivixElectionPayload(civixElectionId);
+    return await fetchCivixBundleFromBrowser(civixElectionId, countyInfoUrlOverride);
   } catch {
     return null;
   }

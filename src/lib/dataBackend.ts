@@ -234,15 +234,26 @@ export async function updateElectionSourceConfig(
   return r.json() as Promise<ElectionSourceConfig>;
 }
 
+export interface IngestStepTiming {
+  phase: string;
+  label: string;
+  countyKey?: string;
+  durationMs: number;
+  status: string;
+  detail?: string;
+}
+
 export interface ForceRefreshResult {
   ok: boolean;
-  electionId: number;
-  sos: { inserted: number };
+  electionId: number | string;
+  sos: { inserted: number; durationMs?: number };
   /** County slug (e.g. harris) → row counts from latest ingest */
-  counties: Record<string, { inserted: number }>;
+  counties: Record<string, { inserted: number; durationMs?: number }>;
   errors: string[];
   /** Non-fatal notes (e.g. Civix 403 on Render with cached SOS) */
   warnings?: string[];
+  stepTimings?: IngestStepTiming[];
+  totalDurationMs?: number;
 }
 
 /** One ingest process (stored as `ingest_vendors` — same process id for every county that shares the URL/steps). */
@@ -586,6 +597,8 @@ export interface IngestProgress {
   totalSteps?: number;
   countyKey?: string;
   updatedAt?: number;
+  runStartedAt?: number;
+  stepTimings?: IngestStepTiming[];
 }
 
 export interface IngestStatus {
@@ -600,8 +613,53 @@ export interface IngestStatus {
 
 export async function fetchIngestStatus(): Promise<IngestStatus> {
   const r = await apiFetch("/api/ingest/status", { cache: "no-store" });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) throw new Error(await readApiErrorMessage(r));
   return r.json() as Promise<IngestStatus>;
+}
+
+async function readApiErrorMessage(r: Response): Promise<string> {
+  try {
+    const body = (await r.json()) as { error?: string };
+    if (body?.error) return body.error;
+  } catch {
+    /* not JSON */
+  }
+  return `HTTP ${r.status}`;
+}
+
+/** Wait until a force refresh started after `startedAfterMs` finishes (polls /api/ingest/status). */
+async function waitForForceRefreshResult(
+  electionId: string,
+  startedAfterMs: number,
+  timeoutMs = 10 * 60 * 1000,
+): Promise<ForceRefreshResult> {
+  const deadline = Date.now() + timeoutMs;
+  let sawThisElectionRun = false;
+  while (Date.now() < deadline) {
+    const st = await fetchIngestStatus();
+    if (st.running && String(st.progress?.electionId ?? "") === electionId) {
+      sawThisElectionRun = true;
+    }
+    if (
+      sawThisElectionRun &&
+      !st.running &&
+      st.lastRunEndTime != null &&
+      st.lastRunEndTime >= startedAfterMs &&
+      st.lastResult
+    ) {
+      const lr = st.lastResult as ForceRefreshResult & { elections?: ForceRefreshResult[] };
+      if (lr.elections?.length) {
+        const hit = lr.elections.find((e) => String(e.electionId) === electionId);
+        if (hit) return hit;
+      }
+      if (String(lr.electionId) === electionId) return lr;
+      if (Array.isArray(lr.errors) && lr.errors.length && !lr.elections) {
+        throw new Error(lr.errors.join("; "));
+      }
+    }
+    await sleep(500);
+  }
+  throw new Error(`Force update timed out after ${Math.round(timeoutMs / 60_000)} minutes`);
 }
 
 /** Poll ingest status while a refresh is running (e.g. during force one-time update). */
@@ -667,20 +725,101 @@ export async function clearCivixConnect(): Promise<void> {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
 }
 
-export async function forceRefreshAllSources(electionId: string | number = 56181): Promise<ForceRefreshResult> {
+export type CivixIngestBundle = {
+  election: Record<string, unknown>;
+  county: Record<string, unknown>;
+};
+
+export async function forceRefreshAllSources(
+  electionId: string | number = 56181,
+  options?: { civixBundle?: CivixIngestBundle },
+): Promise<ForceRefreshResult> {
   const id =
     typeof electionId === "number" && Number.isFinite(electionId)
       ? String(electionId)
       : String(electionId ?? "").trim();
   if (!id) throw new Error("electionId required");
 
+  const startedAt = Date.now();
   const r = await apiFetch("/api/ingest/refresh-once", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ electionId: id }),
+    body: JSON.stringify({
+      electionId: id,
+      ...(options?.civixBundle ? { civixBundle: options.civixBundle } : {}),
+    }),
   });
-  if (!r.ok && r.status !== 207) throw new Error(`HTTP ${r.status}`);
+
+  if (r.status === 202) {
+    const accepted = (await r.json()) as { accepted?: boolean; electionId?: string; startedAt?: number };
+    if (!accepted?.accepted) throw new Error("Server did not accept force refresh");
+    return waitForForceRefreshResult(id, accepted.startedAt ?? startedAt);
+  }
+
+  if (!r.ok && r.status !== 207) throw new Error(await readApiErrorMessage(r));
   return (await r.json()) as ForceRefreshResult;
+}
+
+/** Pull Civix JSON in the browser, then POST to the API so Render never calls Civix directly. */
+export async function forceRefreshWithBrowserCivix(
+  electionId: string | number,
+  options?: { countyInfoUrl?: string; onProgress?: (detail: string) => void },
+): Promise<ForceRefreshResult> {
+  const id =
+    typeof electionId === "number" && Number.isFinite(electionId)
+      ? String(electionId)
+      : String(electionId ?? "").trim();
+  if (!id) throw new Error("electionId required");
+
+  let civixBundle: CivixIngestBundle | undefined;
+  let civixLive = false;
+  if (/^\d+$/.test(id)) {
+    options?.onProgress?.("Fetching Texas SOS / Civix JSON…");
+    const bundleRes = await apiFetch(
+      `/api/civix/fetch-bundle?${new URLSearchParams({ electionId: id })}`,
+      { cache: "no-store" },
+    );
+    if (bundleRes.ok) {
+      const j = (await bundleRes.json()) as {
+        live?: boolean;
+        election: Record<string, unknown>;
+        county: Record<string, unknown>;
+        note?: string;
+      };
+      civixBundle = { election: j.election, county: j.county };
+      civixLive = j.live === true;
+      if (!civixLive && j.note) {
+        options?.onProgress?.(j.note);
+      }
+    } else {
+      try {
+        const { fetchCivixBundleFromBrowser } = await import("./civix/fetchForIngest");
+        civixBundle = await fetchCivixBundleFromBrowser(Number(id), options?.countyInfoUrl);
+        civixLive = true;
+      } catch (e) {
+        options?.onProgress?.(
+          `Civix fetch failed (${e instanceof Error ? e.message : String(e)}). Trying last stored snapshot on server…`,
+        );
+      }
+    }
+    if (civixBundle) {
+      options?.onProgress?.("Civix loaded — running ingest on the server…");
+    }
+  }
+
+  const result = await forceRefreshAllSources(id, { civixBundle });
+  if (civixBundle) {
+    const filtered = (result.warnings ?? []).filter(
+      (w) =>
+        !/Live Civix API unavailable|skipped on cloud host|stored SOS snapshot|SOS loaded from browser/i.test(w),
+    );
+    result.warnings = civixLive
+      ? ["Live Civix JSON loaded for statewide SOS.", ...filtered]
+      : filtered.length
+        ? filtered
+        : ["SOS used stored snapshot (Civix live fetch was unavailable)."];
+  }
+  return result;
 }
 
 export async function saveManualElection(body: {

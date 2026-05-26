@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  forceRefreshAllSources,
+  forceRefreshWithBrowserCivix,
   startIngestStatusPoll,
   fetchDbTablePreview,
   fetchDbOverview,
@@ -26,7 +26,13 @@ import {
   type SourceImportLatest,
 } from "../lib/dataBackend";
 import { ElectionSettingsDetail } from "./ElectionSettingsDetail";
-import { IngestProgressStatus, IngestSpinner } from "./IngestProgressStatus";
+import {
+  formatIngestResultSummary,
+  IngestProgressStatus,
+  IngestResultTimings,
+  IngestSpinner,
+} from "./IngestProgressStatus";
+import type { IngestStepTiming } from "../lib/dataBackend";
 import { SettingsCollapse } from "./SettingsCollapse";
 
 function SourceImportAlert({
@@ -78,6 +84,7 @@ export function SettingsScreen({
   const [forceMsg, setForceMsg] = useState<string | null>(null);
   const [forceRefreshing, setForceRefreshing] = useState(false);
   const [ingestProgress, setIngestProgress] = useState<IngestProgress | null>(null);
+  const [lastIngestTimings, setLastIngestTimings] = useState<IngestStepTiming[] | null>(null);
   const [importLog, setImportLog] = useState<ImportLogPayload | null>(null);
   const [electionConfigs, setElectionConfigs] = useState<ElectionSourceConfig[]>([]);
   const [selectedElectionId, setSelectedElectionId] = useState<string>("");
@@ -206,6 +213,7 @@ export function SettingsScreen({
   async function onForceRefresh() {
     setForceRefreshing(true);
     setForceMsg(null);
+    setLastIngestTimings(null);
     setIngestProgress({ detail: `Starting update for election ${selectedElectionId}…` });
     const stopPoll = startIngestStatusPoll((st) => {
       if (st.progress) setIngestProgress(st.progress);
@@ -214,15 +222,24 @@ export function SettingsScreen({
       }
     });
     try {
-      const result = await forceRefreshAllSources(selectedElectionId);
+      const cfg = electionConfigs.find((c) => c.electionId === selectedElectionId);
+      const result = await forceRefreshWithBrowserCivix(
+        selectedElectionId,
+        cfg?.usesCivixSos !== false && /^\d+$/.test(selectedElectionId)
+          ? {
+              countyInfoUrl: cfg?.sosCountyInfoUrl,
+              onProgress: (detail) => setIngestProgress((prev) => ({ ...prev, detail })),
+            }
+          : undefined,
+      );
       await refresh();
       onCatalogChanged();
-      const countyParts = Object.entries(result.counties).map(([k, v]) => `${k}: ${v.inserted}`);
-      const base = `Updated election ${selectedElectionId}. SOS: ${result.sos.inserted}. Counties: ${countyParts.join(", ") || "none"}.`;
+      const base = `Updated election ${selectedElectionId}. ${formatIngestResultSummary(result)}`;
       const warn =
         result.warnings?.length ? ` Note: ${result.warnings.join(" | ")}` : "";
       const err = result.errors.length ? ` Errors: ${result.errors.join(" | ")}` : "";
       setForceMsg(`${base}${warn}${err}`);
+      setLastIngestTimings(result.stepTimings ?? null);
     } catch (e) {
       setForceMsg(e instanceof Error ? e.message : "Force refresh failed");
     } finally {
@@ -426,6 +443,10 @@ export function SettingsScreen({
           />
           Enable automatic refresh cycle (clear + repull all sources each interval)
         </label>
+        <p className="enr-muted" style={{ marginTop: -4, marginBottom: 12 }}>
+          If a refresh is still running when the next interval hits, that cycle is skipped (no overlapping runs). Step
+          timings appear under Force update while ingest runs.
+        </p>
         <label className="enr-field">
           Auto refresh interval (seconds)
           <input
@@ -461,16 +482,16 @@ export function SettingsScreen({
         </label>
         <div className="enr-field">
           <div style={{ fontWeight: 600, marginBottom: 6 }}>Texas SOS / Civix (live statewide on Render)</div>
+          <p className="enr-muted" style={{ margin: "0 0 8px" }}>
+            <strong>Force update</strong> fetches the same Civix JSON as the SOS reporting site and updates county
+            feeds — no extra steps required. <strong>Link Civix</strong> is optional (only if Civix blocks your
+            server host, e.g. some cloud deploys).
+          </p>
           {appSettings.civixCookieConfigured ? (
-            <p className="enr-saveOk" style={{ margin: "0 0 8px" }}>
-              Civix is linked. Force update pulls fresh SOS automatically — no copy/paste each time.
+            <p className="enr-saveOk" style={{ margin: "0 0 8px", fontSize: 13 }}>
+              Server Civix cookie is also saved (bookmarklet).
             </p>
-          ) : (
-            <p className="enr-muted" style={{ margin: "0 0 8px" }}>
-              One-time setup: link your browser session to the server. After that, every force update uses it. Without
-              a link, the app uses the last SOS snapshot already in the database.
-            </p>
-          )}
+          ) : null}
           <div className="enr-settings__actions" style={{ flexWrap: "wrap", gap: 8 }}>
             <button type="button" className="enr-secondaryBtn" disabled={busy} onClick={() => void onPrepareCivixConnect()}>
               {appSettings.civixCookieConfigured ? "Renew Civix link" : "Link Civix (one time)"}
@@ -546,7 +567,7 @@ export function SettingsScreen({
                 <IngestSpinner label="Updating sources" /> Updating…
               </>
             ) : (
-              "Force one-time update (selected election)"
+              "Force update (SOS + counties)"
             )}
           </button>
         </div>
@@ -557,6 +578,7 @@ export function SettingsScreen({
           />
         ) : null}
         {forceMsg ? <p className={forceMsg.startsWith("Updated") ? "enr-saveOk" : "enr-errorInline"}>{forceMsg}</p> : null}
+        {lastIngestTimings?.length ? <IngestResultTimings stepTimings={lastIngestTimings} /> : null}
       </section>
 
       <section className="enr-panel enr-settings__section">

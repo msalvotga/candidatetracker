@@ -4,7 +4,7 @@ import {
   discoverCountyFeedUrlsBulk,
   fetchElectionFeedSources,
   fetchHubDiscoveryCountyKeys,
-  forceRefreshAllSources,
+  forceRefreshWithBrowserCivix,
   startIngestStatusPoll,
   saveElectionFeedSources,
   updateElectionSourceConfig,
@@ -16,7 +16,13 @@ import {
   type SourceImportLatest,
 } from "../lib/dataBackend";
 import { parseBulkCountyFeedLines } from "../lib/countyFeedBulkParse";
-import { IngestProgressStatus, IngestSpinner } from "./IngestProgressStatus";
+import {
+  formatIngestResultSummary,
+  IngestProgressStatus,
+  IngestResultTimings,
+  IngestSpinner,
+} from "./IngestProgressStatus";
+import type { IngestStepTiming } from "../lib/dataBackend";
 import { CountyRaceMappingSection } from "./CountyRaceMappingSection";
 import { SettingsCollapse } from "./SettingsCollapse";
 import { TX_CIVIX_DEFAULT_COUNTYINFO_PREFIX, civixDefaultCountyInfoUrl } from "../lib/civix/urls";
@@ -123,6 +129,7 @@ export function ElectionSettingsDetail({
   const [busy, setBusy] = useState(false);
   const [forceRefreshing, setForceRefreshing] = useState(false);
   const [ingestProgress, setIngestProgress] = useState<IngestProgress | null>(null);
+  const [lastIngestTimings, setLastIngestTimings] = useState<IngestStepTiming[] | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [label, setLabel] = useState(cfg.label);
   const [isEnabled, setIsEnabled] = useState(cfg.isEnabled);
@@ -424,6 +431,23 @@ export function ElectionSettingsDetail({
     }
   }
 
+  function addFeedRow() {
+    setHideNoFeedUrl(false);
+    setFeeds((p) => [
+      ...p,
+      {
+        countyKey: "",
+        vendorId: "other-vendor",
+        sourceUrl: "",
+        hubPageUrl: "",
+        isEnabled: false,
+        civixCountyName: "",
+        preferOverSos: false,
+      },
+    ]);
+    setMsg("New row added — pick a county and process, then Save county feeds.");
+  }
+
   function applyBulk() {
     const parsed = parseBulkCountyFeedLines(bulkText);
     const added: FeedDraft[] = parsed.map((line) => ({
@@ -441,6 +465,7 @@ export function ElectionSettingsDetail({
       );
       return;
     }
+    setHideNoFeedUrl(false);
     setFeeds((prev) => [...prev, ...added]);
     setBulkText("");
     setMsg(`Added ${added.length} row(s) from bulk — click “Save county feeds” to persist.`);
@@ -484,20 +509,30 @@ export function ElectionSettingsDetail({
   async function onForce() {
     setForceRefreshing(true);
     setMsg(null);
+    setLastIngestTimings(null);
     setIngestProgress({ detail: `Starting ingest for ${electionId}…` });
     const stopPoll = startIngestStatusPoll((st) => {
       if (st.progress) setIngestProgress(st.progress);
       else if (st.running) setIngestProgress((prev) => prev ?? { detail: "Updating sources…" });
     });
     try {
-      const result = await forceRefreshAllSources(electionId);
-      const countyParts = Object.entries(result.counties).map(([k, v]) => `${k}: ${v.inserted}`);
+      const result = await forceRefreshWithBrowserCivix(
+        electionId,
+        usesCivixSos && /^\d+$/.test(String(electionId))
+          ? {
+              countyInfoUrl: sosCountyInfoUrl,
+              onProgress: (detail) => setIngestProgress((prev) => ({ ...prev, detail })),
+            }
+          : undefined,
+      );
       const warn = result.warnings?.length ? ` Note: ${result.warnings.join(" | ")}` : "";
+      const summary = formatIngestResultSummary(result);
       setMsg(
         result.errors.length
-          ? `Refresh finished with errors. SOS: ${result.sos.inserted}. ${countyParts.join(", ")}. ${result.errors.join(" | ")}${warn}`
-          : `OK. SOS: ${result.sos.inserted}. Counties: ${countyParts.join(", ") || "(none)"}.${warn}`,
+          ? `Refresh finished with errors. ${summary} ${result.errors.join(" | ")}${warn}`
+          : `OK. ${summary}${warn}`,
       );
+      setLastIngestTimings(result.stepTimings ?? null);
       onSaved();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Refresh failed");
@@ -651,12 +686,15 @@ export function ElectionSettingsDetail({
                     <IngestSpinner label="Updating sources" /> Updating…
                   </>
                 ) : (
-                  "Force one-time ingest (this election)"
+                  "Force update (SOS + counties)"
                 )}
               </button>
             </div>
             {forceRefreshing ? (
               <IngestProgressStatus progress={ingestProgress} fallback={`Updating election ${electionId}…`} />
+            ) : null}
+            {lastIngestTimings?.length && !forceRefreshing ? (
+              <IngestResultTimings stepTimings={lastIngestTimings} />
             ) : null}
           </section>
 
@@ -1030,25 +1068,7 @@ export function ElectionSettingsDetail({
               </table>
             </div>
             <div className="enr-settings__actions">
-              <button
-                type="button"
-                className="enr-primaryBtn"
-                disabled={busy}
-                onClick={() =>
-                  setFeeds((p) => [
-                    ...p,
-                    {
-                      countyKey: "",
-                      vendorId: "other-vendor",
-                      sourceUrl: "",
-                      hubPageUrl: "",
-                      isEnabled: false,
-                      civixCountyName: "",
-                      preferOverSos: false,
-                    },
-                  ])
-                }
-              >
+              <button type="button" className="enr-primaryBtn" disabled={busy} onClick={addFeedRow}>
                 Add row
               </button>
               <button type="button" className="enr-primaryBtn" disabled={busy} onClick={() => void onSaveFeeds()}>

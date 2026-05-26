@@ -49,6 +49,9 @@ export default defineConfig(({ mode }) => {
               "/api": {
                 target: "http://127.0.0.1:3847",
                 changeOrigin: true,
+                /** Force update ingest can run several minutes; default proxy timeouts cause HTTP 500. */
+                timeout: 600_000,
+                proxyTimeout: 600_000,
               },
             }
           : {}),

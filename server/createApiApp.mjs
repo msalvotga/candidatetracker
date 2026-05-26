@@ -714,16 +714,34 @@ export function createApiApp() {
     const sourceLogKey = (k) => `${String(electionId)}:${k}`;
     /** One timestamp for all county rows in this run — one logical batch in the DB. */
     const countyBatchAt = new Date().toISOString();
+    const runStartedAt = Date.now();
+    /** @type {Array<{ phase: string, label: string, countyKey?: string, durationMs: number, status: string, detail?: string }>} */
+    const stepTimings = [];
     const result = {
       ok: true,
       electionId,
-      sos: { inserted: 0 },
-      counties: /** @type {Record<string, { inserted: number }>} */ ({}),
+      sos: { inserted: 0, durationMs: 0 },
+      counties: /** @type {Record<string, { inserted: number, durationMs?: number }>} */ ({}),
       errors: [],
       warnings: [],
+      stepTimings,
+      totalDurationMs: 0,
     };
     /** Built after all county fetches; committed in one DB transaction (see commitCountyResultsBatch). */
     const countySegments = [];
+
+    /** @param {{ phase: string, label: string, countyKey?: string, durationMs: number, status: string, detail?: string }} entry */
+    function recordStepTiming(entry) {
+      stepTimings.push(entry);
+      setIngestProgress({
+        electionId: String(electionId),
+        runStartedAt,
+        stepTimings: [...stepTimings],
+        phase: entry.phase,
+        countyKey: entry.countyKey,
+        detail: entry.detail ? `${entry.label} — ${entry.detail}` : entry.label,
+      });
+    }
 
     const vendorRows = await listIngestVendors();
     const vendorById = Object.fromEntries(vendorRows.map((v) => [v.id, v]));
@@ -741,19 +759,30 @@ export function createApiApp() {
 
     if (cfg.usesCivixSos) {
       step += 1;
+      const sosRunT0 = Date.now();
       setIngestProgress({
         electionId: String(electionId),
         phase: "sos",
         detail: "Updating Texas SOS / Civix statewide data…",
         step,
         totalSteps,
+        runStartedAt,
+        stepTimings: [...stepTimings],
       });
       try {
         const countyInfoUrl = cfg.sosCountyInfoUrl;
+        let t0 = Date.now();
         const bundle = await loadCivixBundleWithCacheFallback(electionId, countyInfoUrl, {
           clientBundle: ingestOpts.clientCivixBundle,
         });
+        recordStepTiming({
+          phase: "sos",
+          label: "SOS: fetch Civix JSON",
+          durationMs: Date.now() - t0,
+          status: "ok",
+        });
         const { election, county, civixFromCache, civixCacheNote } = bundle;
+        t0 = Date.now();
         const sosCandidateRows = extractSd4SosCandidateRowsFromCivix({
           electionId,
           electionLabel: `civix:${electionId}`,
@@ -764,17 +793,40 @@ export function createApiApp() {
           electionLabel: `civix:${electionId}`,
           countyDoc: county,
         });
+        recordStepTiming({
+          phase: "sos",
+          label: "SOS: parse statewide rows",
+          durationMs: Date.now() - t0,
+          status: "ok",
+          detail: `${sosCandidateRows.length} candidates, ${sosCountyRows.length} county rows`,
+        });
+        t0 = Date.now();
         await insertSosResultSnapshot({
           electionId: String(electionId),
           electionLabel: `civix:${electionId}`,
           payload: { election, county },
         });
+        recordStepTiming({
+          phase: "sos",
+          label: "SOS: save JSON snapshot",
+          durationMs: Date.now() - t0,
+          status: "ok",
+        });
+        t0 = Date.now();
         await insertSosCandidateRows({
           electionId: String(electionId),
           electionLabel: `civix:${electionId}`,
           sourceUrl: "https://goelect.txelections.civixapps.com/ivis-enr-ui/races",
           rows: sosCandidateRows,
         });
+        recordStepTiming({
+          phase: "sos",
+          label: "SOS: write candidate rows",
+          durationMs: Date.now() - t0,
+          status: "ok",
+          detail: `${sosCandidateRows.length} rows (one DB insert each)`,
+        });
+        t0 = Date.now();
         await insertSosCountyRows({
           electionId: String(electionId),
           electionLabel: `civix:${electionId}`,
@@ -783,22 +835,52 @@ export function createApiApp() {
             `https://goelect.txelections.civixapps.com/api-ivis-system/api/s3/enr/election/countyInfo/${electionId}`,
           rows: sosCountyRows,
         });
+        recordStepTiming({
+          phase: "sos",
+          label: "SOS: write county rows",
+          durationMs: Date.now() - t0,
+          status: "ok",
+          detail: `${sosCountyRows.length} rows (one DB insert each)`,
+        });
         result.sos.inserted = 1;
+        t0 = Date.now();
         await appendVoteHistoryIfChanged({
           electionId: String(electionId),
           sourceKey: "sos",
           capturedAt: countyBatchAt,
           rows: sosCandidateRows,
         });
+        recordStepTiming({
+          phase: "sos",
+          label: "SOS: vote change history",
+          durationMs: Date.now() - t0,
+          status: "ok",
+          detail: `${sosCandidateRows.length} candidates checked`,
+        });
+        result.sos.durationMs = Date.now() - sosRunT0;
+        recordStepTiming({
+          phase: "sos",
+          label: "SOS total",
+          durationMs: result.sos.durationMs,
+          status: "ok",
+        });
         const sosLogSuffix = civixFromCache && civixCacheNote ? ` — ${civixCacheNote}` : "";
         await appendSourceImportLog({
           sourceKey: sourceLogKey("sos"),
           ok: true,
-          message: `OK: civix bundle + snapshot + ${sosCandidateRows.length} candidate rows + ${sosCountyRows.length} SOS county rows${sosLogSuffix}`,
+          message: `OK: civix bundle + snapshot + ${sosCandidateRows.length} candidate rows + ${sosCountyRows.length} SOS county rows in ${(result.sos.durationMs / 1000).toFixed(1)}s${sosLogSuffix}`,
         });
         if (civixCacheNote) result.warnings.push(civixCacheNote);
       } catch (e) {
         const msg = String(e?.message || e);
+        result.sos.durationMs = Date.now() - sosRunT0;
+        recordStepTiming({
+          phase: "sos",
+          label: "SOS total",
+          durationMs: result.sos.durationMs,
+          status: "error",
+          detail: msg,
+        });
         result.errors.push(
           `SOS pull failed: ${msg}. County feeds can still update. Run a successful ingest once from a network that can reach Civix, or rely on county feeds only.`,
         );
@@ -826,6 +908,7 @@ export function createApiApp() {
       }
       step += 1;
       const countyLabel = String(feed.civixCountyName || "").trim() || ck;
+      const countyRunT0 = Date.now();
       setIngestProgress({
         electionId: String(electionId),
         phase: "county",
@@ -833,6 +916,8 @@ export function createApiApp() {
         detail: `Updating ${countyLabel} (${vendor.displayName})…`,
         step,
         totalSteps,
+        runStartedAt,
+        stepTimings: [...stepTimings],
       });
       try {
         const effectiveUrl = String(feed.sourceUrl ?? "").trim();
@@ -842,7 +927,16 @@ export function createApiApp() {
             ? "Feed URL is empty — use “Discover from hubs” in election settings (hub page is saved but not resolved on ingest)."
             : "Feed URL is empty — set a feed URL or hub page in election settings.";
           result.errors.push(`${label}: ${msg}`);
-          result.counties[ck] = { inserted: 0 };
+          const countyMs = Date.now() - countyRunT0;
+          result.counties[ck] = { inserted: 0, durationMs: countyMs };
+          recordStepTiming({
+            phase: "county",
+            countyKey: ck,
+            label: `${countyLabel} (${vendor.displayName})`,
+            durationMs: countyMs,
+            status: "error",
+            detail: msg,
+          });
           await appendSourceImportLog({ sourceKey: sourceLogKey(ck), ok: false, message: msg });
           continue;
         }
@@ -853,34 +947,63 @@ export function createApiApp() {
         );
         countySegments.push(seg);
         const n = seg.rows?.length ?? 0;
-        result.counties[ck] = { inserted: n };
+        const countyMs = Date.now() - countyRunT0;
+        result.counties[ck] = { inserted: n, durationMs: countyMs };
+        recordStepTiming({
+          phase: "county",
+          countyKey: ck,
+          label: `${countyLabel} (${vendor.displayName})`,
+          durationMs: countyMs,
+          status: "ok",
+          detail: `${n} rows`,
+        });
         const reconNote = seg.reconciliationOnly
           ? " — reconciliation turnout only (no per-contest SD4)"
           : "";
         await appendSourceImportLog({
           sourceKey: sourceLogKey(ck),
           ok: true,
-          message: `OK: ${n} rows (${vendor.displayName})${reconNote}`,
+          message: `OK: ${n} rows (${vendor.displayName}) in ${(countyMs / 1000).toFixed(1)}s${reconNote}`,
         });
       } catch (e) {
         const msg = String(e?.message || e);
+        const countyMs = Date.now() - countyRunT0;
         result.errors.push(`${label} (${vendor.displayName}): ${msg}`);
-        result.counties[ck] = { inserted: 0 };
+        result.counties[ck] = { inserted: 0, durationMs: countyMs };
+        recordStepTiming({
+          phase: "county",
+          countyKey: ck,
+          label: `${countyLabel} (${vendor.displayName})`,
+          durationMs: countyMs,
+          status: "error",
+          detail: msg,
+        });
         await appendSourceImportLog({ sourceKey: sourceLogKey(ck), ok: false, message: msg });
       }
     }
 
     if (countySegments.length > 0) {
       step += 1;
+      const commitT0 = Date.now();
       setIngestProgress({
         electionId: String(electionId),
         phase: "commit",
         detail: `Committing ${countySegments.length} county feed(s) to the database…`,
         step,
         totalSteps,
+        runStartedAt,
+        stepTimings: [...stepTimings],
       });
       try {
         await commitCountyResultsBatch({ electionId: String(electionId), batchAt: countyBatchAt, segments: countySegments });
+        recordStepTiming({
+          phase: "commit",
+          label: "County feeds: DB commit",
+          durationMs: Date.now() - commitT0,
+          status: "ok",
+          detail: `${countySegments.length} segment(s)`,
+        });
+        const histT0 = Date.now();
         for (const seg of countySegments) {
           await appendVoteHistoryIfChanged({
             electionId: String(electionId),
@@ -889,6 +1012,12 @@ export function createApiApp() {
             rows: seg.rows ?? [],
           });
         }
+        recordStepTiming({
+          phase: "commit",
+          label: "County feeds: vote history",
+          durationMs: Date.now() - histT0,
+          status: "ok",
+        });
         await appendSourceImportLog({
           sourceKey: sourceLogKey("counties_commit"),
           ok: true,
@@ -896,6 +1025,13 @@ export function createApiApp() {
         });
       } catch (e) {
         const msg = String(e?.message || e);
+        recordStepTiming({
+          phase: "commit",
+          label: "County feeds: DB commit",
+          durationMs: Date.now() - commitT0,
+          status: "error",
+          detail: msg,
+        });
         result.errors.push(`County batch commit failed: ${msg}`);
         await appendSourceImportLog({ sourceKey: sourceLogKey("counties_commit"), ok: false, message: msg });
       }
@@ -909,20 +1045,37 @@ export function createApiApp() {
 
     if (result.errors.length) result.ok = false;
     step += 1;
+    const pruneT0 = Date.now();
     setIngestProgress({
       electionId: String(electionId),
       phase: "prune",
       detail: "Pruning old result history…",
       step,
       totalSteps,
+      runStartedAt,
+      stepTimings: [...stepTimings],
     });
     try {
       await pruneLiveResultHistory(2);
+      recordStepTiming({
+        phase: "prune",
+        label: "Prune old history",
+        durationMs: Date.now() - pruneT0,
+        status: "ok",
+      });
     } catch (e) {
       const msg = String(e?.message || e);
+      recordStepTiming({
+        phase: "prune",
+        label: "Prune old history",
+        durationMs: Date.now() - pruneT0,
+        status: "error",
+        detail: msg,
+      });
       result.errors.push(`History prune failed: ${msg}`);
       await appendSourceImportLog({ sourceKey: sourceLogKey("prune_history"), ok: false, message: msg });
     }
+    result.totalDurationMs = Date.now() - runStartedAt;
     return result;
   }
 
@@ -966,6 +1119,8 @@ export function createApiApp() {
           ingestState.nextScheduledRunAt = now + intervalMs;
         }
         if (now < ingestState.nextScheduledRunAt) return;
+        // Do not queue another auto batch while a refresh is still in progress.
+        if (ingestState.running) return;
 
         await withIngestLock(async () => {
           const s = await getAppSettings();
@@ -976,6 +1131,7 @@ export function createApiApp() {
           const im = Math.max(15, Number(s.autoRefreshIntervalSec) || 60) * 1000;
           const n = Date.now();
           if (n < ingestState.nextScheduledRunAt) return;
+          if (ingestState.running) return;
 
           ingestState.running = true;
           try {
@@ -1520,6 +1676,45 @@ export function createApiApp() {
     }
   });
 
+  /** Best-effort Civix bundle for force update (live fetch with saved cookie, else last sos_results snapshot). */
+  app.get("/api/civix/fetch-bundle", async (req, res) => {
+    try {
+      await ensureDb();
+      const num = Number(req.query.electionId);
+      if (!Number.isFinite(num)) return res.status(400).json({ error: "electionId required" });
+      const cfg = await getElectionIngestConfig(String(num));
+      try {
+        const bundle = await fetchCivixElectionBundleWithOverrides(num, {
+          countyInfoUrl: cfg.sosCountyInfoUrl,
+        });
+        return res.json({
+          live: true,
+          election: bundle.election,
+          county: bundle.county,
+        });
+      } catch (liveErr) {
+        const snap = await getLatestSosCivixSnapshot(String(num));
+        if (!snap) {
+          return res.status(502).json({
+            live: false,
+            error: String(liveErr?.message || liveErr),
+          });
+        }
+        const err = liveErr instanceof Error ? liveErr.message : String(liveErr);
+        return res.json({
+          live: false,
+          election: snap.election,
+          county: snap.county,
+          fetchedAt: snap.fetchedAt,
+          note: `Civix live API unavailable (${err}). Using last stored SOS snapshot${snap.fetchedAt ? ` from ${snap.fetchedAt}` : ""}.`,
+        });
+      }
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
   app.put("/api/settings", async (req, res) => {
     try {
       await ensureDb();
@@ -1543,6 +1738,28 @@ export function createApiApp() {
     }
   });
 
+  async function runRefreshOnceIngest(electionId, civixBundle) {
+    await withIngestLock(async () => {
+      ingestState.running = true;
+      ingestState.lastResult = null;
+      try {
+        const result = await runFullIngestRefresh(String(electionId), {
+          clientCivixBundle: normalizeClientCivixBundle(civixBundle),
+        });
+        ingestState.lastRunEndTime = Date.now();
+        ingestState.lastResult = result;
+        const settings = await getAppSettings();
+        const intervalMs = Math.max(15, Number(settings.autoRefreshIntervalSec) || 60) * 1000;
+        if (settings.autoRefreshEnabled) {
+          ingestState.nextScheduledRunAt = ingestState.lastRunEndTime + intervalMs;
+        }
+      } finally {
+        ingestState.running = false;
+        clearIngestProgress();
+      }
+    });
+  }
+
   app.post("/api/ingest/refresh-once", async (req, res) => {
     let electionId = req.body?.electionId;
     if (electionId != null && String(electionId).trim()) {
@@ -1552,31 +1769,39 @@ export function createApiApp() {
       electionId = Number.isFinite(n) ? String(n) : "";
     }
     if (!electionId) return res.status(400).json({ error: "electionId required" });
+    const waitForCompletion = req.body?.wait === true;
     try {
       const cfg = await getElectionIngestConfig(electionId);
       if (!cfg.isEnabled) {
         return res.status(409).json({ error: `Election ${electionId} is disabled for ingest` });
       }
-      let result;
-      await withIngestLock(async () => {
-        ingestState.running = true;
+
+      if (waitForCompletion) {
+        await runRefreshOnceIngest(electionId, req.body?.civixBundle);
+        const result = ingestState.lastResult;
+        res.status(result?.ok ? 200 : 207).json(result);
+        return;
+      }
+
+      void (async () => {
         try {
-          result = await runFullIngestRefresh(String(electionId), {
-            clientCivixBundle: normalizeClientCivixBundle(req.body?.civixBundle),
-          });
+          await runRefreshOnceIngest(electionId, req.body?.civixBundle);
+        } catch (e) {
+          console.error("refresh-once background", e);
           ingestState.lastRunEndTime = Date.now();
-          ingestState.lastResult = result;
-          const settings = await getAppSettings();
-          const intervalMs = Math.max(15, Number(settings.autoRefreshIntervalSec) || 60) * 1000;
-          if (settings.autoRefreshEnabled) {
-            ingestState.nextScheduledRunAt = ingestState.lastRunEndTime + intervalMs;
-          }
-        } finally {
+          ingestState.lastResult = {
+            ok: false,
+            electionId,
+            sos: { inserted: 0 },
+            counties: {},
+            errors: [String(e?.message || e)],
+          };
           ingestState.running = false;
           clearIngestProgress();
         }
-      });
-      res.status(result.ok ? 200 : 207).json(result);
+      })();
+
+      res.status(202).json({ accepted: true, electionId, startedAt: Date.now() });
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: String(e?.message || e) });

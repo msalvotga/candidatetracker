@@ -1,1 +1,1 @@
-export { fetchCivixBundleForIngest } from "./api";
+export { fetchCivixBundleForIngest, fetchCivixBundleFromBrowser } from "./api";

@@ -21,8 +21,8 @@ export async function buildCivixFetchHeaders(requestCookie) {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     Referer:
       process.env.CIVIX_REFERER?.trim() || "https://goelect.txelections.civixapps.com/ivis-enr-ui/",
-    Origin: process.env.CIVIX_ORIGIN?.trim() || "https://goelect.txelections.civixapps.com",
   };
+  // Do NOT send Origin — Civix returns HTTP 500/503 when Origin is present on these JSON endpoints.
   const cookie = await resolveCivixCookie(requestCookie);
   if (cookie) headers.Cookie = cookie;
   return headers;
