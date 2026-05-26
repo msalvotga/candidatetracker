@@ -310,6 +310,19 @@ CREATE TABLE IF NOT EXISTS election_feed_sources (
 );
 CREATE INDEX IF NOT EXISTS idx_election_feed_sources_election ON election_feed_sources(election_id);
 
+CREATE TABLE IF NOT EXISTS election_favorite_races (
+  election_id TEXT NOT NULL,
+  race_id TEXT NOT NULL,
+  office_type TEXT NOT NULL DEFAULT '',
+  race_title TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
+  PRIMARY KEY (election_id, race_id)
+);
+CREATE INDEX IF NOT EXISTS idx_election_favorite_races_lookup
+  ON election_favorite_races(election_id, sort_order, race_id);
+
 CREATE TABLE IF NOT EXISTS county_sos_race_links (
   election_id TEXT NOT NULL,
   county_key TEXT NOT NULL,

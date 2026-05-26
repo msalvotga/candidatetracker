@@ -354,6 +354,34 @@ export async function fetchCountyHistoricalResults(countyName: string): Promise<
   return r.json() as Promise<CountyHistoricalResultsPayload>;
 }
 
+export interface ElectionFavoriteRace {
+  electionId: string;
+  raceId: string;
+  officeType: string;
+  raceTitle: string;
+  sortOrder: number;
+  updatedAt?: string;
+}
+
+export async function fetchElectionFavoriteRaces(electionId: string): Promise<{ electionId: string; favorites: ElectionFavoriteRace[] }> {
+  const r = await apiFetch(`/api/election-favorite-races/${encodeURIComponent(electionId)}`, { cache: "no-store" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json() as Promise<{ electionId: string; favorites: ElectionFavoriteRace[] }>;
+}
+
+export async function saveElectionFavoriteRaces(
+  electionId: string,
+  favorites: Array<Pick<ElectionFavoriteRace, "raceId" | "officeType" | "raceTitle" | "sortOrder">>,
+): Promise<{ electionId: string; favorites: ElectionFavoriteRace[] }> {
+  const r = await apiFetch(`/api/election-favorite-races/${encodeURIComponent(electionId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ favorites }),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json() as Promise<{ electionId: string; favorites: ElectionFavoriteRace[] }>;
+}
+
 export async function fetchElectionFeedSources(electionId: string): Promise<{ sources: ElectionFeedSourceRow[] }> {
   const r = await apiFetch(`/api/election-feed-sources/${encodeURIComponent(electionId)}`, { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);

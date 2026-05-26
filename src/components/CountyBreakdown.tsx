@@ -10,10 +10,29 @@ import { isSd4SenateRaceTitle, normalizeCountyLookupKey } from "../lib/sd4Histor
 import { LiveCount } from "./LiveCount";
 import { CountyHistoricalModal } from "./CountyHistoricalModal";
 
+type CountySortMetric = "earlyVotes" | "electionDayVotes" | "totalVotes";
+
+type CountySortState = {
+  candidateId: string;
+  metric: CountySortMetric;
+  direction: "asc" | "desc";
+};
+
 function sortCounties(rows: CountyRowInput[]): CountyRowInput[] {
   const totals = rows.filter((r) => r.isTotalRow);
   const rest = rows.filter((r) => !r.isTotalRow).sort((a, b) => a.name.localeCompare(b.name));
   return [...totals, ...rest];
+}
+
+function countyMetricValue(row: CountyRowInput, candidateId: string, metric: CountySortMetric): number {
+  const cell = row.candidates[candidateId];
+  if (!cell) return 0;
+  return metric === "earlyVotes" ? cell.earlyVotes : metric === "electionDayVotes" ? cell.electionDayVotes : cell.totalVotes;
+}
+
+function sortIndicator(active: boolean, direction: "asc" | "desc"): string {
+  if (!active) return "";
+  return direction === "asc" ? " ▲" : " ▼";
 }
 
 function partyAbbrevForHistory(party: string): string {
@@ -159,11 +178,12 @@ export function CountyBreakdown({
   race: RaceInput;
   onBack: () => void;
 }) {
-  const counties = race.counties?.length ? sortCounties(race.counties) : [];
+  const baseCounties = useMemo(() => (race.counties?.length ? sortCounties(race.counties) : []), [race.counties]);
   const candidates = race.candidates;
   const showSd4History = isSd4SenateRaceTitle(race.title);
   const [sd4Hist, setSd4Hist] = useState<Sd4HistoricalGeCountyTotalsPayload | null>(null);
   const [showPriorElection, setShowPriorElection] = useState(true);
+  const [countySort, setCountySort] = useState<CountySortState | null>(null);
   const [selectedHistoricalCounty, setSelectedHistoricalCounty] = useState<string | null>(null);
   const [countyHistoryCache, setCountyHistoryCache] = useState<Record<string, CountyHistoricalResultsPayload>>({});
   const [countyHistoryLoading, setCountyHistoryLoading] = useState(false);
@@ -190,13 +210,13 @@ export function CountyBreakdown({
   }, [showSd4History]);
 
   const historicalHeaderYear = useMemo(
-    () => (showSd4History ? maxHistoricalYearForRows(sd4Hist, counties) : null),
-    [showSd4History, sd4Hist, counties],
+    () => (showSd4History ? maxHistoricalYearForRows(sd4Hist, baseCounties) : null),
+    [showSd4History, sd4Hist, baseCounties],
   );
 
   const countyLookupKeysInRace = useMemo(
-    () => counties.filter((r) => !r.isTotalRow).map((r) => normalizeCountyLookupKey(r.name)),
-    [counties],
+    () => baseCounties.filter((r) => !r.isTotalRow).map((r) => normalizeCountyLookupKey(r.name)),
+    [baseCounties],
   );
 
   const districtGeEarlyDenom = useMemo(
@@ -215,13 +235,34 @@ export function CountyBreakdown({
   const priorCols = showSd4History && showPriorElection ? 3 : 0;
   const candSpan = 3 + priorCols;
   const selectedCountyHistory = selectedHistoricalCounty ? countyHistoryCache[selectedHistoricalCounty] ?? null : null;
+  const counties = useMemo(() => {
+    if (!countySort) return baseCounties;
+    const totals = baseCounties.filter((row) => row.isTotalRow);
+    const rest = baseCounties.filter((row) => !row.isTotalRow);
+    rest.sort((a, b) => {
+      const cmp = countyMetricValue(a, countySort.candidateId, countySort.metric) - countyMetricValue(b, countySort.candidateId, countySort.metric);
+      if (cmp !== 0) return countySort.direction === "asc" ? cmp : -cmp;
+      return a.name.localeCompare(b.name);
+    });
+    return [...totals, ...rest];
+  }, [baseCounties, countySort]);
 
   useEffect(() => {
     countyHistoryRequestId.current += 1;
+    setCountySort(null);
     setSelectedHistoricalCounty(null);
     setCountyHistoryLoading(false);
     setCountyHistoryError(null);
   }, [race.id]);
+
+  function onSortColumn(candidateId: string, metric: CountySortMetric) {
+    setCountySort((current) => {
+      if (current && current.candidateId === candidateId && current.metric === metric) {
+        return { ...current, direction: current.direction === "asc" ? "desc" : "asc" };
+      }
+      return { candidateId, metric, direction: "desc" };
+    });
+  }
 
   async function openCountyHistory(countyName: string) {
     const name = String(countyName ?? "").trim();
@@ -313,9 +354,72 @@ export function CountyBreakdown({
             <tr>
               {candidates.map((c) => (
                 <Fragment key={`${c.id}-sub`}>
-                  <th className="enr-subHead num">Early votes</th>
-                  <th className="enr-subHead num">Election day</th>
-                  <th className="enr-subHead num">Total votes</th>
+                  <th
+                    className="enr-subHead num"
+                    aria-sort={
+                      countySort?.candidateId === c.id && countySort.metric === "earlyVotes"
+                        ? countySort.direction === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                    }
+                  >
+                    <button
+                      type="button"
+                      className={`enr-countySortButton enr-countySortButton--num${
+                        countySort?.candidateId === c.id && countySort.metric === "earlyVotes" ? " is-active" : ""
+                      }`}
+                      onClick={() => onSortColumn(c.id, "earlyVotes")}
+                    >
+                      Early votes
+                      {sortIndicator(countySort?.candidateId === c.id && countySort.metric === "earlyVotes", countySort?.direction ?? "desc")}
+                    </button>
+                  </th>
+                  <th
+                    className="enr-subHead num"
+                    aria-sort={
+                      countySort?.candidateId === c.id && countySort.metric === "electionDayVotes"
+                        ? countySort.direction === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                    }
+                  >
+                    <button
+                      type="button"
+                      className={`enr-countySortButton enr-countySortButton--num${
+                        countySort?.candidateId === c.id && countySort.metric === "electionDayVotes" ? " is-active" : ""
+                      }`}
+                      onClick={() => onSortColumn(c.id, "electionDayVotes")}
+                    >
+                      Election day
+                      {sortIndicator(
+                        countySort?.candidateId === c.id && countySort.metric === "electionDayVotes",
+                        countySort?.direction ?? "desc",
+                      )}
+                    </button>
+                  </th>
+                  <th
+                    className="enr-subHead num"
+                    aria-sort={
+                      countySort?.candidateId === c.id && countySort.metric === "totalVotes"
+                        ? countySort.direction === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                    }
+                  >
+                    <button
+                      type="button"
+                      className={`enr-countySortButton enr-countySortButton--num${
+                        countySort?.candidateId === c.id && countySort.metric === "totalVotes" ? " is-active" : ""
+                      }`}
+                      onClick={() => onSortColumn(c.id, "totalVotes")}
+                    >
+                      Total votes
+                      {sortIndicator(countySort?.candidateId === c.id && countySort.metric === "totalVotes", countySort?.direction ?? "desc")}
+                    </button>
+                  </th>
                   {priorCols ? (
                     <>
                       <th className="enr-subHead num enr-subHead--historical">

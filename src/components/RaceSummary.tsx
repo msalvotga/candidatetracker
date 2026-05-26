@@ -2,22 +2,75 @@ import type { RaceInput } from "../types/election";
 import { toCandidateRows } from "../lib/voteMath";
 import { LiveCount, LivePercent } from "./LiveCount";
 
+function voteShare(value: number, total: number): number | null {
+  if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) return null;
+  return (value / total) * 100;
+}
+
 export function RaceSummary({
   race,
   onContestDetails,
+  isFavorite,
+  onToggleFavorite,
+  canMoveFavoriteUp,
+  canMoveFavoriteDown,
+  onMoveFavoriteUp,
+  onMoveFavoriteDown,
 }: {
   race: RaceInput;
   onContestDetails: () => void;
+  isFavorite?: boolean;
+  onToggleFavorite?: () => void;
+  canMoveFavoriteUp?: boolean;
+  canMoveFavoriteDown?: boolean;
+  onMoveFavoriteUp?: () => void;
+  onMoveFavoriteDown?: () => void;
 }) {
   const rows = toCandidateRows(race.candidates);
   const maxVotes = Math.max(...rows.map((r) => r.totalVotes), 1);
   const raceTotal = rows.reduce((s, r) => s + r.totalVotes, 0);
+  const raceEarlyTotal = rows.reduce((sum, row) => sum + row.earlyVotes, 0);
+  const raceElectionDayTotal = rows.reduce((sum, row) => sum + row.electionDayVotes, 0);
 
   return (
     <section className="enr-card">
       <header className="enr-card__head">
         <div className="enr-card__titleRow">
+          <button
+            type="button"
+            className={`enr-star ${isFavorite ? "is-active" : ""}`}
+            onClick={onToggleFavorite}
+            disabled={!onToggleFavorite}
+            aria-label={isFavorite ? "Remove race from favorites" : "Add race to favorites"}
+            title={isFavorite ? "Remove race from favorites" : "Add race to favorites"}
+          >
+            {isFavorite ? "★" : "☆"}
+          </button>
           <h2 className="enr-card__title">{race.title}</h2>
+          {(onMoveFavoriteUp || onMoveFavoriteDown) && isFavorite ? (
+            <div className="enr-favoriteOrderControls">
+              <button
+                type="button"
+                className="enr-favoriteOrderBtn"
+                onClick={onMoveFavoriteUp}
+                disabled={!canMoveFavoriteUp}
+                aria-label="Move favorite up"
+                title="Move favorite up"
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                className="enr-favoriteOrderBtn"
+                onClick={onMoveFavoriteDown}
+                disabled={!canMoveFavoriteDown}
+                aria-label="Move favorite down"
+                title="Move favorite down"
+              >
+                ↓
+              </button>
+            </div>
+          ) : null}
         </div>
         <button type="button" className="enr-linkbtn" onClick={onContestDetails}>
           County Returns
@@ -53,10 +106,24 @@ export function RaceSummary({
                 </td>
                 <td>{r.party}</td>
                 <td className="num">
-                  <LiveCount value={r.earlyVotes} />
+                  <div className="enr-voteCellStack">
+                    <LiveCount value={r.earlyVotes} />
+                    <span className="enr-voteCellPct">
+                      {voteShare(r.earlyVotes, raceEarlyTotal) == null ? "—" : <LivePercent value={voteShare(r.earlyVotes, raceEarlyTotal) ?? 0} />}
+                    </span>
+                  </div>
                 </td>
                 <td className="num">
-                  <LiveCount value={r.electionDayVotes} />
+                  <div className="enr-voteCellStack">
+                    <LiveCount value={r.electionDayVotes} />
+                    <span className="enr-voteCellPct">
+                      {voteShare(r.electionDayVotes, raceElectionDayTotal) == null ? (
+                        "—"
+                      ) : (
+                        <LivePercent value={voteShare(r.electionDayVotes, raceElectionDayTotal) ?? 0} />
+                      )}
+                    </span>
+                  </div>
                 </td>
                 <td className="num">
                   <LiveCount value={r.totalVotes} />

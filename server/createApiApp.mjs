@@ -71,9 +71,11 @@ import {
   confirmEvRosterCountyPull,
   listEvRosterVoters,
   upsertEvRosterConfig,
+  listElectionFavoriteRaces,
   listElectionSourceConfigs,
   listElectionFeedSources,
   listIngestVendors,
+  replaceElectionFavoriteRacesForElection,
   replaceElectionFeedSourcesForElection,
   flushPendingDatabasePersist,
   upsertElectionSourceConfig,
@@ -1492,6 +1494,31 @@ export function createApiApp() {
       const electionId = String(req.params.electionId ?? "").trim();
       if (!electionId) return res.status(400).json({ error: "electionId required" });
       res.json({ electionId, sources: await listElectionFeedSources(electionId) });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/election-favorite-races/:electionId", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      if (!electionId) return res.status(400).json({ error: "electionId required" });
+      res.json({ electionId, favorites: await listElectionFavoriteRaces(electionId) });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.put("/api/election-favorite-races/:electionId", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      if (!electionId) return res.status(400).json({ error: "electionId required" });
+      const favorites = Array.isArray(req.body?.favorites) ? req.body.favorites : [];
+      res.json({ electionId, favorites: await replaceElectionFavoriteRacesForElection(electionId, favorites) });
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: String(e?.message || e) });

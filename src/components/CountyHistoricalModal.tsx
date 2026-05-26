@@ -3,6 +3,15 @@ import type { CountyHistoricalElectionResult, CountyHistoricalResultsPayload } f
 
 type HistoricalTab = "general" | "primary";
 
+function partyToneClass(partyName: string | null): string {
+  const party = String(partyName ?? "")
+    .trim()
+    .toLowerCase();
+  if (party.startsWith("rep")) return "enr-countyHistoryCandidate--rep";
+  if (party.startsWith("dem")) return "enr-countyHistoryCandidate--dem";
+  return "";
+}
+
 function formatCount(value: number | null): string {
   return value == null ? "—" : value.toLocaleString();
 }
@@ -29,9 +38,13 @@ export function CountyHistoricalModal({
   onClose: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<HistoricalTab>("general");
+  const [yearFilter, setYearFilter] = useState("all");
+  const [raceTypeFilter, setRaceTypeFilter] = useState("all");
 
   useEffect(() => {
     setActiveTab("general");
+    setYearFilter("all");
+    setRaceTypeFilter("all");
   }, [countyName]);
 
   useEffect(() => {
@@ -49,6 +62,30 @@ export function CountyHistoricalModal({
     () => (activeTab === "general" ? general : primary),
     [activeTab, general, primary],
   );
+  const yearOptions = useMemo(
+    () => Array.from(new Set(activeItems.map((item) => String(item.year)))).sort((a, b) => Number(b) - Number(a)),
+    [activeItems],
+  );
+  const raceTypeOptions = useMemo(() => Array.from(new Set(activeItems.map((item) => item.officeName))), [activeItems]);
+  const filteredItems = useMemo(
+    () =>
+      activeItems.filter(
+        (item) => (yearFilter === "all" || String(item.year) === yearFilter) && (raceTypeFilter === "all" || item.officeName === raceTypeFilter),
+      ),
+    [activeItems, yearFilter, raceTypeFilter],
+  );
+
+  useEffect(() => {
+    if (yearFilter !== "all" && !yearOptions.includes(yearFilter)) {
+      setYearFilter("all");
+    }
+  }, [yearFilter, yearOptions]);
+
+  useEffect(() => {
+    if (raceTypeFilter !== "all" && !raceTypeOptions.includes(raceTypeFilter)) {
+      setRaceTypeFilter("all");
+    }
+  }, [raceTypeFilter, raceTypeOptions]);
 
   if (!countyName) return null;
 
@@ -104,9 +141,38 @@ export function CountyHistoricalModal({
           {!loading && !error && !activeItems.length ? (
             <p className="enr-muted">No {activeTab} historical data is available for this county yet.</p>
           ) : null}
+          {!loading && !error && activeItems.length ? (
+            <div className="enr-countyHistoryFilters">
+              <label className="enr-selectLabel enr-countyHistoryFilters__label">
+                Year
+                <select className="enr-select" value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}>
+                  <option value="all">All years</option>
+                  {yearOptions.map((year) => (
+                    <option key={year} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="enr-selectLabel enr-countyHistoryFilters__label">
+                Race type
+                <select className="enr-select" value={raceTypeFilter} onChange={(event) => setRaceTypeFilter(event.target.value)}>
+                  <option value="all">All race types</option>
+                  {raceTypeOptions.map((raceType) => (
+                    <option key={raceType} value={raceType}>
+                      {raceType}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
+          {!loading && !error && activeItems.length && !filteredItems.length ? (
+            <p className="enr-muted">No historical results match the selected year and race type filters.</p>
+          ) : null}
 
           {!loading && !error
-            ? activeItems.map((election) => (
+            ? filteredItems.map((election) => (
                 <section key={election.id} className="enr-countyHistoryCard">
                   <div className="enr-countyHistoryCard__header">
                     <h4>{election.label}</h4>
@@ -119,7 +185,10 @@ export function CountyHistoricalModal({
 
                   <div className="enr-countyHistoryCard__rows">
                     {election.candidates.map((candidate) => (
-                      <div key={`${election.id}-${candidate.candidateName}`} className="enr-countyHistoryCandidate">
+                      <div
+                        key={`${election.id}-${candidate.candidateName}`}
+                        className={`enr-countyHistoryCandidate ${partyToneClass(candidate.partyName)}`.trim()}
+                      >
                         <div className="enr-countyHistoryCandidate__name">
                           <span>{candidate.candidateName}</span>
                           {candidate.partyName ? (

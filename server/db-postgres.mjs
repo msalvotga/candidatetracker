@@ -980,6 +980,65 @@ export async function listElectionFeedSources(electionId) {
   }));
 }
 
+export async function listElectionFavoriteRaces(electionId) {
+  const pool = await ensureDb();
+  const eid = String(electionId ?? "").trim();
+  if (!eid) return [];
+  const r = await pool.request().input("election_id", eid).query(`
+    SELECT election_id AS electionId, race_id AS raceId, office_type AS officeType,
+           race_title AS raceTitle, sort_order AS sortOrder, updated_at AS updatedAt
+    FROM dbo.election_favorite_races
+    WHERE election_id = @election_id
+    ORDER BY sort_order, race_id
+  `);
+  return (r.recordset ?? []).map((row) => ({
+    electionId: String(row.electionId ?? ""),
+    raceId: String(row.raceId ?? ""),
+    officeType: String(row.officeType ?? ""),
+    raceTitle: String(row.raceTitle ?? ""),
+    sortOrder: Number(row.sortOrder ?? 0),
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt ?? ""),
+  }));
+}
+
+export async function replaceElectionFavoriteRacesForElection(electionId, favorites) {
+  const pool = await ensureDb();
+  const eid = String(electionId ?? "").trim();
+  if (!eid) throw new Error("electionId is required");
+
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin();
+  try {
+    await new sql.Request(transaction).input("election_id", eid).query(`
+      DELETE FROM dbo.election_favorite_races WHERE election_id = @election_id
+    `);
+
+    let ord = 0;
+    for (const favorite of favorites ?? []) {
+      const raceId = String(favorite.raceId ?? "").trim();
+      if (!raceId) continue;
+      await new sql.Request(transaction)
+        .input("election_id", eid)
+        .input("race_id", raceId)
+        .input("office_type", String(favorite.officeType ?? "").trim())
+        .input("race_title", String(favorite.raceTitle ?? "").trim())
+        .input("sort_order", ord++)
+        .query(`
+          INSERT INTO dbo.election_favorite_races
+            (election_id, race_id, office_type, race_title, sort_order, updated_at)
+          VALUES (@election_id, @race_id, @office_type, @race_title, @sort_order, SYSUTCDATETIME())
+        `);
+    }
+
+    await transaction.commit();
+  } catch (e) {
+    await transaction.rollback();
+    throw e;
+  }
+
+  return listElectionFavoriteRaces(eid);
+}
+
 export async function replaceElectionFeedSourcesForElection(electionId, sources) {
   const pool = await ensureDb();
   const eid = String(electionId ?? "").trim();

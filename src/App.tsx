@@ -4,10 +4,13 @@ import { loadCivixElectionBundle } from "./lib/civix/loadElection";
 import {
   fetchCatalogFromBackend,
   fetchAppSettings,
+  fetchElectionFavoriteRaces,
   fetchIngestStatus,
   loadElectionFromBackend,
   probeBackend,
+  saveElectionFavoriteRaces,
   type ElectionOption,
+  type ElectionFavoriteRace,
   type IngestStatus,
 } from "./lib/dataBackend";
 import type { LoadedElection, OfficeType, RaceInput } from "./types/election";
@@ -26,6 +29,8 @@ const OFFICE_ORDER: OfficeType[] = [
   "DISTRICT OFFICES",
   "STATEWIDE PROPOSITIONS",
 ];
+const FAVORITES_TAB = "FAVORITES" as const;
+type DashboardTab = typeof FAVORITES_TAB | OfficeType;
 
 function officeTypesForElection(election: LoadedElection | undefined): OfficeType[] {
   if (!election) return [];
@@ -35,8 +40,24 @@ function officeTypesForElection(election: LoadedElection | undefined): OfficeTyp
   return [...ordered, ...extras];
 }
 
-function racesForTab(election: LoadedElection | undefined, tab: OfficeType | null): RaceInput[] {
+function favoriteRacesForElection(
+  election: LoadedElection | undefined,
+  favorites: ElectionFavoriteRace[],
+): RaceInput[] {
+  if (!election) return [];
+  const byId = new Map(election.file.races.map((race) => [race.id, race]));
+  return favorites
+    .map((favorite) => byId.get(favorite.raceId) ?? null)
+    .filter((race): race is RaceInput => race != null);
+}
+
+function racesForTab(
+  election: LoadedElection | undefined,
+  tab: DashboardTab | null,
+  favorites: ElectionFavoriteRace[],
+): RaceInput[] {
   if (!election || !tab) return [];
+  if (tab === FAVORITES_TAB) return favoriteRacesForElection(election, favorites);
   return election.file.races.filter((r) => r.officeType === tab);
 }
 
@@ -63,11 +84,14 @@ export function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [selectedElectionId, setSelectedElectionId] = useState<string | null>(null);
-  const [officeTab, setOfficeTab] = useState<OfficeType | null>(null);
+  const [officeTab, setOfficeTab] = useState<DashboardTab | null>(null);
   const [selectedRaceId, setSelectedRaceId] = useState<string | null>(null);
   const [view, setView] = useState<"race" | "county">("race");
   const [ingestStatus, setIngestStatus] = useState<IngestStatus | null>(null);
   const [displayTimeZone, setDisplayTimeZone] = useState("America/Chicago");
+  const [favoriteRaces, setFavoriteRaces] = useState<ElectionFavoriteRace[]>([]);
+  const [favoritesLoading, setFavoritesLoading] = useState(false);
+  const [favoritesError, setFavoritesError] = useState<string | null>(null);
   /** Last ingest completion time we have merged into `current` (avoids duplicate fetches + establishes baseline). */
   const lastMergedIngestEndRef = useRef<number | null>(null);
 
@@ -171,17 +195,20 @@ export function App() {
     };
   }, [selectedElectionId, electionOptions, useBackend]);
 
-  const tabs = useMemo(() => officeTypesForElection(current ?? undefined), [current]);
+  const tabs = useMemo<DashboardTab[]>(() => [FAVORITES_TAB, ...officeTypesForElection(current ?? undefined)], [current]);
 
   useEffect(() => {
     if (!current) return;
-    const nextTabs = officeTypesForElection(current);
+    const nextTabs: DashboardTab[] = [FAVORITES_TAB, ...officeTypesForElection(current)];
     if (!officeTab || !nextTabs.includes(officeTab)) {
       setOfficeTab(nextTabs[0] ?? null);
     }
   }, [current, officeTab]);
 
-  const tabRaces = useMemo(() => racesForTab(current ?? undefined, officeTab), [current, officeTab]);
+  const tabRaces = useMemo(
+    () => racesForTab(current ?? undefined, officeTab, favoriteRaces),
+    [current, officeTab, favoriteRaces],
+  );
 
   useEffect(() => {
     if (!tabRaces.length) {
@@ -194,9 +221,43 @@ export function App() {
   }, [tabRaces, selectedRaceId]);
 
   const selectedRace = useMemo(() => {
-    if (!current || !selectedRaceId) return null;
-    return current.file.races.find((r) => r.id === selectedRaceId) ?? null;
-  }, [current, selectedRaceId]);
+    if (!selectedRaceId) return null;
+    return tabRaces.find((race) => race.id === selectedRaceId) ?? null;
+  }, [tabRaces, selectedRaceId]);
+
+  useEffect(() => {
+    if (useBackend !== true || !selectedElectionId) {
+      setFavoriteRaces([]);
+      setFavoritesLoading(false);
+      setFavoritesError(null);
+      return;
+    }
+    let cancelled = false;
+    setFavoritesLoading(true);
+    setFavoritesError(null);
+    void fetchElectionFavoriteRaces(selectedElectionId)
+      .then((payload) => {
+        if (!cancelled) setFavoriteRaces(payload.favorites ?? []);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setFavoriteRaces([]);
+          setFavoritesError(error instanceof Error ? error.message : "Failed to load favorites");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setFavoritesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedElectionId, useBackend]);
+
+  const favoriteRaceIds = useMemo(() => new Set(favoriteRaces.map((favorite) => favorite.raceId)), [favoriteRaces]);
+  const favoriteIndexByRaceId = useMemo(
+    () => new Map(favoriteRaces.map((favorite, index) => [favorite.raceId, index])),
+    [favoriteRaces],
+  );
 
   const trackedCivixElectionId = useMemo(
     () => civixElectionIdFromCatalog(selectedElectionId),
@@ -358,9 +419,68 @@ export function App() {
     return candidates.length ? Math.max(...candidates) : null;
   }, [trackedCivixElectionId, ingestStatus, current?.file.reporting.appRefreshedAt]);
 
-  function onChangeOfficeTab(tab: OfficeType) {
+  async function persistFavoriteRaces(nextFavorites: ElectionFavoriteRace[]) {
+    if (useBackend !== true || !selectedElectionId) return;
+    const normalized = nextFavorites.map((favorite, index) => ({
+      electionId: selectedElectionId,
+      raceId: favorite.raceId,
+      officeType: favorite.officeType,
+      raceTitle: favorite.raceTitle,
+      sortOrder: index,
+      updatedAt: favorite.updatedAt,
+    }));
+    const previous = favoriteRaces;
+    setFavoriteRaces(normalized);
+    setFavoritesError(null);
+    try {
+      const saved = await saveElectionFavoriteRaces(
+        selectedElectionId,
+        normalized.map((favorite) => ({
+          raceId: favorite.raceId,
+          officeType: favorite.officeType,
+          raceTitle: favorite.raceTitle,
+          sortOrder: favorite.sortOrder,
+        })),
+      );
+      setFavoriteRaces(saved.favorites ?? []);
+    } catch (error) {
+      setFavoriteRaces(previous);
+      setFavoritesError(error instanceof Error ? error.message : "Failed to save favorites");
+    }
+  }
+
+  async function toggleFavoriteRace(race: RaceInput) {
+    const existingIndex = favoriteRaces.findIndex((favorite) => favorite.raceId === race.id);
+    const nextFavorites =
+      existingIndex >= 0
+        ? favoriteRaces.filter((favorite) => favorite.raceId !== race.id)
+        : [
+            ...favoriteRaces,
+            {
+              electionId: selectedElectionId ?? "",
+              raceId: race.id,
+              officeType: race.officeType,
+              raceTitle: race.title,
+              sortOrder: favoriteRaces.length,
+            },
+          ];
+    await persistFavoriteRaces(nextFavorites);
+  }
+
+  async function moveFavoriteRace(raceId: string, direction: "up" | "down") {
+    const index = favoriteRaces.findIndex((favorite) => favorite.raceId === raceId);
+    if (index < 0) return;
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= favoriteRaces.length) return;
+    const nextFavorites = [...favoriteRaces];
+    const [item] = nextFavorites.splice(index, 1);
+    nextFavorites.splice(targetIndex, 0, item);
+    await persistFavoriteRaces(nextFavorites);
+  }
+
+  function onChangeOfficeTab(tab: DashboardTab) {
     setOfficeTab(tab);
-    const races = racesForTab(current ?? undefined, tab);
+    const races = racesForTab(current ?? undefined, tab, favoriteRaces);
     setSelectedRaceId(races[0]?.id ?? null);
     setView("race");
   }
@@ -507,6 +627,8 @@ export function App() {
               </label>
             </div>
 
+            {favoritesError ? <p className="enr-footnote">{favoritesError}</p> : null}
+
             <div className="enr-officeTabs" role="tablist" aria-label="Office categories">
               {tabs.map((t) => (
                 <button
@@ -517,13 +639,46 @@ export function App() {
                   className={`enr-tab ${t === officeTab ? "is-active" : ""}`}
                   onClick={() => onChangeOfficeTab(t)}
                 >
-                  {t}
+                  {t === FAVORITES_TAB ? "Favorites" : t}
                 </button>
               ))}
             </div>
 
+            {officeTab === FAVORITES_TAB && favoritesLoading ? <div className="enr-panel">Loading favorites…</div> : null}
+            {officeTab === FAVORITES_TAB && !favoritesLoading && !tabRaces.length ? (
+              <div className="enr-panel">
+                No favorite races yet. Open any race in the other office tabs and click the star to add it here.
+              </div>
+            ) : null}
             {view === "race" && selectedRace ? (
-              <RaceSummary race={selectedRace} onContestDetails={() => setView("county")} />
+              <RaceSummary
+                race={selectedRace}
+                onContestDetails={() => setView("county")}
+                isFavorite={favoriteRaceIds.has(selectedRace.id)}
+                onToggleFavorite={
+                  useBackend === true
+                    ? () => {
+                        void toggleFavoriteRace(selectedRace);
+                      }
+                    : undefined
+                }
+                canMoveFavoriteUp={(favoriteIndexByRaceId.get(selectedRace.id) ?? -1) > 0}
+                canMoveFavoriteDown={(favoriteIndexByRaceId.get(selectedRace.id) ?? -1) >= 0 && (favoriteIndexByRaceId.get(selectedRace.id) ?? -1) < favoriteRaces.length - 1}
+                onMoveFavoriteUp={
+                  officeTab === FAVORITES_TAB && favoriteRaceIds.has(selectedRace.id)
+                    ? () => {
+                        void moveFavoriteRace(selectedRace.id, "up");
+                      }
+                    : undefined
+                }
+                onMoveFavoriteDown={
+                  officeTab === FAVORITES_TAB && favoriteRaceIds.has(selectedRace.id)
+                    ? () => {
+                        void moveFavoriteRace(selectedRace.id, "down");
+                      }
+                    : undefined
+                }
+              />
             ) : null}
             {view === "county" && selectedRace ? (
               <CountyBreakdown race={selectedRace} onBack={() => setView("race")} />

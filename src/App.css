@@ -370,8 +370,47 @@
   color: #fff;
   font-size: 18px;
   line-height: 1;
+  cursor: pointer;
+  opacity: 0.75;
+  padding: 0;
+}
+
+.enr-star:hover:not(:disabled),
+.enr-star.is-active {
+  color: #facc15;
+  opacity: 1;
+}
+
+.enr-star:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.45;
+}
+
+.enr-favoriteOrderControls {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: 4px;
+}
+
+.enr-favoriteOrderBtn {
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 4px 7px;
+  cursor: pointer;
+}
+
+.enr-favoriteOrderBtn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.enr-favoriteOrderBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .enr-card__title {
@@ -504,6 +543,21 @@
 .enr-raceTotal {
   font-size: 13px;
   color: #223043;
+}
+
+.enr-voteCellStack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  line-height: 1.2;
+}
+
+.enr-voteCellPct {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  letter-spacing: 0.01em;
 }
 
 .enr-county__bar {
@@ -643,6 +697,30 @@
 .enr-subHead {
   top: 38px;
   z-index: 2;
+}
+
+.enr-countySortButton {
+  width: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: left;
+}
+
+.enr-countySortButton--num {
+  text-align: right;
+}
+
+.enr-countySortButton.is-active {
+  color: var(--tx-navy);
+}
+
+.enr-countySortButton:hover {
+  text-decoration: underline;
 }
 
 .enr-countyName {
@@ -785,6 +863,17 @@
   padding: 16px 20px 20px;
 }
 
+.enr-countyHistoryFilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.enr-countyHistoryFilters__label {
+  min-width: 180px;
+}
+
 .enr-countyHistoryCard {
   border: 1px solid var(--tx-border);
   border-radius: 12px;
@@ -828,6 +917,26 @@
   padding: 10px 12px;
   border-radius: 10px;
   background: #fff;
+}
+
+.enr-countyHistoryCandidate--rep {
+  background: #fff5f5;
+  border: 1px solid #fecaca;
+}
+
+.enr-countyHistoryCandidate--rep .enr-countyHistoryCandidate__name,
+.enr-countyHistoryCandidate--rep .enr-countyHistoryCandidate__values {
+  color: #b91c1c;
+}
+
+.enr-countyHistoryCandidate--dem {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+
+.enr-countyHistoryCandidate--dem .enr-countyHistoryCandidate__name,
+.enr-countyHistoryCandidate--dem .enr-countyHistoryCandidate__values {
+  color: #1d4ed8;
 }
 
 .enr-countyHistoryCandidate__name {
