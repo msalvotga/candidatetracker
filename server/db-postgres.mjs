@@ -13,6 +13,10 @@ import {
   loadSummaryRollupsFromCache,
   rebuildEvRosterSummaryCache,
 } from "./lib/evRosterSummaryCache.mjs";
+import {
+  buildCountyHistoricalResultsPayload,
+  normalizeCountyHistoricalKey,
+} from "./lib/countyHistoricalResults.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const DATA_DIR = path.join(__dirname, "data");
@@ -618,6 +622,23 @@ export async function getLatestCountyRows(electionId = "56181") {
     byCivixName[civix] = await latestRowsForCounty(pool, slug, electionId);
   }
   return byCivixName;
+}
+
+export async function getCountyHistoricalResults(countyName) {
+  const name = String(countyName ?? "").trim();
+  if (!name) return buildCountyHistoricalResultsPayload("", []);
+
+  const pool = await ensureDb();
+  const countyKey = normalizeCountyHistoricalKey(name);
+  const r = await pool.request().input("county_key", countyKey).query(`
+    SELECT county_name AS countyName, year, office_name AS officeName, election_type AS electionType,
+           candidate_name AS candidateName, party_name AS partyName, votes, sort_order AS sortOrder
+    FROM dbo.county_historical_results
+    WHERE county_key = @county_key
+    ORDER BY year DESC, sort_order ASC, office_name, candidate_name
+  `);
+  const firstCountyName = String(r.recordset?.[0]?.countyName ?? name);
+  return buildCountyHistoricalResultsPayload(firstCountyName, r.recordset ?? []);
 }
 
 /** @see db-sqlite.mjs — Civix labels for feeds with prefer_over_sos (SD4 merge). */

@@ -319,6 +319,41 @@ export async function fetchSd4HistoricalGeCountyTotals(): Promise<Sd4HistoricalG
   return r.json() as Promise<Sd4HistoricalGeCountyTotalsPayload>;
 }
 
+export interface CountyHistoricalCandidateResult {
+  candidateName: string;
+  partyName: string | null;
+  votes: number;
+  votePct: number | null;
+}
+
+export interface CountyHistoricalElectionResult {
+  id: string;
+  year: number;
+  electionType: string;
+  officeName: string;
+  partyName: string | null;
+  label: string;
+  totalVotes: number | null;
+  registeredVoters: number | null;
+  turnoutPct: number | null;
+  candidates: CountyHistoricalCandidateResult[];
+}
+
+export interface CountyHistoricalResultsPayload {
+  countyName: string;
+  generalElections: CountyHistoricalElectionResult[];
+  primaryElections: CountyHistoricalElectionResult[];
+}
+
+export async function fetchCountyHistoricalResults(countyName: string): Promise<CountyHistoricalResultsPayload> {
+  const r = await apiFetch(
+    "/api/historical/county-results?" + new URLSearchParams({ countyName: String(countyName ?? "").trim() }),
+    { cache: "no-store" },
+  );
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json() as Promise<CountyHistoricalResultsPayload>;
+}
+
 export async function fetchElectionFeedSources(electionId: string): Promise<{ sources: ElectionFeedSourceRow[] }> {
   const r = await apiFetch(`/api/election-feed-sources/${encodeURIComponent(electionId)}`, { cache: "no-store" });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);

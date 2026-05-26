@@ -1,0 +1,143 @@
+import { useEffect, useMemo, useState } from "react";
+import type { CountyHistoricalElectionResult, CountyHistoricalResultsPayload } from "../lib/dataBackend";
+
+type HistoricalTab = "general" | "primary";
+
+function formatCount(value: number | null): string {
+  return value == null ? "—" : value.toLocaleString();
+}
+
+function formatPct(value: number | null): string {
+  return value == null ? "—" : `${value.toFixed(1)}%`;
+}
+
+function tabCountLabel(items: CountyHistoricalElectionResult[]): string {
+  return items.length ? `${items.length}` : "0";
+}
+
+export function CountyHistoricalModal({
+  countyName,
+  payload,
+  loading,
+  error,
+  onClose,
+}: {
+  countyName: string | null;
+  payload: CountyHistoricalResultsPayload | null;
+  loading: boolean;
+  error: string | null;
+  onClose: () => void;
+}) {
+  const [activeTab, setActiveTab] = useState<HistoricalTab>("general");
+
+  useEffect(() => {
+    setActiveTab("general");
+  }, [countyName]);
+
+  useEffect(() => {
+    if (!countyName) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [countyName, onClose]);
+
+  const general = payload?.generalElections ?? [];
+  const primary = payload?.primaryElections ?? [];
+  const activeItems = useMemo(
+    () => (activeTab === "general" ? general : primary),
+    [activeTab, general, primary],
+  );
+
+  if (!countyName) return null;
+
+  return (
+    <div className="enr-modalBackdrop" onClick={onClose}>
+      <div
+        className="enr-countyHistoryModal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="enr-county-history-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="enr-countyHistoryModal__header">
+          <div>
+            <h3 id="enr-county-history-title" className="enr-countyHistoryModal__title">
+              {payload?.countyName || countyName} County History
+            </h3>
+            <p className="enr-muted enr-countyHistoryModal__subtitle">
+              Historical county-level results, newest elections first.
+            </p>
+          </div>
+          <button type="button" className="enr-countyHistoryModal__close" onClick={onClose} aria-label="Close historical data">
+            Close
+          </button>
+        </div>
+
+        <div className="enr-countyHistoryTabs" role="tablist" aria-label="Historical election types">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "general"}
+            className={activeTab === "general" ? "is-active" : undefined}
+            onClick={() => setActiveTab("general")}
+          >
+            General
+            <span>{tabCountLabel(general)}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "primary"}
+            className={activeTab === "primary" ? "is-active" : undefined}
+            onClick={() => setActiveTab("primary")}
+          >
+            Primary
+            <span>{tabCountLabel(primary)}</span>
+          </button>
+        </div>
+
+        <div className="enr-countyHistoryModal__body">
+          {loading ? <p className="enr-muted">Loading historical data…</p> : null}
+          {!loading && error ? <p className="enr-muted">{error}</p> : null}
+          {!loading && !error && !activeItems.length ? (
+            <p className="enr-muted">No {activeTab} historical data is available for this county yet.</p>
+          ) : null}
+
+          {!loading && !error
+            ? activeItems.map((election) => (
+                <section key={election.id} className="enr-countyHistoryCard">
+                  <div className="enr-countyHistoryCard__header">
+                    <h4>{election.label}</h4>
+                    <div className="enr-countyHistoryCard__meta">
+                      <span>Total Votes Cast: {formatCount(election.totalVotes)}</span>
+                      <span>Registered Voters: {formatCount(election.registeredVoters)}</span>
+                      <span>Turnout: {formatPct(election.turnoutPct)}</span>
+                    </div>
+                  </div>
+
+                  <div className="enr-countyHistoryCard__rows">
+                    {election.candidates.map((candidate) => (
+                      <div key={`${election.id}-${candidate.candidateName}`} className="enr-countyHistoryCandidate">
+                        <div className="enr-countyHistoryCandidate__name">
+                          <span>{candidate.candidateName}</span>
+                          {candidate.partyName ? (
+                            <span className="enr-muted enr-countyHistoryCandidate__party">{candidate.partyName}</span>
+                          ) : null}
+                        </div>
+                        <div className="enr-countyHistoryCandidate__values">
+                          <span>{formatCount(candidate.votes)} votes</span>
+                          <span>{formatPct(candidate.votePct)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))
+            : null}
+        </div>
+      </div>
+    </div>
+  );
+}

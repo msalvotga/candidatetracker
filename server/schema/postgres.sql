@@ -103,6 +103,26 @@ CREATE TABLE IF NOT EXISTS county_results (
 );
 CREATE INDEX IF NOT EXISTS idx_county_results_fetch ON county_results(county_id, fetched_at DESC);
 
+CREATE TABLE IF NOT EXISTS county_historical_results (
+  id BIGSERIAL PRIMARY KEY,
+  county_name TEXT NOT NULL,
+  county_key TEXT NOT NULL,
+  year INTEGER NOT NULL,
+  office_name TEXT NOT NULL DEFAULT '',
+  office_key TEXT NOT NULL DEFAULT '',
+  election_type TEXT NOT NULL,
+  election_type_key TEXT NOT NULL,
+  candidate_name TEXT NOT NULL,
+  party_name TEXT,
+  party_key TEXT NOT NULL DEFAULT '',
+  votes BIGINT NOT NULL DEFAULT 0,
+  is_total_votes SMALLINT NOT NULL DEFAULT 0,
+  is_registered_voters SMALLINT NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_county_historical_results_lookup
+  ON county_historical_results(county_key, election_type_key, year DESC, sort_order);
+
 CREATE TABLE IF NOT EXISTS election_source_configs (
   election_id TEXT PRIMARY KEY,
   label TEXT NOT NULL,

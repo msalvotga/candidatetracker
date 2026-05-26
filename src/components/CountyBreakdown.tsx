@@ -1,11 +1,14 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { CandidateInput, CountyRowInput, RaceInput } from "../types/election";
 import {
+  fetchCountyHistoricalResults,
   fetchSd4HistoricalGeCountyTotals,
+  type CountyHistoricalResultsPayload,
   type Sd4HistoricalGeCountyTotalsPayload,
 } from "../lib/dataBackend";
 import { isSd4SenateRaceTitle, normalizeCountyLookupKey } from "../lib/sd4Historical";
 import { LiveCount } from "./LiveCount";
+import { CountyHistoricalModal } from "./CountyHistoricalModal";
 
 function sortCounties(rows: CountyRowInput[]): CountyRowInput[] {
   const totals = rows.filter((r) => r.isTotalRow);
@@ -161,6 +164,11 @@ export function CountyBreakdown({
   const showSd4History = isSd4SenateRaceTitle(race.title);
   const [sd4Hist, setSd4Hist] = useState<Sd4HistoricalGeCountyTotalsPayload | null>(null);
   const [showPriorElection, setShowPriorElection] = useState(true);
+  const [selectedHistoricalCounty, setSelectedHistoricalCounty] = useState<string | null>(null);
+  const [countyHistoryCache, setCountyHistoryCache] = useState<Record<string, CountyHistoricalResultsPayload>>({});
+  const [countyHistoryLoading, setCountyHistoryLoading] = useState(false);
+  const [countyHistoryError, setCountyHistoryError] = useState<string | null>(null);
+  const countyHistoryRequestId = useRef(0);
 
   useEffect(() => {
     if (!showSd4History) {
@@ -206,6 +214,49 @@ export function CountyBreakdown({
 
   const priorCols = showSd4History && showPriorElection ? 3 : 0;
   const candSpan = 3 + priorCols;
+  const selectedCountyHistory = selectedHistoricalCounty ? countyHistoryCache[selectedHistoricalCounty] ?? null : null;
+
+  useEffect(() => {
+    countyHistoryRequestId.current += 1;
+    setSelectedHistoricalCounty(null);
+    setCountyHistoryLoading(false);
+    setCountyHistoryError(null);
+  }, [race.id]);
+
+  async function openCountyHistory(countyName: string) {
+    const name = String(countyName ?? "").trim();
+    if (!name) return;
+
+    setSelectedHistoricalCounty(name);
+    setCountyHistoryError(null);
+    if (countyHistoryCache[name]) {
+      setCountyHistoryLoading(false);
+      return;
+    }
+
+    const requestId = countyHistoryRequestId.current + 1;
+    countyHistoryRequestId.current = requestId;
+    setCountyHistoryLoading(true);
+    try {
+      const payload = await fetchCountyHistoricalResults(name);
+      if (countyHistoryRequestId.current !== requestId) return;
+      setCountyHistoryCache((prev) => ({ ...prev, [name]: payload }));
+    } catch (error) {
+      if (countyHistoryRequestId.current !== requestId) return;
+      setCountyHistoryError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (countyHistoryRequestId.current === requestId) {
+        setCountyHistoryLoading(false);
+      }
+    }
+  }
+
+  function closeCountyHistory() {
+    countyHistoryRequestId.current += 1;
+    setCountyHistoryLoading(false);
+    setCountyHistoryError(null);
+    setSelectedHistoricalCounty(null);
+  }
 
   if (!counties.length) {
     return (
@@ -319,7 +370,15 @@ export function CountyBreakdown({
 
               return (
                 <tr key={row.id} className={row.isTotalRow ? "enr-totalRow" : undefined}>
-                  <td className={row.isTotalRow ? "enr-countyName enr-strong" : "enr-countyName"}>{row.name}</td>
+                  <td className={row.isTotalRow ? "enr-countyName enr-strong" : "enr-countyName"}>
+                    {row.isTotalRow ? (
+                      row.name
+                    ) : (
+                      <button type="button" className="enr-countyNameButton" onClick={() => void openCountyHistory(row.name)}>
+                        {row.name}
+                      </button>
+                    )}
+                  </td>
                   <td className="enr-precinct">{row.sourceTag ?? (row.isTotalRow ? "MIX" : "SOS")}</td>
                   <td className="enr-precinct">{compactPrecinctReporting(row.precinctsReporting)}</td>
                   {candidates.map((c) => {
@@ -445,6 +504,14 @@ export function CountyBreakdown({
           </tbody>
         </table>
       </div>
+
+      <CountyHistoricalModal
+        countyName={selectedHistoricalCounty}
+        payload={selectedCountyHistory}
+        loading={countyHistoryLoading}
+        error={countyHistoryError}
+        onClose={closeCountyHistory}
+      />
     </div>
   );
 }

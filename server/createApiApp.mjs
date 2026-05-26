@@ -34,6 +34,7 @@ import {
   getAppSettings,
   getDbInfo,
   getDbTablePreview,
+  getCountyHistoricalResults,
   getLatestCountyRows,
   getSd4MergePreferCountyFeedNameSet,
   getLatestSosCountyRows,
@@ -1237,6 +1238,18 @@ export function createApiApp() {
           "Totals from server/data/historical/SD4_precinct_wide_by_election.csv — latest GE year per county with early+ED+mail+absentee (votes_reported fallback).",
         counties,
       });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/historical/county-results", async (req, res) => {
+    try {
+      await ensureDb();
+      const countyName = String(req.query.countyName ?? "").trim();
+      if (!countyName) return res.status(400).json({ error: "countyName required" });
+      res.json(await getCountyHistoricalResults(countyName));
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: String(e?.message || e) });

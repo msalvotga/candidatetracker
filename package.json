@@ -1,7 +1,7 @@
 {
   "name": "electionnighttracker",
   "private": true,
-  "version": "1.23.1409",
+  "version": "1.23.1716",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "db:migrate": "node server/scripts/migrate-sqlite-to-postgres.mjs",
+    "db:import-county-history": "node --import dotenv/config server/scripts/importCountyHistoricalResults.mjs",
     "db:counts": "node server/scripts/inspectDbCounts.mjs",
     "version:bump": "node scripts/bump-version.mjs"
   },
