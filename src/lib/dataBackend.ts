@@ -355,6 +355,24 @@ export async function fetchCountyHistoricalResults(countyName: string): Promise<
   return r.json() as Promise<CountyHistoricalResultsPayload>;
 }
 
+export type OfficeHistoricalCandidateResult = CountyHistoricalCandidateResult;
+export type OfficeHistoricalElectionResult = CountyHistoricalElectionResult;
+
+export interface OfficeHistoricalResultsPayload {
+  officeName: string;
+  generalElections: OfficeHistoricalElectionResult[];
+  primaryElections: OfficeHistoricalElectionResult[];
+}
+
+export async function fetchOfficeHistoricalResults(officeName: string): Promise<OfficeHistoricalResultsPayload> {
+  const r = await apiFetch(
+    "/api/historical/office-results?" + new URLSearchParams({ officeName: String(officeName ?? "").trim() }),
+    { cache: "no-store" },
+  );
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json() as Promise<OfficeHistoricalResultsPayload>;
+}
+
 export interface ElectionFavoriteRace {
   electionId: string;
   raceId: string;

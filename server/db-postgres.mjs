@@ -15,7 +15,9 @@ import {
 } from "./lib/evRosterSummaryCache.mjs";
 import {
   buildCountyHistoricalResultsPayload,
+  buildOfficeHistoricalResultsPayload,
   normalizeCountyHistoricalKey,
+  normalizeCountyHistoricalDimensionKey,
 } from "./lib/countyHistoricalResults.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -639,6 +641,23 @@ export async function getCountyHistoricalResults(countyName) {
   `);
   const firstCountyName = String(r.recordset?.[0]?.countyName ?? name);
   return buildCountyHistoricalResultsPayload(firstCountyName, r.recordset ?? []);
+}
+
+export async function getOfficeHistoricalResults(officeNameOrKey) {
+  const raw = String(officeNameOrKey ?? "").trim();
+  if (!raw) return buildOfficeHistoricalResultsPayload("", []);
+
+  const pool = await ensureDb();
+  const officeKey = normalizeCountyHistoricalDimensionKey(raw);
+  const r = await pool.request().input("office_key", officeKey).query(`
+    SELECT office_name AS officeName, year, election_type AS electionType,
+           candidate_name AS candidateName, party_name AS partyName, votes, sort_order AS sortOrder
+    FROM dbo.county_historical_results
+    WHERE office_key = @office_key
+    ORDER BY year DESC, sort_order ASC, office_name, candidate_name
+  `);
+  const firstOfficeName = String(r.recordset?.[0]?.officeName ?? raw);
+  return buildOfficeHistoricalResultsPayload(firstOfficeName, r.recordset ?? []);
 }
 
 /** @see db-sqlite.mjs — Civix labels for feeds with prefer_over_sos (SD4 merge). */

@@ -35,6 +35,7 @@ import {
   getDbInfo,
   getDbTablePreview,
   getCountyHistoricalResults,
+  getOfficeHistoricalResults,
   getLatestCountyRows,
   getSd4MergePreferCountyFeedNameSet,
   getLatestSosCountyRows,
@@ -1260,6 +1261,18 @@ export function createApiApp() {
     }
   });
 
+  app.get("/api/historical/office-results", async (req, res) => {
+    try {
+      await ensureDb();
+      const officeLookup = String(req.query.officeKey ?? req.query.officeName ?? "").trim();
+      if (!officeLookup) return res.status(400).json({ error: "officeName or officeKey required" });
+      res.json(await getOfficeHistoricalResults(officeLookup));
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
   app.get("/api/health", async (_req, res) => {
     const { isDatabaseLoaded } = await import("./db.mjs");
     res.json({
@@ -1400,6 +1413,7 @@ export function createApiApp() {
       const legacy = await getAppSettings();
       const row = await getElectionSourceConfig(electionId);
       const current = buildElectionConfig(electionId, row, legacy);
+      const hasElectionDayEstimate = Object.prototype.hasOwnProperty.call(req.body ?? {}, "electionDayEstimate");
       const updated = await upsertElectionSourceConfig({
         electionId,
         label: req.body?.label ?? current.label,
@@ -1414,6 +1428,7 @@ export function createApiApp() {
         jeffersonSourceUrl: req.body?.jeffersonSourceUrl ?? current.jeffersonSourceUrl,
         montgomerySourceUrl: req.body?.montgomerySourceUrl ?? current.montgomerySourceUrl,
         chambersSourceUrl: req.body?.chambersSourceUrl ?? current.chambersSourceUrl,
+        electionDayEstimate: hasElectionDayEstimate ? req.body?.electionDayEstimate : current.electionDayEstimate,
       });
       res.json(buildElectionConfig(electionId, updated, legacy));
     } catch (e) {
@@ -1471,6 +1486,7 @@ export function createApiApp() {
         jeffersonSourceUrl: String(req.body?.jeffersonSourceUrl ?? ""),
         montgomerySourceUrl: String(req.body?.montgomerySourceUrl ?? ""),
         chambersSourceUrl: String(req.body?.chambersSourceUrl ?? ""),
+        electionDayEstimate: req.body?.electionDayEstimate ?? null,
       });
       const legacy = await getAppSettings();
       res.status(201).json(buildElectionConfig(electionId, row, legacy));

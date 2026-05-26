@@ -433,6 +433,25 @@
   text-overflow: ellipsis;
 }
 
+.enr-card__titleBtn {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  white-space: inherit;
+  overflow: inherit;
+  text-overflow: inherit;
+}
+
+.enr-card__titleBtn:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
 .enr-linkbtn {
   border: 0;
   background: transparent;
