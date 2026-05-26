@@ -1286,6 +1286,7 @@ export async function listElectionSourceConfigs() {
            uses_civix_sos AS usesCivixSos, show_in_catalog AS showInCatalog, is_default_catalog AS isDefaultCatalog,
            sos_countyinfo_url AS sosCountyInfoUrl, harris_source_url AS harrisSourceUrl, galveston_source_url AS galvestonSourceUrl,
            jefferson_source_url AS jeffersonSourceUrl, montgomery_source_url AS montgomerySourceUrl, chambers_source_url AS chambersSourceUrl,
+           election_day_estimate AS electionDayEstimate,
            updated_at AS updatedAt
     FROM dbo.election_source_configs
     ORDER BY is_default_catalog DESC, election_id
@@ -1304,6 +1305,7 @@ export async function listElectionSourceConfigs() {
     jeffersonSourceUrl: String(row.jeffersonSourceUrl ?? ""),
     montgomerySourceUrl: String(row.montgomerySourceUrl ?? ""),
     chambersSourceUrl: String(row.chambersSourceUrl ?? ""),
+    electionDayEstimate: row.electionDayEstimate == null ? null : Number(row.electionDayEstimate),
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt ?? ""),
   }));
 }
@@ -1314,7 +1316,8 @@ export async function getElectionSourceConfig(electionId) {
     SELECT election_id AS electionId, label, is_enabled AS isEnabled, auto_refresh_enabled AS autoRefreshEnabled,
            uses_civix_sos AS usesCivixSos, show_in_catalog AS showInCatalog, is_default_catalog AS isDefaultCatalog,
            sos_countyinfo_url AS sosCountyInfoUrl, harris_source_url AS harrisSourceUrl, galveston_source_url AS galvestonSourceUrl,
-           jefferson_source_url AS jeffersonSourceUrl, montgomery_source_url AS montgomerySourceUrl, chambers_source_url AS chambersSourceUrl
+           jefferson_source_url AS jeffersonSourceUrl, montgomery_source_url AS montgomerySourceUrl, chambers_source_url AS chambersSourceUrl,
+           election_day_estimate AS electionDayEstimate
     FROM dbo.election_source_configs WHERE election_id = @election_id
   `);
   const row = r.recordset?.[0];
@@ -1333,6 +1336,7 @@ export async function getElectionSourceConfig(electionId) {
     jeffersonSourceUrl: String(row.jeffersonSourceUrl ?? ""),
     montgomerySourceUrl: String(row.montgomerySourceUrl ?? ""),
     chambersSourceUrl: String(row.chambersSourceUrl ?? ""),
+    electionDayEstimate: row.electionDayEstimate == null ? null : Number(row.electionDayEstimate),
   };
 }
 
@@ -1362,6 +1366,13 @@ export async function upsertElectionSourceConfig(payload) {
   if (!electionId) throw new Error("electionId is required");
   const usesSos = payload?.usesCivixSos === false ? 0 : 1;
   const showCat = payload?.showInCatalog === false ? 0 : 1;
+  const rawEstimate = payload?.electionDayEstimate;
+  const electionDayEstimate =
+    rawEstimate == null || String(rawEstimate).trim() === ""
+      ? null
+      : Number.isFinite(Number(rawEstimate))
+        ? Math.max(0, Math.round(Number(rawEstimate)))
+        : null;
   await pool
     .request()
     .input("election_id", electionId)
@@ -1376,6 +1387,7 @@ export async function upsertElectionSourceConfig(payload) {
     .input("jefferson_source_url", String(payload?.jeffersonSourceUrl ?? ""))
     .input("montgomery_source_url", String(payload?.montgomerySourceUrl ?? ""))
     .input("chambers_source_url", String(payload?.chambersSourceUrl ?? ""))
+    .input("election_day_estimate", electionDayEstimate)
     .query(`
       MERGE dbo.election_source_configs AS target
       USING (SELECT @election_id AS election_id) AS source
@@ -1392,11 +1404,12 @@ export async function upsertElectionSourceConfig(payload) {
         jefferson_source_url = @jefferson_source_url,
         montgomery_source_url = @montgomery_source_url,
         chambers_source_url = @chambers_source_url,
+        election_day_estimate = @election_day_estimate,
         updated_at = SYSUTCDATETIME()
       WHEN NOT MATCHED THEN INSERT
-        (election_id, label, is_enabled, auto_refresh_enabled, uses_civix_sos, show_in_catalog, sos_countyinfo_url, harris_source_url, galveston_source_url, jefferson_source_url, montgomery_source_url, chambers_source_url)
+        (election_id, label, is_enabled, auto_refresh_enabled, uses_civix_sos, show_in_catalog, sos_countyinfo_url, harris_source_url, galveston_source_url, jefferson_source_url, montgomery_source_url, chambers_source_url, election_day_estimate)
       VALUES
-        (@election_id, @label, @is_enabled, @auto_refresh_enabled, @uses_civix_sos, @show_in_catalog, @sos_countyinfo_url, @harris_source_url, @galveston_source_url, @jefferson_source_url, @montgomery_source_url, @chambers_source_url);
+        (@election_id, @label, @is_enabled, @auto_refresh_enabled, @uses_civix_sos, @show_in_catalog, @sos_countyinfo_url, @harris_source_url, @galveston_source_url, @jefferson_source_url, @montgomery_source_url, @chambers_source_url, @election_day_estimate);
     `);
   return getElectionSourceConfig(electionId);
 }

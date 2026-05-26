@@ -7,6 +7,12 @@ function voteShare(value: number, total: number): number | null {
   return (value / total) * 100;
 }
 
+function usesElectionDayEstimate(race: RaceInput): boolean {
+  if (race.officeType === "STATEWIDE OFFICES") return true;
+  if (race.officeType !== "FEDERAL OFFICES") return false;
+  return /\bpresident\b|\bsenat(?:e|or)\b/i.test(race.title);
+}
+
 export function RaceSummary({
   race,
   onContestDetails,
@@ -16,6 +22,7 @@ export function RaceSummary({
   canMoveFavoriteDown,
   onMoveFavoriteUp,
   onMoveFavoriteDown,
+  electionDayEstimate,
 }: {
   race: RaceInput;
   onContestDetails: () => void;
@@ -25,12 +32,17 @@ export function RaceSummary({
   canMoveFavoriteDown?: boolean;
   onMoveFavoriteUp?: () => void;
   onMoveFavoriteDown?: () => void;
+  electionDayEstimate?: number | null;
 }) {
   const rows = toCandidateRows(race.candidates);
   const maxVotes = Math.max(...rows.map((r) => r.totalVotes), 1);
   const raceTotal = rows.reduce((s, r) => s + r.totalVotes, 0);
   const raceEarlyTotal = rows.reduce((sum, row) => sum + row.earlyVotes, 0);
   const raceElectionDayTotal = rows.reduce((sum, row) => sum + row.electionDayVotes, 0);
+  const showElectionDayEstimate = usesElectionDayEstimate(race) && electionDayEstimate != null && electionDayEstimate >= 0;
+  const estimatedElectionDayRemaining = showElectionDayEstimate
+    ? Math.max(0, Math.round(electionDayEstimate - raceElectionDayTotal))
+    : null;
 
   return (
     <section className="enr-card">
@@ -136,6 +148,12 @@ export function RaceSummary({
           </tbody>
         </table>
       </div>
+
+      {estimatedElectionDayRemaining != null ? (
+        <div className="enr-estimateBanner">
+          Estimated <LiveCount value={estimatedElectionDayRemaining} /> Election Day Votes Remaining
+        </div>
+      ) : null}
 
       <footer className="enr-card__foot">
         <div className="enr-legend">(I) - Incumbent</div>

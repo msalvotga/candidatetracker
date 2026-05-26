@@ -116,6 +116,7 @@ const DEFAULT_ELECTION_CONFIG = {
   montgomerySourceUrl: "https://elections.mctx.org/index.asp",
   chambersSourceUrl:
     "https://www.chamberscountytx.gov/DocumentCenter/View/6746/ED-Cumulative-Results-Unofficial---Republican-WM-PDF",
+  electionDayEstimate: null,
 };
 
 function slugId(s) {
@@ -679,6 +680,7 @@ export function createApiApp() {
       jeffersonSourceUrl,
       montgomerySourceUrl,
       chambersSourceUrl,
+      electionDayEstimate: r.electionDayEstimate == null ? base.electionDayEstimate ?? null : Number(r.electionDayEstimate),
       updatedAt: r.updatedAt,
       harris: harrisSourceUrl,
       galveston: galvestonSourceUrl,

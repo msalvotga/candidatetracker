@@ -5,12 +5,14 @@ import {
   fetchCatalogFromBackend,
   fetchAppSettings,
   fetchElectionFavoriteRaces,
+  fetchElectionSourceConfigs,
   fetchIngestStatus,
   loadElectionFromBackend,
   probeBackend,
   saveElectionFavoriteRaces,
   type ElectionOption,
   type ElectionFavoriteRace,
+  type ElectionSourceConfig,
   type IngestStatus,
 } from "./lib/dataBackend";
 import type { LoadedElection, OfficeType, RaceInput } from "./types/election";
@@ -89,6 +91,7 @@ export function App() {
   const [view, setView] = useState<"race" | "county">("race");
   const [ingestStatus, setIngestStatus] = useState<IngestStatus | null>(null);
   const [displayTimeZone, setDisplayTimeZone] = useState("America/Chicago");
+  const [electionSourceConfigs, setElectionSourceConfigs] = useState<ElectionSourceConfig[]>([]);
   const [favoriteRaces, setFavoriteRaces] = useState<ElectionFavoriteRace[]>([]);
   const [favoritesLoading, setFavoritesLoading] = useState(false);
   const [favoritesError, setFavoritesError] = useState<string | null>(null);
@@ -209,6 +212,7 @@ export function App() {
     () => racesForTab(current ?? undefined, officeTab, favoriteRaces),
     [current, officeTab, favoriteRaces],
   );
+  const showingFavorites = officeTab === FAVORITES_TAB;
 
   useEffect(() => {
     if (!tabRaces.length) {
@@ -224,6 +228,24 @@ export function App() {
     if (!selectedRaceId) return null;
     return tabRaces.find((race) => race.id === selectedRaceId) ?? null;
   }, [tabRaces, selectedRaceId]);
+
+  useEffect(() => {
+    if (useBackend !== true) {
+      setElectionSourceConfigs([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchElectionSourceConfigs()
+      .then((payload) => {
+        if (!cancelled) setElectionSourceConfigs(payload.elections ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setElectionSourceConfigs([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [useBackend, catalogRefresh]);
 
   useEffect(() => {
     if (useBackend !== true || !selectedElectionId) {
@@ -258,6 +280,11 @@ export function App() {
     () => new Map(favoriteRaces.map((favorite, index) => [favorite.raceId, index])),
     [favoriteRaces],
   );
+  const selectedElectionConfig = useMemo(() => {
+    const electionId = current?.file.election.id;
+    if (!electionId) return null;
+    return electionSourceConfigs.find((cfg) => cfg.electionId === electionId) ?? null;
+  }, [current?.file.election.id, electionSourceConfigs]);
 
   const trackedCivixElectionId = useMemo(
     () => civixElectionIdFromCatalog(selectedElectionId),
@@ -605,27 +632,33 @@ export function App() {
 
         {!listLoading && !detailLoading && !loadError && current ? (
           <>
-            <div className="enr-controls">
-              <label className="enr-selectLabel">
-                Race
-                <select
-                  className="enr-select"
-                  value={selectedRaceId ?? ""}
-                  onChange={(e) => {
-                    setSelectedRaceId(e.target.value);
-                    setView("race");
-                  }}
-                  disabled={!tabRaces.length}
-                >
-                  {!tabRaces.length ? <option value="">No races in this category</option> : null}
-                  {tabRaces.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+            {!showingFavorites ? (
+              <div className="enr-controls">
+                <label className="enr-selectLabel">
+                  Race
+                  <select
+                    className="enr-select"
+                    value={selectedRaceId ?? ""}
+                    onChange={(e) => {
+                      setSelectedRaceId(e.target.value);
+                      setView("race");
+                    }}
+                    disabled={!tabRaces.length}
+                  >
+                    {!tabRaces.length ? <option value="">No races in this category</option> : null}
+                    {tabRaces.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            ) : tabRaces.length ? (
+              <div className="enr-favoritesSummary">
+                Showing {tabRaces.length} favorite race{tabRaces.length === 1 ? "" : "s"} on one page.
+              </div>
+            ) : null}
 
             {favoritesError ? <p className="enr-footnote">{favoritesError}</p> : null}
 
@@ -639,21 +672,64 @@ export function App() {
                   className={`enr-tab ${t === officeTab ? "is-active" : ""}`}
                   onClick={() => onChangeOfficeTab(t)}
                 >
-                  {t === FAVORITES_TAB ? "Favorites" : t}
+                  {t === FAVORITES_TAB ? "FAVORITES" : t}
                 </button>
               ))}
             </div>
 
-            {officeTab === FAVORITES_TAB && favoritesLoading ? <div className="enr-panel">Loading favorites…</div> : null}
-            {officeTab === FAVORITES_TAB && !favoritesLoading && !tabRaces.length ? (
+            {showingFavorites && favoritesLoading ? <div className="enr-panel">Loading favorites…</div> : null}
+            {showingFavorites && !favoritesLoading && !tabRaces.length ? (
               <div className="enr-panel">
                 No favorite races yet. Open any race in the other office tabs and click the star to add it here.
               </div>
             ) : null}
-            {view === "race" && selectedRace ? (
+            {view === "race" && showingFavorites && tabRaces.length ? (
+              <div className="enr-favoritesList">
+                {tabRaces.map((race) => {
+                  const favoriteIndex = favoriteIndexByRaceId.get(race.id) ?? -1;
+                  return (
+                    <RaceSummary
+                      key={race.id}
+                      race={race}
+                      onContestDetails={() => {
+                        setSelectedRaceId(race.id);
+                        setView("county");
+                      }}
+                      electionDayEstimate={selectedElectionConfig?.electionDayEstimate ?? null}
+                      isFavorite={favoriteRaceIds.has(race.id)}
+                      onToggleFavorite={
+                        useBackend === true
+                          ? () => {
+                              void toggleFavoriteRace(race);
+                            }
+                          : undefined
+                      }
+                      canMoveFavoriteUp={favoriteIndex > 0}
+                      canMoveFavoriteDown={favoriteIndex >= 0 && favoriteIndex < favoriteRaces.length - 1}
+                      onMoveFavoriteUp={
+                        favoriteRaceIds.has(race.id)
+                          ? () => {
+                              void moveFavoriteRace(race.id, "up");
+                            }
+                          : undefined
+                      }
+                      onMoveFavoriteDown={
+                        favoriteRaceIds.has(race.id)
+                          ? () => {
+                              void moveFavoriteRace(race.id, "down");
+                            }
+                          : undefined
+                      }
+                    />
+                  );
+                })}
+              </div>
+            ) : null}
+            {view === "race" && !showingFavorites && selectedRace ? (
               <RaceSummary
                 race={selectedRace}
                 onContestDetails={() => setView("county")}
+                electionDayEstimate={selectedElectionConfig?.electionDayEstimate ?? null}
                 isFavorite={favoriteRaceIds.has(selectedRace.id)}
                 onToggleFavorite={
                   useBackend === true
@@ -665,14 +741,14 @@ export function App() {
                 canMoveFavoriteUp={(favoriteIndexByRaceId.get(selectedRace.id) ?? -1) > 0}
                 canMoveFavoriteDown={(favoriteIndexByRaceId.get(selectedRace.id) ?? -1) >= 0 && (favoriteIndexByRaceId.get(selectedRace.id) ?? -1) < favoriteRaces.length - 1}
                 onMoveFavoriteUp={
-                  officeTab === FAVORITES_TAB && favoriteRaceIds.has(selectedRace.id)
+                  showingFavorites && favoriteRaceIds.has(selectedRace.id)
                     ? () => {
                         void moveFavoriteRace(selectedRace.id, "up");
                       }
                     : undefined
                 }
                 onMoveFavoriteDown={
-                  officeTab === FAVORITES_TAB && favoriteRaceIds.has(selectedRace.id)
+                  showingFavorites && favoriteRaceIds.has(selectedRace.id)
                     ? () => {
                         void moveFavoriteRace(selectedRace.id, "down");
                       }

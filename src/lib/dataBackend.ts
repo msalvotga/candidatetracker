@@ -182,6 +182,7 @@ export interface ElectionSourceConfig {
   jeffersonSourceUrl: string;
   montgomerySourceUrl: string;
   chambersSourceUrl: string;
+  electionDayEstimate?: number | null;
   updatedAt?: string;
 }
 

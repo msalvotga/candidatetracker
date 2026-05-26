@@ -137,10 +137,12 @@ CREATE TABLE IF NOT EXISTS election_source_configs (
   uses_civix_sos SMALLINT NOT NULL DEFAULT 1,
   show_in_catalog SMALLINT NOT NULL DEFAULT 1,
   is_default_catalog SMALLINT NOT NULL DEFAULT 0,
+  election_day_estimate BIGINT,
   county_prefer_over_sos_json TEXT NOT NULL DEFAULT '[]',
   created_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')
 );
+ALTER TABLE election_source_configs ADD COLUMN IF NOT EXISTS election_day_estimate BIGINT;
 
 CREATE TABLE IF NOT EXISTS vote_update_history (
   id BIGSERIAL PRIMARY KEY,

@@ -281,6 +281,11 @@
   flex-wrap: wrap;
 }
 
+.enr-favoritesSummary {
+  color: var(--tx-muted);
+  font-size: 13px;
+}
+
 .enr-note {
   color: var(--tx-muted);
   font-size: 12px;
@@ -345,6 +350,11 @@
   border-radius: 10px;
   overflow: hidden;
   background: #fff;
+}
+
+.enr-favoritesList {
+  display: grid;
+  gap: 16px;
 }
 
 .enr-card__head {
@@ -533,6 +543,15 @@
   gap: 12px;
   padding: 10px 12px;
   background: #fbfcfe;
+}
+
+.enr-estimateBanner {
+  padding: 10px 12px;
+  border-top: 1px solid var(--tx-border);
+  background: #f8fbff;
+  color: #223043;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .enr-legend {

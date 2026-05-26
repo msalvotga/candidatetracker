@@ -137,6 +137,9 @@ export function ElectionSettingsDetail({
   const [showInCatalog, setShowInCatalog] = useState(cfg.showInCatalog !== false);
   const [usesCivixSos, setUsesCivixSos] = useState(cfg.usesCivixSos !== false);
   const [sosCountyInfoUrl, setSosCountyInfoUrl] = useState(cfg.sosCountyInfoUrl);
+  const [electionDayEstimate, setElectionDayEstimate] = useState(
+    cfg.electionDayEstimate == null ? "" : String(cfg.electionDayEstimate),
+  );
   const [feeds, setFeeds] = useState<FeedDraft[]>([]);
   /** Optional pasted page HTML when the hub cannot be fetched (e.g. WAF); not persisted. */
   const [hubHtmlDrafts, setHubHtmlDrafts] = useState<string[]>([]);
@@ -167,7 +170,17 @@ export function ElectionSettingsDetail({
     setShowInCatalog(cfg.showInCatalog !== false);
     setUsesCivixSos(cfg.usesCivixSos !== false);
     setSosCountyInfoUrl(cfg.sosCountyInfoUrl);
-  }, [cfg.electionId, cfg.label, cfg.isEnabled, cfg.autoRefreshEnabled, cfg.showInCatalog, cfg.usesCivixSos, cfg.sosCountyInfoUrl]);
+    setElectionDayEstimate(cfg.electionDayEstimate == null ? "" : String(cfg.electionDayEstimate));
+  }, [
+    cfg.electionId,
+    cfg.label,
+    cfg.isEnabled,
+    cfg.autoRefreshEnabled,
+    cfg.showInCatalog,
+    cfg.usesCivixSos,
+    cfg.sosCountyInfoUrl,
+    cfg.electionDayEstimate,
+  ]);
 
   const reloadFeeds = useCallback(async () => {
     const { sources } = await fetchElectionFeedSources(electionId);
@@ -392,6 +405,7 @@ export function ElectionSettingsDetail({
         showInCatalog,
         usesCivixSos,
         sosCountyInfoUrl,
+        electionDayEstimate: electionDayEstimate.trim() === "" ? null : Number(electionDayEstimate),
         harrisSourceUrl: cfg.harrisSourceUrl,
         galvestonSourceUrl: cfg.galvestonSourceUrl,
         jeffersonSourceUrl: cfg.jeffersonSourceUrl,
@@ -619,6 +633,22 @@ export function ElectionSettingsDetail({
             <label className="enr-field">
               Display label
               <input className="enr-input" value={label} onChange={(e) => setLabel(e.target.value)} disabled={busy} />
+            </label>
+            <label className="enr-field">
+              Election Day estimate (optional)
+              <input
+                className="enr-input"
+                type="number"
+                min={0}
+                step={1}
+                value={electionDayEstimate}
+                onChange={(e) => setElectionDayEstimate(e.target.value)}
+                disabled={busy}
+                placeholder="500000"
+              />
+              <div className="enr-muted" style={{ marginTop: 6 }}>
+                Used on the home page to show estimated Election Day votes remaining for President, Senate, and statewide races.
+              </div>
             </label>
             <label className="enr-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <input type="checkbox" checked={isEnabled} onChange={(e) => setIsEnabled(e.target.checked)} disabled={busy} />
