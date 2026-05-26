@@ -348,6 +348,24 @@ export async function getLatestSosCivixSnapshot(electionId) {
   }
 }
 
+/** Latest time this election's SOS snapshot or county feed rows were written (DB clock). */
+export async function getElectionLastRefreshAt(electionId) {
+  const pool = await ensureDb();
+  const key = String(electionId ?? "").trim();
+  if (!key) return null;
+  const r = await pool.request().input("election_id", key).query(`
+    SELECT MAX(last_at) AS lastAt FROM (
+      SELECT MAX(fetched_at) AS last_at FROM dbo.sos_results WHERE election_id = @election_id
+      UNION ALL
+      SELECT MAX(fetched_at) AS last_at FROM dbo.county_results WHERE election_id = @election_id
+    ) combined
+  `);
+  const raw = r.recordset?.[0]?.lastAt;
+  if (raw == null) return null;
+  const d = raw instanceof Date ? raw : new Date(raw);
+  return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+}
+
 function normalizeCountyCandidateName(value) {
   const raw = String(value ?? "").toUpperCase();
   const stripped = raw

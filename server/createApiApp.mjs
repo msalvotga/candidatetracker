@@ -44,6 +44,7 @@ import {
   insertSosCandidateRows,
   insertSosResultSnapshot,
   getLatestSosCivixSnapshot,
+  getElectionLastRefreshAt,
   insertManualElection,
   listDbTablesWithCounts,
   listManualElectionsMeta,
@@ -669,6 +670,8 @@ export function createApiApp() {
 
   const ingestState = {
     lastRunEndTime: null,
+    /** Per-election wall time when runFullIngestRefresh last finished (ms since epoch). */
+    lastRunEndByElection: /** @type {Record<string, number>} */ ({}),
     /** Wall-clock time for the next planned auto refresh (stable until a run completes). */
     nextScheduledRunAt: null,
     running: false,
@@ -1076,10 +1079,11 @@ export function createApiApp() {
       await appendSourceImportLog({ sourceKey: sourceLogKey("prune_history"), ok: false, message: msg });
     }
     result.totalDurationMs = Date.now() - runStartedAt;
+    ingestState.lastRunEndByElection[String(electionId)] = Date.now();
     return result;
   }
 
-  async function getIngestStatusPayload() {
+  async function getIngestStatusPayload(electionIdForRefresh = null) {
     const { isDatabaseLoaded } = await import("./db.mjs");
     if (!isDatabaseLoaded()) await ensureDb();
     const settings = await getAppSettings();
@@ -1094,10 +1098,15 @@ export function createApiApp() {
         nextRunAt = now + intervalMs;
       }
     }
+    const eid = electionIdForRefresh != null ? String(electionIdForRefresh).trim() : "";
+    const electionLastRunEndTime =
+      eid && ingestState.lastRunEndByElection[eid] != null ? ingestState.lastRunEndByElection[eid] : null;
     return {
       autoRefreshEnabled: settings.autoRefreshEnabled,
       autoRefreshIntervalSec: intervalSec,
       lastRunEndTime: ingestState.lastRunEndTime,
+      electionLastRunEndTime,
+      lastRunEndByElection: { ...ingestState.lastRunEndByElection },
       nextRunAt,
       running: ingestState.running,
       progress: ingestState.progress,
@@ -1168,9 +1177,10 @@ export function createApiApp() {
     })();
   }, 1000);
 
-  app.get("/api/ingest/status", async (_req, res) => {
+  app.get("/api/ingest/status", async (req, res) => {
     try {
-      res.json(await getIngestStatusPayload());
+      const electionId = req.query.electionId != null ? String(req.query.electionId) : null;
+      res.json(await getIngestStatusPayload(electionId));
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: String(e?.message || e) });
@@ -1924,6 +1934,7 @@ export function createApiApp() {
       countyMergeWarning =
         "County race links could not be applied to this response. Redeploy the API if this persists (Postgres SQL compatibility).";
     }
+    const appRefreshedAt = await getElectionLastRefreshAt(num);
     return {
       provider: "civix",
       civixElectionId: num,
@@ -1931,6 +1942,7 @@ export function createApiApp() {
       sosCountyInfoUrlUsed,
       election: electionPayload,
       county: countyDoc,
+      appRefreshedAt,
       ...(civixFromCache ? { civixFromCache: true, civixCacheNote } : {}),
       ...(countyMergeWarning ? { warnings: [countyMergeWarning] } : {}),
     };

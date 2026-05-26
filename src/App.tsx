@@ -40,6 +40,17 @@ function racesForTab(election: LoadedElection | undefined, tab: OfficeType | nul
   return election.file.races.filter((r) => r.officeType === tab);
 }
 
+/** Numeric Civix election id when catalog entry uses SOS (civix:… or election:… with numeric id). */
+function civixElectionIdFromCatalog(catalogId: string | null): string | null {
+  if (!catalogId) return null;
+  if (catalogId.startsWith("civix:")) return catalogId.slice(6).trim() || null;
+  if (catalogId.startsWith("election:")) {
+    const key = catalogId.slice(9).trim();
+    return /^\d+$/.test(key) ? key : null;
+  }
+  return null;
+}
+
 export function App() {
   const [screen, setScreen] = useState<"dashboard" | "settings" | "ev-roster">("dashboard");
   const [useBackend, setUseBackend] = useState<boolean | null>(null);
@@ -187,6 +198,11 @@ export function App() {
     return current.file.races.find((r) => r.id === selectedRaceId) ?? null;
   }, [current, selectedRaceId]);
 
+  const trackedCivixElectionId = useMemo(
+    () => civixElectionIdFromCatalog(selectedElectionId),
+    [selectedElectionId],
+  );
+
   useEffect(() => {
     if (useBackend !== true) {
       setIngestStatus(null);
@@ -194,7 +210,7 @@ export function App() {
     }
     let cancelled = false;
     const poll = () => {
-      void fetchIngestStatus()
+      void fetchIngestStatus(trackedCivixElectionId ?? undefined)
         .then((s) => {
           if (!cancelled) setIngestStatus(s);
         })
@@ -208,7 +224,7 @@ export function App() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [useBackend]);
+  }, [useBackend, trackedCivixElectionId]);
 
   useEffect(() => {
     if (useBackend !== true) {
@@ -328,6 +344,20 @@ export function App() {
     return reportingSnapshotForRace(current.file.reporting, selectedRace ?? null);
   }, [current?.file.reporting, selectedRace]);
 
+  const ribbonAppRefreshedAtMs = useMemo(() => {
+    const fromElection =
+      trackedCivixElectionId && ingestStatus?.lastRunEndByElection?.[trackedCivixElectionId];
+    const fromStatus =
+      ingestStatus?.electionLastRunEndTime ?? ingestStatus?.lastRunEndTime ?? null;
+    const fromFile = current?.file.reporting.appRefreshedAt
+      ? Date.parse(current.file.reporting.appRefreshedAt)
+      : null;
+    const candidates = [fromElection, fromStatus, fromFile].filter(
+      (t): t is number => t != null && Number.isFinite(t),
+    );
+    return candidates.length ? Math.max(...candidates) : null;
+  }, [trackedCivixElectionId, ingestStatus, current?.file.reporting.appRefreshedAt]);
+
   function onChangeOfficeTab(tab: OfficeType) {
     setOfficeTab(tab);
     const races = racesForTab(current ?? undefined, tab);
@@ -426,6 +456,7 @@ export function App() {
           autoRefreshEnabled={!!ingestStatus?.autoRefreshEnabled}
           ingestRunning={!!ingestStatus?.running}
           displayTimeZone={displayTimeZone}
+          appRefreshedAtMs={ribbonAppRefreshedAtMs}
         />
       ) : null}
 

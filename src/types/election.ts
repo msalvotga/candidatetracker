@@ -54,8 +54,10 @@ export interface RaceInput {
 export interface ReportingSnapshot {
   counties: { reported: number; total: number };
   pollingLocations: { reported: number; total: number };
-  /** Machine-readable timestamp when known (ISO). */
+  /** Machine-readable timestamp when known (ISO). Civix SOS “last updated” from Home payload. */
   lastUpdated: string;
+  /** When our app last wrote SOS/county rows for this election (ISO). */
+  appRefreshedAt?: string;
   /** When set, shown instead of formatting `lastUpdated` (for vendor-provided strings). */
   lastUpdatedDisplay?: string;
   /** Shown in header ribbon, e.g. OFFICIAL RESULTS */

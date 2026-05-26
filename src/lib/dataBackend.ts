@@ -100,6 +100,7 @@ export async function loadElectionFromBackend(catalogId: string, catalogLabel: s
         sosCountyInfoUrlUsed?: string;
         election: Record<string, unknown>;
         county: Record<string, unknown>;
+        appRefreshedAt?: string | null;
       };
 
   if (body.provider === "manual") {
@@ -107,6 +108,9 @@ export async function loadElectionFromBackend(catalogId: string, catalogLabel: s
   }
   if (body.provider === "civix") {
     const file = mapCivixPayloadToElectionFile(body.civixElectionId, catalogLabel, body.election, body.county);
+    if (body.appRefreshedAt) {
+      file.reporting = { ...file.reporting, appRefreshedAt: body.appRefreshedAt };
+    }
     return {
       catalogId,
       catalogLabel,
@@ -605,14 +609,19 @@ export interface IngestStatus {
   autoRefreshEnabled: boolean;
   autoRefreshIntervalSec: number;
   lastRunEndTime: number | null;
+  /** When the selected election was last ingested (ms), if electionId query was passed. */
+  electionLastRunEndTime?: number | null;
+  lastRunEndByElection?: Record<string, number>;
   nextRunAt: number | null;
   running: boolean;
   progress: IngestProgress | null;
   lastResult: unknown;
 }
 
-export async function fetchIngestStatus(): Promise<IngestStatus> {
-  const r = await apiFetch("/api/ingest/status", { cache: "no-store" });
+export async function fetchIngestStatus(electionId?: string | number): Promise<IngestStatus> {
+  const q = new URLSearchParams();
+  if (electionId != null && String(electionId).trim()) q.set("electionId", String(electionId).trim());
+  const r = await apiFetch(`/api/ingest/status${q.size ? `?${q}` : ""}`, { cache: "no-store" });
   if (!r.ok) throw new Error(await readApiErrorMessage(r));
   return r.json() as Promise<IngestStatus>;
 }

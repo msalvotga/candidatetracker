@@ -36,14 +36,27 @@ export function ReportingRibbon({
   autoRefreshEnabled,
   ingestRunning,
   displayTimeZone,
+  appRefreshedAtMs,
 }: {
   reporting: ReportingSnapshot;
   nextRunAt: number | null;
   autoRefreshEnabled: boolean;
   ingestRunning: boolean;
   displayTimeZone: string;
+  /** When this app last finished ingest for the viewed election (overrides stale Civix Home time). */
+  appRefreshedAtMs?: number | null;
 }) {
-  const { counties, pollingLocations, lastUpdated, resultStatus } = reporting;
+  const { counties, pollingLocations, lastUpdated, lastUpdatedDisplay, resultStatus } = reporting;
+  const dbRefreshMs = reporting.appRefreshedAt ? Date.parse(reporting.appRefreshedAt) : NaN;
+  const refreshMs = [appRefreshedAtMs, dbRefreshMs].filter(
+    (t): t is number => t != null && Number.isFinite(t),
+  );
+  const displayRefreshMs = refreshMs.length ? Math.max(...refreshMs) : Date.parse(lastUpdated);
+  const sosReportedMs = Date.parse(lastUpdated);
+  const showSosReported =
+    Number.isFinite(sosReportedMs) &&
+    Number.isFinite(displayRefreshMs) &&
+    Math.abs(sosReportedMs - displayRefreshMs) > 60_000;
   const [, setTick] = useState(0);
 
   useEffect(() => {
@@ -84,8 +97,19 @@ export function ReportingRibbon({
           <div className="enr-clock__meta">
             <div className="enr-clock__line muted">{nextLine}</div>
             <div className="enr-clock__line">
-              <span className="muted">Last updated</span> {formatDateTime(lastUpdated, displayTimeZone)}
+              <span className="muted">Last refreshed</span>{" "}
+              {Number.isFinite(displayRefreshMs)
+                ? formatDateTime(new Date(displayRefreshMs).toISOString(), displayTimeZone)
+                : formatDateTime(lastUpdated, displayTimeZone)}
             </div>
+            {showSosReported ? (
+              <div className="enr-clock__line muted" style={{ fontSize: 12 }}>
+                SOS reported{" "}
+                {lastUpdatedDisplay?.trim()
+                  ? lastUpdatedDisplay
+                  : formatDateTime(lastUpdated, displayTimeZone)}
+              </div>
+            ) : null}
             {resultStatus && (
               <div className="enr-clock__line">
                 <span className="enr-pill">{resultStatus}</span>
