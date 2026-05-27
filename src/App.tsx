@@ -720,6 +720,7 @@ export function App() {
                             }
                           : undefined
                       }
+                      electionId={current?.file.election.id ?? null}
                     />
                   );
                 })}
@@ -754,6 +755,7 @@ export function App() {
                       }
                     : undefined
                 }
+                electionId={current?.file.election.id ?? null}
               />
             ) : null}
             {view === "county" && selectedRace ? (

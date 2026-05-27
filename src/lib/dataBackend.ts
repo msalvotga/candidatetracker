@@ -624,6 +624,101 @@ export async function saveCountyRaceVoteSource(
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
 }
 
+export type CountyRaceSourceRow = {
+  countyKey: string;
+  civixCountyName: string;
+  countyContestName: string;
+  countyChoiceName: string;
+  partyName: string;
+  earlyVotes: number;
+  electionDayVotes: number;
+  totalVotes: number;
+  percentOfVotes: string;
+  suggestedSosCandidateId: string;
+  suggestedSosCandidateName: string;
+  linkedSosCandidateId: string;
+  linkedSosCandidateName: string;
+  effectiveSosCandidateId?: string;
+  effectiveSosCandidateName?: string;
+  matchStatus: "manual" | "auto" | "unmatched" | "no_feed";
+};
+
+export type CountyRaceSourcesPayload = {
+  electionId: string;
+  sosRace: {
+    id: string;
+    name: string;
+    candidates: Array<{ id: string; name: string; party: string }>;
+  };
+  links: Array<{
+    countyKey: string;
+    countyContestName: string;
+    sosRaceId: string;
+    sosRaceName: string;
+  }>;
+  rows: CountyRaceSourceRow[];
+  unmatchedCount: number;
+  noFeedCount: number;
+  note?: string;
+  error?: string;
+};
+
+export async function fetchCountyRaceSources(
+  electionId: string,
+  sosRaceId: string,
+): Promise<CountyRaceSourcesPayload> {
+  const q = new URLSearchParams({ sosRaceId });
+  const r = await apiFetch(
+    `/api/elections/${encodeURIComponent(electionId)}/county-race-sources?${q}`,
+    { cache: "no-store" },
+  );
+  const j = (await r.json().catch(() => ({}))) as CountyRaceSourcesPayload & { error?: string };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+
+export async function saveCountyCandidateLink(
+  electionId: string,
+  link: {
+    countyKey: string;
+    sosRaceId: string;
+    countyChoiceName: string;
+    sosCandidateId: string;
+    sosCandidateName?: string;
+    countyContestName?: string;
+    linkType?: string;
+  },
+): Promise<void> {
+  const r = await apiFetch(
+    `/api/elections/${encodeURIComponent(electionId)}/county-race-sources/candidate-link`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ link }),
+    },
+  );
+  const j = (await r.json().catch(() => ({}))) as { error?: string };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+}
+
+export async function deleteCountyCandidateLink(
+  electionId: string,
+  countyKey: string,
+  sosRaceId: string,
+  countyChoiceName: string,
+): Promise<void> {
+  const r = await apiFetch(
+    `/api/elections/${encodeURIComponent(electionId)}/county-race-sources/candidate-link`,
+    {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ countyKey, sosRaceId, countyChoiceName }),
+    },
+  );
+  const j = (await r.json().catch(() => ({}))) as { error?: string };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+}
+
 export async function discoverCountyFeedUrl(body: {
   hubUrl: string;
   countyKey: string;

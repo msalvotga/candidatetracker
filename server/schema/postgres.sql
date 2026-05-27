@@ -359,6 +359,19 @@ CREATE TABLE IF NOT EXISTS county_sos_race_vote_source (
   PRIMARY KEY (election_id, county_key, sos_race_id)
 );
 
+CREATE TABLE IF NOT EXISTS county_sos_candidate_links (
+  election_id TEXT NOT NULL,
+  county_key TEXT NOT NULL,
+  sos_race_id TEXT NOT NULL,
+  county_choice_name TEXT NOT NULL,
+  sos_candidate_id TEXT NOT NULL,
+  sos_candidate_name TEXT,
+  county_contest_name TEXT,
+  link_type TEXT NOT NULL DEFAULT 'manual',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
+  PRIMARY KEY (election_id, county_key, sos_race_id, county_choice_name)
+);
+
 CREATE TABLE IF NOT EXISTS ev_roster_configs (
   evr_election_id INTEGER PRIMARY KEY,
   party TEXT NOT NULL,

@@ -5,6 +5,7 @@ import { toCandidateRows } from "../lib/voteMath";
 import { LiveCount, LivePercent } from "./LiveCount";
 import { OfficeHistoricalModal } from "./OfficeHistoricalModal";
 import { CountyMapModal } from "./CountyMapModal";
+import { CountySourceResultsModal } from "./CountySourceResultsModal";
 import { raceHasCountyHeatmap } from "../lib/countyHeatmap";
 
 function voteShare(value: number, total: number): number | null {
@@ -28,6 +29,7 @@ export function RaceSummary({
   onMoveFavoriteUp,
   onMoveFavoriteDown,
   electionDayEstimate,
+  electionId,
 }: {
   race: RaceInput;
   onContestDetails: () => void;
@@ -38,6 +40,7 @@ export function RaceSummary({
   onMoveFavoriteUp?: () => void;
   onMoveFavoriteDown?: () => void;
   electionDayEstimate?: number | null;
+  electionId?: string | null;
 }) {
   const rows = toCandidateRows(race.candidates);
   const maxVotes = Math.max(...rows.map((r) => r.totalVotes), 1);
@@ -50,6 +53,7 @@ export function RaceSummary({
   const [officeHistoryError, setOfficeHistoryError] = useState<string | null>(null);
   const officeHistoryRequestId = useRef(0);
   const [showCountyMap, setShowCountyMap] = useState(false);
+  const [showCountySources, setShowCountySources] = useState(false);
   const showElectionDayEstimate = usesElectionDayEstimate(race) && electionDayEstimate != null && electionDayEstimate >= 0;
   const estimatedElectionDayRemaining = showElectionDayEstimate
     ? Math.max(0, Math.round(electionDayEstimate - raceElectionDayTotal))
@@ -59,6 +63,7 @@ export function RaceSummary({
     officeHistoryRequestId.current += 1;
     setShowOfficeHistory(false);
     setShowCountyMap(false);
+    setShowCountySources(false);
     setOfficeHistoryPayload(null);
     setOfficeHistoryLoading(false);
     setOfficeHistoryError(null);
@@ -162,6 +167,16 @@ export function RaceSummary({
                 </button>
               </>
             ) : null}
+            {electionId && /^\d+$/.test(String(electionId)) ? (
+              <>
+                <span className="enr-card__linkSep" aria-hidden>
+                  |
+                </span>
+                <button type="button" className="enr-linkbtn" onClick={() => setShowCountySources(true)}>
+                  County Sources
+                </button>
+              </>
+            ) : null}
           </div>
         </header>
 
@@ -251,6 +266,13 @@ export function RaceSummary({
       />
 
       <CountyMapModal race={race} open={showCountyMap} onClose={() => setShowCountyMap(false)} />
+      <CountySourceResultsModal
+        open={showCountySources}
+        electionId={electionId ?? null}
+        raceId={race.id}
+        raceTitle={race.title}
+        onClose={() => setShowCountySources(false)}
+      />
     </>
   );
 }

@@ -80,6 +80,17 @@ async function syncIngestVendorMetadataMssql(pool) {
     ON CONFLICT (id) DO NOTHING
   `);
   await pool.request().query(`
+    INSERT INTO ingest_vendors (id, display_name, vendor_tier, handler_key, notes)
+    VALUES (
+      'civix-detail-xlsx',
+      'Civix Detail XLSX (detailxlsx.zip)',
+      'enr',
+      'civix_detail_xlsx',
+      'Clarity/Civix detailxlsx.zip parser: reads Table of Contents tab, then parses each contest tab and sums Absentee + Early + Election Day by candidate using merged candidate headers.'
+    )
+    ON CONFLICT (id) DO NOTHING
+  `);
+  await pool.request().query(`
     DELETE FROM dbo.ingest_vendors WHERE id IN (N'clarity-galveston-sd4', N'clarity-jefferson-sd4')
   `);
 
@@ -90,6 +101,13 @@ async function syncIngestVendorMetadataMssql(pool) {
       vendor_tier: "enr",
       notes:
         "ElectionSystems Clarity: summary.zip → summary.csv for any county URL. Imports all contests; align comparable races when combining totals across counties.",
+    },
+    {
+      id: "civix-detail-xlsx",
+      display_name: "Civix Detail XLSX (detailxlsx.zip)",
+      vendor_tier: "enr",
+      notes:
+        "Clarity/Civix detailxlsx.zip parser: uses TOC page→contest mapping and merged candidate headers to capture Absentee, Early Voting, and Election Day totals per candidate.",
     },
     {
       id: "montgomery-pdf",
@@ -857,6 +875,77 @@ export async function upsertCountySosRaceVoteSource(electionId, row) {
     `);
 }
 
+export async function listCountySosCandidateLinks(electionId, sosRaceId) {
+  const pool = await ensureDb();
+  const req = pool.request().input("election_id", String(electionId));
+  let sql = `
+    SELECT county_key AS countyKey, sos_race_id AS sosRaceId, county_choice_name AS countyChoiceName,
+           sos_candidate_id AS sosCandidateId, sos_candidate_name AS sosCandidateName,
+           county_contest_name AS countyContestName, link_type AS linkType, updated_at AS updatedAt
+    FROM dbo.county_sos_candidate_links WHERE election_id = @election_id
+  `;
+  if (sosRaceId != null && String(sosRaceId).trim()) {
+    req.input("sos_race_id", String(sosRaceId).trim());
+    sql += ` AND sos_race_id = @sos_race_id`;
+  }
+  sql += ` ORDER BY county_key, county_choice_name`;
+  const r = await req.query(sql);
+  return (r.recordset ?? []).map((row) => ({
+    countyKey: String(row.countyKey ?? ""),
+    sosRaceId: String(row.sosRaceId ?? ""),
+    countyChoiceName: String(row.countyChoiceName ?? ""),
+    sosCandidateId: String(row.sosCandidateId ?? ""),
+    sosCandidateName: String(row.sosCandidateName ?? ""),
+    countyContestName: String(row.countyContestName ?? ""),
+    linkType: String(row.linkType ?? "manual"),
+    updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt ?? ""),
+  }));
+}
+
+export async function upsertCountySosCandidateLink(electionId, link) {
+  const pool = await ensureDb();
+  await pool
+    .request()
+    .input("election_id", String(electionId))
+    .input("county_key", String(link.countyKey ?? "").toLowerCase().trim())
+    .input("sos_race_id", String(link.sosRaceId ?? "").trim())
+    .input("county_choice_name", String(link.countyChoiceName ?? "").trim())
+    .input("sos_candidate_id", String(link.sosCandidateId ?? "").trim())
+    .input("sos_candidate_name", String(link.sosCandidateName ?? "").trim())
+    .input("county_contest_name", String(link.countyContestName ?? "").trim())
+    .input("link_type", String(link.linkType ?? "manual"))
+    .query(`
+      MERGE dbo.county_sos_candidate_links AS t
+      USING (
+        SELECT @election_id AS election_id, @county_key AS county_key, @sos_race_id AS sos_race_id,
+               @county_choice_name AS county_choice_name
+      ) AS s
+      ON t.election_id = s.election_id AND t.county_key = s.county_key AND t.sos_race_id = s.sos_race_id
+        AND t.county_choice_name = s.county_choice_name
+      WHEN MATCHED THEN UPDATE SET sos_candidate_id = @sos_candidate_id, sos_candidate_name = @sos_candidate_name,
+        county_contest_name = @county_contest_name, link_type = @link_type, updated_at = SYSUTCDATETIME()
+      WHEN NOT MATCHED THEN INSERT (election_id, county_key, sos_race_id, county_choice_name, sos_candidate_id,
+        sos_candidate_name, county_contest_name, link_type)
+        VALUES (@election_id, @county_key, @sos_race_id, @county_choice_name, @sos_candidate_id,
+          @sos_candidate_name, @county_contest_name, @link_type);
+    `);
+}
+
+export async function deleteCountySosCandidateLink(electionId, countyKey, sosRaceId, countyChoiceName) {
+  const pool = await ensureDb();
+  await pool
+    .request()
+    .input("election_id", String(electionId))
+    .input("county_key", String(countyKey).toLowerCase().trim())
+    .input("sos_race_id", String(sosRaceId).trim())
+    .input("county_choice_name", String(countyChoiceName).trim())
+    .query(`
+      DELETE FROM dbo.county_sos_candidate_links
+      WHERE election_id = @election_id AND county_key = @county_key AND sos_race_id = @sos_race_id
+        AND county_choice_name = @county_choice_name
+    `);
+}
+
 export async function buildCivixNameToCountyKeyMap(electionId) {
   const pool = await ensureDb();
   const feeds = await listElectionFeedSources(electionId);
@@ -1443,6 +1532,7 @@ export async function deleteElectionSourceConfig(electionId) {
   const importLike = `${id}:%`;
 
   await pool.request().input("election_id", id).input("import_like", importLike).batch(`
+    DELETE FROM dbo.county_sos_candidate_links WHERE election_id = @election_id;
     DELETE FROM dbo.county_sos_race_vote_source WHERE election_id = @election_id;
     DELETE FROM dbo.county_sos_manual_votes WHERE election_id = @election_id;
     DELETE FROM dbo.county_sos_race_links WHERE election_id = @election_id;

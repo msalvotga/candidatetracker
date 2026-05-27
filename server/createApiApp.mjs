@@ -91,9 +91,13 @@ import {
   deleteCountySosManualVote,
   deleteCountySosManualVotesForCountyRace,
   upsertCountySosRaceVoteSource,
+  listCountySosCandidateLinks,
+  upsertCountySosCandidateLink,
+  deleteCountySosCandidateLink,
 } from "./db.mjs";
 import { catalogIdForSourceConfig, resolveDefaultCatalogId } from "./lib/electionCatalogId.mjs";
 import { buildCountyRaceMappingView } from "./lib/countyRaceMappingView.mjs";
+import { buildCountyRaceSourcesView } from "./lib/countyRaceSourcesView.mjs";
 import { collectCivixSosRaces } from "./lib/civixSosRaces.mjs";
 import { inferElectionPartyFromConfig } from "./lib/countySosRaceMatch.mjs";
 import { mergeLinkedCountyOverridesIntoCivix } from "./lib/mergeLinkedCountyIntoCivix.mjs";
@@ -1650,6 +1654,70 @@ export function createApiApp() {
         return res.status(400).json({ error: "row.countyKey, row.sosRaceId, and row.voteSource required" });
       }
       await upsertCountySosRaceVoteSource(electionId, row);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/elections/:electionId/county-race-sources", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      const sosRaceId = String(req.query?.sosRaceId ?? "").trim();
+      if (!electionId) return res.status(400).json({ error: "electionId required" });
+      if (!sosRaceId) return res.status(400).json({ error: "sosRaceId query parameter required" });
+      const num = Number(electionId);
+      if (!Number.isFinite(num)) {
+        return res.status(400).json({ error: "County race sources requires a Civix numeric election id" });
+      }
+      const cfg = await getElectionIngestConfig(num);
+      const bundle = await loadCivixBundleWithCacheFallback(num, cfg.sosCountyInfoUrl);
+      const sosRaces = collectCivixSosRaces(bundle.election);
+      const view = await buildCountyRaceSourcesView(electionId, sosRaceId, sosRaces);
+      res.json({ electionId, ...view });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.put("/api/elections/:electionId/county-race-sources/candidate-link", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      const link = req.body?.link;
+      if (
+        !electionId ||
+        !link?.countyKey ||
+        !link?.sosRaceId ||
+        !link?.countyChoiceName ||
+        !link?.sosCandidateId
+      ) {
+        return res.status(400).json({
+          error: "link.countyKey, link.sosRaceId, link.countyChoiceName, and link.sosCandidateId required",
+        });
+      }
+      await upsertCountySosCandidateLink(electionId, link);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.delete("/api/elections/:electionId/county-race-sources/candidate-link", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      const countyKey = String(req.body?.countyKey ?? req.query?.countyKey ?? "").trim();
+      const sosRaceId = String(req.body?.sosRaceId ?? req.query?.sosRaceId ?? "").trim();
+      const countyChoiceName = String(req.body?.countyChoiceName ?? req.query?.countyChoiceName ?? "").trim();
+      if (!electionId || !countyKey || !sosRaceId || !countyChoiceName) {
+        return res.status(400).json({ error: "countyKey, sosRaceId, and countyChoiceName required" });
+      }
+      await deleteCountySosCandidateLink(electionId, countyKey, sosRaceId, countyChoiceName);
       res.json({ ok: true });
     } catch (e) {
       console.error(e);

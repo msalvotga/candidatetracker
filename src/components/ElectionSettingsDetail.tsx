@@ -24,6 +24,7 @@ import {
 } from "./IngestProgressStatus";
 import type { IngestStepTiming } from "../lib/dataBackend";
 import { CountyRaceMappingSection } from "./CountyRaceMappingSection";
+import { CountyRaceSourcesSection } from "./CountyRaceSourcesSection";
 import { SettingsCollapse } from "./SettingsCollapse";
 import { TX_CIVIX_DEFAULT_COUNTYINFO_PREFIX, civixDefaultCountyInfoUrl } from "../lib/civix/urls";
 import { TEXAS_COUNTIES, TEXAS_COUNTY_KEY_SET } from "../lib/texasCounties";
@@ -1255,6 +1256,13 @@ montgomery,montgomery-eresults-html,https://elections.mctx.org/...`}
           </SettingsCollapse>
 
           <CountyRaceMappingSection
+            electionId={electionId}
+            usesCivixSos={usesCivixSos}
+            busy={busy}
+            onMessage={setMsg}
+          />
+
+          <CountyRaceSourcesSection
             electionId={electionId}
             usesCivixSos={usesCivixSos}
             busy={busy}

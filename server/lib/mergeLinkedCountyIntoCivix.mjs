@@ -7,6 +7,7 @@ import {
 import {
   buildCivixNameToCountyKeyMap,
   getLatestCountyRows,
+  listCountySosCandidateLinks,
   listCountySosManualVotes,
   listCountySosRaceLinks,
   listCountySosRaceVoteSources,
@@ -18,9 +19,13 @@ import {
   suggestSosCandidateForCountyRow,
 } from "./countySosRaceMatch.mjs";
 
-function findTargetRaceCandidateFromRow(raceCandidates, row) {
-  const target = suggestSosCandidateForCountyRow(raceCandidates, row);
-  return target ?? null;
+function findTargetRaceCandidateFromRow(raceCandidates, row, countyKey, raceId, candidateLinkByKey) {
+  const choice = String(row.choiceName ?? "").trim();
+  const manualId = candidateLinkByKey?.get(`${countyKey}|${raceId}|${choice}`);
+  if (manualId) {
+    return raceCandidates.find((c) => String(c.ID) === String(manualId)) ?? null;
+  }
+  return suggestSosCandidateForCountyRow(raceCandidates, row) ?? null;
 }
 
 function findCountyCellForRaceCandidate(rr, targetCandidate) {
@@ -129,12 +134,20 @@ export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPa
   const links = await listCountySosRaceLinks(String(electionId));
   if (!links.length) return { electionPayload, countyDoc };
 
-  const [manualVotes, voteSources, byCivixName, civixToCountyKey] = await Promise.all([
+  const [manualVotes, voteSources, byCivixName, civixToCountyKey, candidateLinks] = await Promise.all([
     listCountySosManualVotes(String(electionId)),
     listCountySosRaceVoteSources(String(electionId)),
     getLatestCountyRows(String(electionId)),
     buildCivixNameToCountyKeyMap(String(electionId)),
+    listCountySosCandidateLinks(String(electionId)),
   ]);
+
+  const candidateLinkByKey = new Map(
+    candidateLinks.map((cl) => [
+      `${cl.countyKey}|${cl.sosRaceId}|${String(cl.countyChoiceName ?? "").trim()}`,
+      cl.sosCandidateId,
+    ]),
+  );
 
   const sourceKey = (countyKey, sosRaceId) => `${countyKey}|${sosRaceId}`;
   const sourceMap = new Map(voteSources.map((s) => [sourceKey(s.countyKey, s.sosRaceId), s.voteSource]));
@@ -223,7 +236,7 @@ export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPa
       } else {
         for (const row of countyRows) {
           if (!rowMatchesLinkedContests(row, contestNames)) continue;
-          const target = findTargetRaceCandidateFromRow(race.Candidates, row);
+          const target = findTargetRaceCandidateFromRow(race.Candidates, row, countyKey, raceId, candidateLinkByKey);
           if (!target) continue;
           const cell = raceBlock.C[String(target.ID)];
           if (!cell) continue;

@@ -8,6 +8,7 @@ import { fetchCameronCountyResultsPdf } from "./cameronReport.mjs";
 import { fetchHaysEgovlinkCumulativePdfAllContests } from "./haysReport.mjs";
 import { fetchMcLennanCivicplusCumulativePdfAllContests } from "./mclennanReport.mjs";
 import { fetchEllisLiveVoterTurnoutAllContests } from "./ellisLiveVoterTurnout.mjs";
+import { fetchCivixDetailXlsxAllContests } from "./civixDetailXlsx.mjs";
 
 /** When a feed row was saved as "Other / custom", infer handler from county_key. */
 const COUNTY_FALLBACK_HANDLER_KEY = {
@@ -67,6 +68,10 @@ export async function runCountyFeedFetch(feed, vendor) {
     case "clarity_galveston_sd4":
     case "clarity_jefferson_sd4": {
       const summary = await fetchClarityEnrSummaryZipAllContests(url);
+      return { countyId, sourceUrl: summary.source.zipUrl, rows: summary.rows };
+    }
+    case "civix_detail_xlsx": {
+      const summary = await fetchCivixDetailXlsxAllContests(url);
       return { countyId, sourceUrl: summary.source.zipUrl, rows: summary.rows };
     }
     case "montgomery_eresults_html": {

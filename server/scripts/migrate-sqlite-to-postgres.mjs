@@ -167,6 +167,7 @@ async function main() {
       "county_sos_race_links",
       "county_sos_manual_votes",
       "county_sos_race_vote_source",
+      "county_sos_candidate_links",
       "ev_roster_configs",
       "ev_roster_pulls",
       "ev_roster_county_summary",
