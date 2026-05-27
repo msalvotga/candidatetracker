@@ -5,7 +5,7 @@
  *
  * Bump on every user-facing change: `npm run version:bump`
  */
-export const APP_VERSION = "1.23.1838";
+export const APP_VERSION = "1.23.2009";
 
 /** Midnight local on 3 May 2026 — day 0 for the middle version segment. */
 export const VERSION_EPOCH = new Date(2026, 4, 3);

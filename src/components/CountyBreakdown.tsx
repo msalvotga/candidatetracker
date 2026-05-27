@@ -9,6 +9,7 @@ import {
 import { isSd4SenateRaceTitle, normalizeCountyLookupKey } from "../lib/sd4Historical";
 import { LiveCount } from "./LiveCount";
 import { CountyHistoricalModal } from "./CountyHistoricalModal";
+import { CountyMapModal } from "./CountyMapModal";
 
 type CountySortMetric = "earlyVotes" | "electionDayVotes" | "totalVotes";
 
@@ -188,6 +189,7 @@ export function CountyBreakdown({
   const [countyHistoryCache, setCountyHistoryCache] = useState<Record<string, CountyHistoricalResultsPayload>>({});
   const [countyHistoryLoading, setCountyHistoryLoading] = useState(false);
   const [countyHistoryError, setCountyHistoryError] = useState<string | null>(null);
+  const [showCountyMap, setShowCountyMap] = useState(false);
   const countyHistoryRequestId = useRef(0);
 
   useEffect(() => {
@@ -318,6 +320,9 @@ export function CountyBreakdown({
       <div className="enr-county__bar">
         <button type="button" className="enr-back" onClick={onBack}>
           Back
+        </button>
+        <button type="button" className="enr-linkbtn enr-county__mapLink" onClick={() => setShowCountyMap(true)}>
+          County Map
         </button>
       </div>
       <h2 className="enr-county__title">{race.title}</h2>
@@ -616,6 +621,8 @@ export function CountyBreakdown({
         error={countyHistoryError}
         onClose={closeCountyHistory}
       />
+
+      <CountyMapModal race={race} open={showCountyMap} onClose={() => setShowCountyMap(false)} />
     </div>
   );
 }

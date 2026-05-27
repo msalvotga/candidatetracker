@@ -1,6 +1,6 @@
 import { fetchClarityEnrSummaryZipAllContests } from "./clarityEnrSummaryZip.mjs";
-import { fetchHarrisSd4Summary } from "./harrisVotes.mjs";
-import { fetchMontgomeryEresultsSd4Summary } from "./montgomeryEresults.mjs";
+import { fetchHarrisCumulativePdfAllContests } from "./harrisVotes.mjs";
+import { fetchMontgomeryEresultsAllContests } from "./montgomeryEresults.mjs";
 import { fetchChambersSd4Summary } from "./chambersReport.mjs";
 import { fetchDallasElectionwarePdfAllContests } from "./dallasReport.mjs";
 import { fetchCollinElectionwarePdfAllContests } from "./collinReport.mjs";
@@ -59,7 +59,7 @@ export async function runCountyFeedFetch(feed, vendor) {
 
   switch (hk) {
     case "harris_pdf": {
-      const summary = await fetchHarrisSd4Summary(url);
+      const summary = await fetchHarrisCumulativePdfAllContests(url);
       return { countyId, sourceUrl: summary.source.pdfUrl, rows: summary.rows };
     }
     case "clarity_enr_summary_zip":
@@ -70,7 +70,7 @@ export async function runCountyFeedFetch(feed, vendor) {
       return { countyId, sourceUrl: summary.source.zipUrl, rows: summary.rows };
     }
     case "montgomery_eresults_html": {
-      const summary = await fetchMontgomeryEresultsSd4Summary(url);
+      const summary = await fetchMontgomeryEresultsAllContests(url);
       return { countyId, sourceUrl: summary.source.pageUrl, rows: summary.rows };
     }
     case "chambers_pdf": {

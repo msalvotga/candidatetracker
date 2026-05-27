@@ -202,24 +202,62 @@ export function normalizePersonName(value) {
     .trim();
 }
 
+/** Strip incumbent / suffix noise so "JOHN CORNYN (I)" matches "John Cornyn". */
+export function normalizePersonNameForMatch(value) {
+  return normalizePersonName(value)
+    .replace(/\b(I|INC|JR|SR|II|III|IV)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * County feed contest labels vary (Clarity "REP … (Vote For 1)" vs Harris PDF "Rep - … - Republican Party").
+ * @param {string} linkedContestName
+ * @param {string} rowContestName
+ */
+export function countyContestNameMatches(linkedContestName, rowContestName) {
+  const a = String(linkedContestName ?? "").trim();
+  const b = String(rowContestName ?? "").trim();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const na = normalizeOfficeName(a);
+  const nb = normalizeOfficeName(b);
+  if (na && nb && na === nb) return true;
+  if (na.length >= 10 && nb.length >= 10 && (na.includes(nb) || nb.includes(na))) return true;
+  return false;
+}
+
+/**
+ * @param {{ contestName?: string }} row
+ * @param {Iterable<string>} linkedContestNames
+ */
+export function rowMatchesLinkedContests(row, linkedContestNames) {
+  const cn = String(row?.contestName ?? "").trim();
+  if (!cn) return false;
+  for (const name of linkedContestNames) {
+    if (countyContestNameMatches(name, cn)) return true;
+  }
+  return false;
+}
+
 /**
  * @param {Array<{ ID?: number, N?: string, P?: string }>} sosCandidates
  * @param {{ choiceName?: string, partyName?: string }} countyRow
  */
 export function suggestSosCandidateForCountyRow(sosCandidates, countyRow) {
   const rowParty = String(countyRow?.partyName ?? "").toUpperCase();
-  const rowName = normalizePersonName(countyRow?.choiceName);
-  if (!Array.isArray(sosCandidates) || !sosCandidates.length) return null;
+  const rowName = normalizePersonNameForMatch(countyRow?.choiceName);
+  if (!Array.isArray(sosCandidates) || !sosCandidates.length || !rowName) return null;
 
   const byNameAndParty = sosCandidates.find((c) => {
-    const cName = normalizePersonName(c?.N);
+    const cName = normalizePersonNameForMatch(c?.N);
     const cParty = String(c?.P ?? "").toUpperCase();
     return cParty === rowParty && (cName === rowName || cName.includes(rowName) || rowName.includes(cName));
   });
   if (byNameAndParty) return byNameAndParty;
 
   const byNameOnly = sosCandidates.find((c) => {
-    const cName = normalizePersonName(c?.N);
+    const cName = normalizePersonNameForMatch(c?.N);
     return cName === rowName || cName.includes(rowName) || rowName.includes(cName);
   });
   if (byNameOnly) return byNameOnly;

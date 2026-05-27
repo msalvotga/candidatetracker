@@ -462,6 +462,19 @@
   white-space: nowrap;
 }
 
+.enr-card__links {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.enr-card__linkSep {
+  color: rgba(255, 255, 255, 0.45);
+  user-select: none;
+  font-weight: 400;
+}
+
 .enr-tablewrap {
   overflow: auto;
 }
@@ -600,8 +613,13 @@
 
 .enr-county__bar {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 10px;
+}
+
+.enr-county__mapLink {
+  color: var(--tx-navy);
 }
 
 .enr-back {
@@ -824,6 +842,40 @@
   border-radius: 14px;
   background: #fff;
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.3);
+}
+
+.enr-countyMapModal {
+  width: min(1100px, 100%);
+  max-height: min(92vh, 920px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.3);
+}
+
+.enr-countyMapModal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--tx-border);
+}
+
+.enr-countyMapModal__title {
+  margin: 0;
+  font-size: 18px;
+}
+
+.enr-countyMapModal__subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.enr-countyMapModal__body {
+  padding: 16px 18px 20px;
+  overflow: auto;
 }
 
 .enr-countyHistoryModal__header {
@@ -2198,3 +2250,179 @@ code {
   font-size: 13px;
   color: var(--tx-muted, #5c6578);
 }
+
+.enr-raceLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .enr-raceLayout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.enr-heatmap {
+  margin-top: 8px;
+}
+
+.enr-heatmap--embedded {
+  margin-top: 0;
+}
+
+.enr-heatmap--embedded .enr-heatmap__hint {
+  margin-top: 0;
+}
+
+.enr-heatmap__heading {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--tx-navy);
+}
+
+.enr-heatmap__hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+
+.enr-heatmap__frame {
+  position: relative;
+  background: #1a1d24;
+  border: 1px solid #2e3038;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.enr-heatmap__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.enr-heatmap__county {
+  cursor: pointer;
+  transition: filter 0.12s ease;
+}
+
+.enr-heatmap__county:hover,
+.enr-heatmap__county:focus-visible {
+  filter: brightness(1.12);
+  outline: none;
+}
+
+.enr-heatmap__tooltip {
+  position: absolute;
+  z-index: 5;
+  min-width: 220px;
+  max-width: 320px;
+  padding: 10px 12px;
+  background: rgba(18, 20, 26, 0.96);
+  color: #f2f4f8;
+  border: 1px solid #3a3f4d;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  font-size: 12px;
+}
+
+.enr-heatmap__tooltipTitle {
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.enr-heatmap__tooltipMuted {
+  margin: 0;
+  color: #a8b0c0;
+}
+
+.enr-heatmap__tooltipTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.enr-heatmap__tooltipTable th,
+.enr-heatmap__tooltipTable td {
+  padding: 3px 6px;
+  text-align: left;
+}
+
+.enr-heatmap__tooltipTable th.num,
+.enr-heatmap__tooltipTable td.num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.enr-heatmap__tooltipTable thead th {
+  color: #a8b0c0;
+  font-weight: 600;
+  border-bottom: 1px solid #3a3f4d;
+}
+
+.enr-heatmap__tooltipTable tr.is-leader td {
+  font-weight: 700;
+}
+
+.enr-heatmap__tooltipDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.enr-heatmap__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--tx-muted);
+}
+
+.enr-heatmap__legendCandidate {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.enr-heatmap__legendName {
+  font-weight: 600;
+  color: var(--tx-text, #1a1d24);
+}
+
+.enr-heatmap__legendSwatches {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.enr-heatmap__legendSwatch {
+  width: 28px;
+  height: 12px;
+  border-radius: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.enr-heatmap__legendSwatch--nodata {
+  background: #2e3038;
+}
+
+.enr-heatmap__legendTicks {
+  display: flex;
+  gap: 10px;
+  margin-left: 6px;
+  font-size: 10px;
+}
+
+.enr-heatmap__legendNoData {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-end;
+}
+

@@ -11,15 +11,12 @@ import {
   listCountySosRaceLinks,
   listCountySosRaceVoteSources,
 } from "../db.mjs";
-import { isSd4SosRaceName, suggestSosCandidateForCountyRow } from "./countySosRaceMatch.mjs";
-
-function normalizePersonName(value) {
-  return String(value ?? "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9 ]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+import {
+  isSd4SosRaceName,
+  normalizePersonNameForMatch,
+  rowMatchesLinkedContests,
+  suggestSosCandidateForCountyRow,
+} from "./countySosRaceMatch.mjs";
 
 function findTargetRaceCandidateFromRow(raceCandidates, row) {
   const target = suggestSosCandidateForCountyRow(raceCandidates, row);
@@ -31,12 +28,15 @@ function findCountyCellForRaceCandidate(rr, targetCandidate) {
   const exact = rr.C[String(targetCandidate.ID)];
   if (exact) return exact;
   const entries = Object.values(rr.C);
-  const wantedName = normalizePersonName(targetCandidate.N);
+  const wantedName = normalizePersonNameForMatch(targetCandidate.N);
   const wantedParty = String(targetCandidate.P ?? "").toUpperCase();
   const byNameParty = entries.find((c) => {
-    const candName = normalizePersonName(c?.N);
+    const candName = normalizePersonNameForMatch(c?.N);
     const candParty = String(c?.P ?? "").toUpperCase();
-    return candName === wantedName && candParty === wantedParty;
+    return (
+      candParty === wantedParty &&
+      (candName === wantedName || candName.includes(wantedName) || wantedName.includes(candName))
+    );
   });
   if (byNameParty) return byNameParty;
   return null;
@@ -58,11 +58,11 @@ function createDefaultCountyCellFromCandidate(candidate, order) {
   };
 }
 
-/** @param {Set<string>} contestNames */
+/** @param {Iterable<string>} contestNames */
 function sumCountyFeedVotesForRace(countyRows, contestNames) {
   let total = 0;
   for (const row of countyRows ?? []) {
-    if (!contestNames.has(String(row.contestName ?? "").trim())) continue;
+    if (!rowMatchesLinkedContests(row, contestNames)) continue;
     const tv = Number(row.totalVotes ?? 0);
     const ev = Number(row.earlyVotes ?? 0);
     const ed = Number(row.electionDayVotes ?? 0);
@@ -85,12 +85,14 @@ function sumSosCountyRaceVotes(raceBlock, raceCandidates) {
  * @param {string | undefined} configured sos | county_feed | manual | auto | undefined
  * @param {number} countyFeedTotal
  * @param {number} sosCountyTotal
+ * @param {boolean} [hasManualVotes]
  * @returns {"sos"|"county_feed"|"manual"}
  */
-function resolveVoteSource(configured, countyFeedTotal, sosCountyTotal) {
-  if (configured === "manual") return "manual";
-  if (configured === "sos") return "sos";
-  if (configured === "county_feed") return "county_feed";
+function resolveVoteSource(configured, countyFeedTotal, sosCountyTotal, hasManualVotes = false) {
+  const cfg = String(configured ?? "auto").toLowerCase();
+  if (cfg === "manual") return hasManualVotes ? "manual" : "sos";
+  if (cfg === "sos") return "sos";
+  if (cfg === "county_feed") return countyFeedTotal > 0 ? "county_feed" : "sos";
   if (countyFeedTotal > sosCountyTotal && countyFeedTotal > 0) return "county_feed";
   return "sos";
 }
@@ -177,15 +179,15 @@ export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPa
       if (!countyKey) continue;
 
       const countyRows = byCivixName[civixName] ?? [];
-      const contestNames = new Set(
-        raceLinks.filter((l) => l.countyKey === countyKey).map((l) => l.countyContestName),
-      );
+      const contestNames = raceLinks.filter((l) => l.countyKey === countyKey).map((l) => l.countyContestName);
       const existingRaceBlock = block.Races?.[raceId];
       const configuredSource = sourceMap.get(sourceKey(countyKey, raceId));
+      const manualList = manualByCountyRace.get(`${countyKey}|${raceId}`) ?? [];
       const voteSource = resolveVoteSource(
         configuredSource,
         sumCountyFeedVotesForRace(countyRows, contestNames),
         sumSosCountyRaceVotes(existingRaceBlock, race.Candidates),
+        manualList.length > 0,
       );
       if (voteSource === "sos") continue;
 
@@ -202,7 +204,6 @@ export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPa
       raceBlock.C = normalizedCells;
 
       if (voteSource === "manual") {
-        const manualList = manualByCountyRace.get(`${countyKey}|${raceId}`) ?? [];
         for (const m of manualList) {
           const target = race.Candidates.find((c) => String(c.ID) === String(m.sosCandidateId));
           if (!target) continue;
@@ -221,7 +222,7 @@ export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPa
         }
       } else {
         for (const row of countyRows) {
-          if (!contestNames.has(String(row.contestName ?? "").trim())) continue;
+          if (!rowMatchesLinkedContests(row, contestNames)) continue;
           const target = findTargetRaceCandidateFromRow(race.Candidates, row);
           if (!target) continue;
           const cell = raceBlock.C[String(target.ID)];
@@ -262,15 +263,17 @@ export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPa
         const cfg = sourceMap.get(sourceKey(ck, raceId));
         const civixLabel = Object.entries(civixToCountyKey).find(([, v]) => v === ck)?.[0] ?? "";
         const rows = civixLabel ? (byCivixName[civixLabel] ?? []) : [];
-        const names = new Set(raceLinks.filter((l) => l.countyKey === ck).map((l) => l.countyContestName));
+        const names = raceLinks.filter((l) => l.countyKey === ck).map((l) => l.countyContestName);
         const blockForCounty = Object.values(countyRoot).find(
           (b) => (civixToCountyKey[String(b?.N ?? "").toUpperCase()] ?? "") === ck,
         );
+        const manualForCounty = manualByCountyRace.get(`${ck}|${raceId}`) ?? [];
         return (
           resolveVoteSource(
             cfg,
             sumCountyFeedVotesForRace(rows, names),
             sumSosCountyRaceVotes(blockForCounty?.Races?.[raceId], race.Candidates),
+            manualForCounty.length > 0,
           ) !== "sos"
         );
       };

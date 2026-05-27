@@ -4,6 +4,8 @@ import type { RaceInput } from "../types/election";
 import { toCandidateRows } from "../lib/voteMath";
 import { LiveCount, LivePercent } from "./LiveCount";
 import { OfficeHistoricalModal } from "./OfficeHistoricalModal";
+import { CountyMapModal } from "./CountyMapModal";
+import { raceHasCountyHeatmap } from "../lib/countyHeatmap";
 
 function voteShare(value: number, total: number): number | null {
   if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) return null;
@@ -47,6 +49,7 @@ export function RaceSummary({
   const [officeHistoryLoading, setOfficeHistoryLoading] = useState(false);
   const [officeHistoryError, setOfficeHistoryError] = useState<string | null>(null);
   const officeHistoryRequestId = useRef(0);
+  const [showCountyMap, setShowCountyMap] = useState(false);
   const showElectionDayEstimate = usesElectionDayEstimate(race) && electionDayEstimate != null && electionDayEstimate >= 0;
   const estimatedElectionDayRemaining = showElectionDayEstimate
     ? Math.max(0, Math.round(electionDayEstimate - raceElectionDayTotal))
@@ -55,6 +58,7 @@ export function RaceSummary({
   useEffect(() => {
     officeHistoryRequestId.current += 1;
     setShowOfficeHistory(false);
+    setShowCountyMap(false);
     setOfficeHistoryPayload(null);
     setOfficeHistoryLoading(false);
     setOfficeHistoryError(null);
@@ -144,9 +148,21 @@ export function RaceSummary({
               </div>
             ) : null}
           </div>
-          <button type="button" className="enr-linkbtn" onClick={onContestDetails}>
-            County Returns
-          </button>
+          <div className="enr-card__links">
+            <button type="button" className="enr-linkbtn" onClick={onContestDetails}>
+              County Returns
+            </button>
+            {raceHasCountyHeatmap(race) ? (
+              <>
+                <span className="enr-card__linkSep" aria-hidden>
+                  |
+                </span>
+                <button type="button" className="enr-linkbtn" onClick={() => setShowCountyMap(true)}>
+                  County Map
+                </button>
+              </>
+            ) : null}
+          </div>
         </header>
 
         <div className="enr-tablewrap">
@@ -233,6 +249,8 @@ export function RaceSummary({
         error={officeHistoryError}
         onClose={closeOfficeHistory}
       />
+
+      <CountyMapModal race={race} open={showCountyMap} onClose={() => setShowCountyMap(false)} />
     </>
   );
 }

@@ -27,6 +27,8 @@ async function fetchSummaryCsvRowsFromZip(zipUrl) {
     columns: true,
     skip_empty_lines: true,
     trim: true,
+    relax_column_count: true,
+    relax_quotes: true,
   });
 }
 
@@ -36,15 +38,37 @@ function asNum(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function pickClarityField(row, ...keys) {
+  for (const key of keys) {
+    const v = row[key];
+    if (v != null && String(v).trim() !== "") return v;
+  }
+  return "";
+}
+
+function clarityVoteBreakdown(row) {
+  const early =
+    asNum(pickClarityField(row, "early votes", "early vote", "ev total", "early voting")) ||
+    asNum(pickClarityField(row, "early votes by mail")) +
+      asNum(pickClarityField(row, "early votes in person", "early voting in person"));
+  const electionDay = asNum(
+    pickClarityField(row, "election day votes", "election day", "ed total", "election day total"),
+  );
+  const total = asNum(pickClarityField(row, "total votes", "votes", "vote total"));
+  const resolvedTotal = total > 0 ? total : early + electionDay;
+  return { early, electionDay, total: resolvedTotal };
+}
+
 function mapClarityCsvRow(r) {
+  const { early, electionDay, total } = clarityVoteBreakdown(r);
   return {
     lineNumber: asNum(r["line number"]),
     contestName: String(r["contest name"] ?? ""),
     choiceName: String(r["choice name"] ?? ""),
     partyName: String(r["party name"] ?? ""),
-    earlyVotes: 0,
-    electionDayVotes: 0,
-    totalVotes: asNum(r["total votes"]),
+    earlyVotes: early,
+    electionDayVotes: electionDay,
+    totalVotes: total,
     percentOfVotes: String(r["percent of votes"] ?? ""),
     registeredVoters: asNum(r["registered voters"]),
     ballotsCast: asNum(r["ballots cast"]),

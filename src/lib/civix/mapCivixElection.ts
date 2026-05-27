@@ -67,7 +67,21 @@ function findCountyCell(
     const electionDayVotes = Number(direct.ED ?? Math.max(totalVotes - earlyVotes, 0));
     return { earlyVotes, electionDayVotes, totalVotes };
   }
-  const byName = Object.values(raceBlock.C).find((x) => x.N === sc.name);
+  const wanted = sc.name.trim().toUpperCase().replace(/[^A-Z0-9 ]+/g, " ").replace(/\s+/g, " ").replace(/\b(I|JR|SR|II|III|IV)\b/g, " ").replace(/\s+/g, " ").trim();
+  const wantedParty = String(sc.party ?? "").trim().toUpperCase();
+  const byName = Object.values(raceBlock.C).find((x) => {
+    const candName = String(x.N ?? "")
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9 ]+/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/\b(I|JR|SR|II|III|IV)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const candParty = String(x.P ?? "").trim().toUpperCase();
+    if (wantedParty && candParty && wantedParty !== candParty) return false;
+    return candName === wanted || candName.includes(wanted) || wanted.includes(candName);
+  });
   if (byName) {
     const earlyVotes = Number(byName.EV ?? 0);
     const totalVotes = Number(byName.V ?? 0);

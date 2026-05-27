@@ -1,8 +1,11 @@
 import {
+  countyContestNameMatches,
   extractContestParty,
   inferElectionPartyFromConfig,
   normalizeOfficeName,
+  normalizePersonNameForMatch,
   partiesCompatible,
+  suggestSosCandidateForCountyRow,
   suggestSosRaceForCountyContest,
 } from "../lib/countySosRaceMatch.mjs";
 
@@ -44,5 +47,30 @@ assert(normalizeOfficeName("REP Attorney General (Vote For 1)") === "ATTORNEY GE
 assert(inferElectionPartyFromConfig({ electionId: "58315", label: "2026 Republican Primary Runoff" }) === "REP");
 assert(partiesCompatible("REP", null, "REP"), "unlabeled SOS race ok on REP election");
 assert(!partiesCompatible("REP", "DEM", "REP"), "labeled DEM SOS race rejected for REP county");
+
+assert(
+  countyContestNameMatches(
+    "REP United States Senator (Vote For 1)",
+    "United States Senator",
+  ),
+  "Clarity vs short contest title",
+);
+assert(
+  countyContestNameMatches(
+    "Rep - United States Senator - Republican Party - Vote for none or one",
+    "REP United States Senator (Vote For 1)",
+  ),
+  "Harris PDF vs Clarity contest title",
+);
+
+const sosSenate = [{ ID: 10, N: "JOHN CORNYN (I)", P: "REP" }, { ID: 11, N: "KEN PAXTON", P: "REP" }];
+assert(
+  suggestSosCandidateForCountyRow(sosSenate, { choiceName: "John Cornyn", partyName: "REP" })?.ID === 10,
+  "Cornyn (I) suffix match",
+);
+assert(
+  suggestSosCandidateForCountyRow(sosSenate, { choiceName: "Ken Paxton", partyName: "REP" })?.ID === 11,
+  "Paxton match",
+);
 
 console.log("verifyCountySosRaceMatch: all checks passed");

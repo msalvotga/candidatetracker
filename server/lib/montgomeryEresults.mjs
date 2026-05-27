@@ -1,13 +1,9 @@
 /**
- * Montgomery County live eResults (elections.mctx.org → election.mctx.org ASP.NET HTML tables).
- *
- * DNS: many networks resolve elections.mctx.org but not election.mctx.org (redirect target). undici Agent
- * resolves election.mctx.org using elections.mctx.org’s A/AAAA records while TLS SNI stays election.mctx.org.
- * Set MONTGOMERY_DISABLE_ELECTION_DNS_ALIAS=1 to use default DNS only.
+ * Montgomery County live eResults (elections.mctx.org ASP.NET HTML tables).
+ * Redirects to election.mctx.org are rewritten to elections.mctx.org to avoid TLS hostname mismatches.
  */
 
-import dns from "node:dns";
-import { Agent, fetch as undiciFetch } from "undici";
+import { fetch as undiciFetch } from "undici";
 
 /** County portal (often 200); live race pages move — see {@link MONTGOMERY_FALLBACK_URLS}. */
 const DEFAULT_PAGE_URL = "https://elections.mctx.org/index.asp";
@@ -20,23 +16,23 @@ const MONTGOMERY_FALLBACK_URLS = [
   "https://elections.mctx.org/electioninfo/eResultsMain.aspx",
   "https://elections.mctx.org/electioninfo/eResults.aspx",
   "https://elections.mctx.org/",
-  "https://election.mctx.org/",
 ];
 
-const USE_ELECTION_IP_ALIAS = process.env.MONTGOMERY_DISABLE_ELECTION_DNS_ALIAS !== "1";
-
-/** Connect to elections.* IP when hostname is election.* (same edge; fixes ENOTFOUND on election subdomain). */
-const MCTX_ALIAS_AGENT = new Agent({
-  connect: {
-    lookup(hostname, options, callback) {
-      if (hostname === "election.mctx.org") {
-        dns.lookup("elections.mctx.org", options, callback);
-        return;
-      }
-      dns.lookup(hostname, options, callback);
-    },
-  },
-});
+/** election.mctx.org often redirects with a cert/host mismatch; always fetch elections.mctx.org. */
+export function canonicalMontgomeryUrl(url) {
+  const raw = String(url ?? "").trim();
+  if (!raw) return DEFAULT_PAGE_URL;
+  try {
+    const u = new URL(raw);
+    if (u.hostname.toLowerCase() === "election.mctx.org") {
+      u.hostname = "elections.mctx.org";
+      return u.href;
+    }
+    return u.href;
+  } catch {
+    return raw;
+  }
+}
 
 /** Undici often surfaces only `fetch failed`; walk `.cause` for ENOTFOUND / TLS / timeout. */
 function unwrapFetchError(err) {
@@ -58,11 +54,11 @@ function unwrapFetchError(err) {
 }
 
 function uniqueMontgomeryUrlChain(primary) {
-  const p = String(primary ?? "").trim() || DEFAULT_PAGE_URL;
+  const p = canonicalMontgomeryUrl(String(primary ?? "").trim() || DEFAULT_PAGE_URL);
   const out = [];
   const seen = new Set();
   for (const u of [p, ...MONTGOMERY_FALLBACK_URLS]) {
-    const x = String(u).trim();
+    const x = canonicalMontgomeryUrl(String(u).trim());
     if (!x || seen.has(x)) continue;
     seen.add(x);
     out.push(x);
@@ -75,27 +71,43 @@ function uniqueMontgomeryUrlChain(primary) {
  * @returns {Promise<{ res: Response, buf: Buffer, pageUrl: string }>}
  */
 async function fetchMontgomeryHttpOnce(pageUrl) {
+  let current = canonicalMontgomeryUrl(pageUrl);
   let origin = "https://elections.mctx.org";
   try {
-    origin = new URL(pageUrl).origin;
+    origin = new URL(current).origin;
   } catch {
     throw new Error(`Montgomery eResults: invalid URL (${pageUrl})`);
   }
-  const fetchFn = USE_ELECTION_IP_ALIAS ? undiciFetch : globalThis.fetch;
-  const res = await fetchFn(pageUrl, {
-    ...(USE_ELECTION_IP_ALIAS ? { dispatcher: MCTX_ALIAS_AGENT } : {}),
-    redirect: "follow",
-    signal: AbortSignal.timeout(90_000),
-    headers: {
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-      Referer: `${origin}/`,
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 ElectionNightTracker/1",
-    },
-  });
+
+  const headers = {
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    Referer: `${origin}/`,
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 ElectionNightTracker/1",
+  };
+
+  let res;
+  for (let hop = 0; hop < 12; hop++) {
+    res = await undiciFetch(current, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(90_000),
+      headers,
+    });
+
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+      if (!location) break;
+      const next = canonicalMontgomeryUrl(new URL(location, current).href);
+      current = next;
+      continue;
+    }
+    break;
+  }
+
   const buf = Buffer.from(await res.arrayBuffer());
-  return { res, buf, pageUrl };
+  const finalUrl = canonicalMontgomeryUrl(current);
+  return { res, buf, pageUrl: finalUrl };
 }
 
 function asNum(v) {
@@ -174,7 +186,7 @@ export function extractElectionIdFromMontgomeryPage(html, pageUrl) {
  * @param {string} electionId
  */
 function montgomeryEResultsFrameUrl(pageUrl, electionId) {
-  const origin = new URL(pageUrl).origin;
+  const origin = new URL(canonicalMontgomeryUrl(pageUrl)).origin;
   return `${origin}/electioninfo/eResults.aspx?ElectionId=${encodeURIComponent(electionId)}`;
 }
 
@@ -231,14 +243,12 @@ function parseMontgomeryRptCandidatesHtml(html, pageUrl) {
   }
 
   const candIndices = [...names.keys()].sort((a, b) => a - b);
-  /** @type {Array<{ choiceName: string; partyName: string; earlyVotes: number; electionDayVotes: number; totalVotes: number }>} */
+  /** @type {Array<{ contestName: string; choiceName: string; partyName: string; earlyVotes: number; electionDayVotes: number; totalVotes: number }>} */
   const bodyRows = [];
-  let contestName = "";
 
   for (const idx of candIndices) {
-    const title = contestTitleFor(idx);
-    if (!looksLikeSd4ContestJoin(title)) continue;
-    if (!contestName) contestName = title.trim();
+    const title = contestTitleFor(idx).trim();
+    if (!title) continue;
 
     const nameCell = names.get(idx) ?? "";
     let choiceName = nameCell;
@@ -248,6 +258,7 @@ function parseMontgomeryRptCandidatesHtml(html, pageUrl) {
       choiceName = par[1].trim();
       partyName = String(par[2] ?? "").toUpperCase();
     }
+    if (!choiceName) continue;
 
     const absentee = asNum(abs.get(idx));
     const early = asNum(ev.get(idx));
@@ -255,6 +266,7 @@ function parseMontgomeryRptCandidatesHtml(html, pageUrl) {
     const total = tot.has(idx) ? asNum(tot.get(idx)) : absentee + early + electionDay;
 
     bodyRows.push({
+      contestName: title,
       choiceName,
       partyName,
       earlyVotes: absentee + early,
@@ -263,10 +275,10 @@ function parseMontgomeryRptCandidatesHtml(html, pageUrl) {
     });
   }
 
-  if (!bodyRows.length || !contestName) {
+  if (!bodyRows.length) {
     throw new Error(
-      `Montgomery eResults: found candidate tables but no State Senate District 4 contest in this election (${pageUrl}). ` +
-        `Confirm the feed URL targets the election that includes SD4 (or paste a URL whose query string includes ElectionId= for that election).`,
+      `Montgomery eResults: found candidate tables but no parsed rows (${pageUrl}). ` +
+        `Confirm the feed URL targets the correct election (include ElectionId= in the URL if needed).`,
     );
   }
 
@@ -279,30 +291,33 @@ function parseMontgomeryRptCandidatesHtml(html, pageUrl) {
     precinctTotal = asNum(pr[2]);
   }
 
-  const voteSum = bodyRows.reduce((s, x) => s + x.totalVotes, 0);
-  const outRows = bodyRows.map((rec, idx) => ({
-    lineNumber: idx + 1,
-    contestName,
-    choiceName: rec.choiceName,
-    partyName: rec.partyName,
-    earlyVotes: rec.earlyVotes,
-    electionDayVotes: rec.electionDayVotes,
-    totalVotes: rec.totalVotes,
-    percentOfVotes: rec.totalVotes > 0 && voteSum > 0 ? ((rec.totalVotes / voteSum) * 100).toFixed(2) : "0.00",
-    registeredVoters: 0,
-    ballotsCast: 0,
-    precinctTotal,
-    precinctReporting,
-    overVotes: 0,
-    underVotes: 0,
-  }));
+  const outRows = bodyRows.map((rec, idx) => {
+    const contestPeers = bodyRows.filter((r) => r.contestName === rec.contestName);
+    const voteSum = contestPeers.reduce((s, x) => s + x.totalVotes, 0);
+    return {
+      lineNumber: idx + 1,
+      contestName: rec.contestName,
+      choiceName: rec.choiceName,
+      partyName: rec.partyName,
+      earlyVotes: rec.earlyVotes,
+      electionDayVotes: rec.electionDayVotes,
+      totalVotes: rec.totalVotes,
+      percentOfVotes:
+        rec.totalVotes > 0 && voteSum > 0 ? ((rec.totalVotes / voteSum) * 100).toFixed(2) : "0.00",
+      registeredVoters: 0,
+      ballotsCast: 0,
+      precinctTotal,
+      precinctReporting,
+      overVotes: 0,
+      underVotes: 0,
+    };
+  });
 
   return {
     source: {
       id: "county-montgomery",
       type: "county",
       county: "Montgomery",
-      contest: contestName,
       pageUrl,
     },
     rows: outRows,
@@ -317,20 +332,8 @@ function parseMontgomeryRptCandidatesHtml(html, pageUrl) {
   };
 }
 
-/** Match SD4 contest headers as rendered on MCTX eResults (wording varies). */
-function looksLikeSd4ContestJoin(joined) {
-  const j = joined.replace(/\s+/g, " ");
-  if (!/district\s*(?:no\.?\s*)?\s*[#]?\s*4\b/i.test(j)) return false;
-  if (/state\s+senat(?:or|e)/i.test(j)) return true;
-  if (/senate\s*,?\s*district\s*(?:no\.?\s*)?\s*4/i.test(j)) return true;
-  if (/district\s*(?:no\.?\s*)?\s*4[^.]{0,80}(?:unexpired|remainder|special)/i.test(j)) return true;
-  return false;
-}
-
 function contestTitleFromMatrixRow(row) {
-  const parts = row.filter(Boolean);
-  const hit = parts.find((c) => looksLikeSd4ContestJoin(c));
-  return hit?.trim() ?? parts.join(" ").replace(/\s+/g, " ").trim();
+  return row.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -411,35 +414,37 @@ function looksLikeNextRaceTitleRow(cells) {
 }
 
 /**
- * Sliding-window scan: contest title may span multiple <tr> rows.
+ * Legacy table layout: one block per race title row.
  * @param {string[][]} matrices
  */
-function findSd4ContestLocation(matrices) {
+function parseAllContestBlocksFromMatrices(matrices) {
+  /** @type {Array<{ contestName: string; rows: Array<{ choiceName: string; partyName: string; earlyVotes: number; electionDayVotes: number; totalVotes: number }> }>} */
+  const blocks = [];
+
   for (let i = 0; i < matrices.length; i++) {
-    const one = matrices[i].join(" ");
-    if (looksLikeSd4ContestJoin(one)) {
-      return { contestIdx: i, contestLine: contestTitleFromMatrixRow(matrices[i]) };
-    }
-    if (i + 1 < matrices.length) {
-      const two = `${matrices[i].join(" ")} ${matrices[i + 1].join(" ")}`;
-      if (looksLikeSd4ContestJoin(two)) {
-        return {
-          contestIdx: i + 1,
-          contestLine: contestTitleFromMatrixRow(matrices[i].concat(matrices[i + 1])),
-        };
+    if (!looksLikeNextRaceTitleRow(matrices[i])) continue;
+    const contestName =
+      contestTitleFromMatrixRow(matrices[i]) || matrices[i].join(" ").replace(/\s+/g, " ").trim();
+    if (!contestName) continue;
+
+    /** @type {Array<{ choiceName: string; partyName: string; earlyVotes: number; electionDayVotes: number; totalVotes: number }>} */
+    const rows = [];
+    for (let j = i + 1; j < matrices.length; j++) {
+      const r = matrices[j];
+      const joined = r.join(" ");
+      if (looksLikeNextRaceTitleRow(r)) break;
+      if (/^candidate\b/i.test(joined) && /absentee|early|election|total/i.test(joined)) continue;
+
+      const parsed = parseCandidateNumericTail(r);
+      if (parsed) {
+        rows.push(parsed);
+        continue;
       }
+      if (r.length >= 2 && !/\d/.test(joined) && looksLikeNextRaceTitleRow(r)) break;
     }
-    if (i + 2 < matrices.length) {
-      const three = `${matrices[i].join(" ")} ${matrices[i + 1].join(" ")} ${matrices[i + 2].join(" ")}`;
-      if (looksLikeSd4ContestJoin(three)) {
-        return {
-          contestIdx: i + 2,
-          contestLine: [matrices[i], matrices[i + 1], matrices[i + 2]].flat().join(" ").replace(/\s+/g, " ").trim(),
-        };
-      }
-    }
+    if (rows.length) blocks.push({ contestName, rows });
   }
-  return { contestIdx: -1, contestLine: "" };
+  return blocks;
 }
 
 /**
@@ -452,7 +457,7 @@ export function parseMontgomeryEresultsHtml(html, pageUrl) {
   if (/ddlElection|please\s+select\s+an\s+election|select\s+election/i.test(html + plainOneLine)) {
     throw new Error(
       `Montgomery eResults URL appears to be the election menu, not the results page (${pageUrl}). ` +
-        `In your browser, open the election until SD4 results are visible, then copy the **full address bar URL** (may include ElectionID= or similar) into Feed URL.`,
+        `In your browser, open the election results, then copy the **full address bar URL** (may include ElectionID= or similar) into Feed URL.`,
     );
   }
 
@@ -461,54 +466,7 @@ export function parseMontgomeryEresultsHtml(html, pageUrl) {
   }
 
   const matrices = extractTableMatrices(html);
-  let { contestIdx, contestLine } = findSd4ContestLocation(matrices);
-
-  const bodyRows = [];
-  if (contestIdx >= 0) {
-    for (let j = contestIdx + 1; j < matrices.length; j++) {
-      const r = matrices[j];
-      const joined = r.join(" ");
-      if (/^candidate\b/i.test(joined) && /absentee|early|election|total/i.test(joined)) continue;
-      if (looksLikeNextRaceTitleRow(r)) break;
-
-      const parsed = parseCandidateNumericTail(r);
-      if (parsed) {
-        bodyRows.push(parsed);
-        continue;
-      }
-      if (r.length >= 2 && !/\d/.test(joined)) {
-        if (looksLikeNextRaceTitleRow(r)) break;
-      }
-    }
-  }
-
-  let finalRows = bodyRows;
-  let finalContestLine = contestLine;
-  if (!finalRows.length) {
-    const plain = parseSd4RowsFromPlainText(plainOneLine);
-    finalRows = plain.rows;
-    if (plain.contestLine) finalContestLine = plain.contestLine;
-  }
-
-  if (!finalRows.length || !finalContestLine) {
-    const looksMenuOrPortal =
-      /formresults|Click\s+for\s+Results|electioninfo\/eResultsMain/i.test(html) &&
-      !hasRptCandidatesMarkup(html);
-    const hint =
-      plainOneLine.length < 400
-        ? " Response was very short — check network / redirect."
-        : looksMenuOrPortal
-          ? " This page is the county portal, not the results iframe — the app should have followed ElectionId to eResults.aspx; if you still see this, try saving a feed URL that includes ?ElectionId= in the address bar after results open."
-        : looksLikeSd4ContestJoin(plainOneLine) && /href\s*=\s*['"][^'"]*\.pdf/i.test(html)
-          ? " Found SD4-related text in a notice or PDF link, not in live result tables — use the results screen or a URL with ElectionId= so the live table can load."
-          : looksLikeSd4ContestJoin(plainOneLine)
-            ? " Found contest wording in text but could not parse candidate rows (older table layout)."
-            : " No State Senate / Senator District 4 contest text found.";
-    throw new Error(
-      `Montgomery eResults: could not parse SD4 candidate rows (${pageUrl}).${hint} ` +
-        `Use “Montgomery County eResults (live HTML)” with the county portal URL (e.g. index.asp) or the address bar URL after “Click for Results” loads.`,
-    );
-  }
+  const blocks = parseAllContestBlocksFromMatrices(matrices);
 
   let precinctReporting = 0;
   let precinctTotal = 0;
@@ -518,32 +476,58 @@ export function parseMontgomeryEresultsHtml(html, pageUrl) {
     precinctTotal = asNum(pr[2]);
   }
 
-  const contestName = finalContestLine;
+  /** @type {typeof blocks[0]["rows"] & { contestName: string }[]} */
+  const flat = [];
+  for (const block of blocks) {
+    for (const rec of block.rows) {
+      flat.push({ contestName: block.contestName, ...rec });
+    }
+  }
 
-  const voteSum = finalRows.reduce((s, x) => s + x.totalVotes, 0);
-  const outRows = finalRows.map((rec, idx) => ({
-    lineNumber: idx + 1,
-    contestName,
-    choiceName: rec.choiceName,
-    partyName: rec.partyName,
-    earlyVotes: rec.earlyVotes,
-    electionDayVotes: rec.electionDayVotes,
-    totalVotes: rec.totalVotes,
-    percentOfVotes: rec.totalVotes > 0 && voteSum > 0 ? ((rec.totalVotes / voteSum) * 100).toFixed(2) : "0.00",
-    registeredVoters: 0,
-    ballotsCast: 0,
-    precinctTotal,
-    precinctReporting,
-    overVotes: 0,
-    underVotes: 0,
-  }));
+  if (!flat.length) {
+    const looksMenuOrPortal =
+      /formresults|Click\s+for\s+Results|electioninfo\/eResultsMain/i.test(html) &&
+      !hasRptCandidatesMarkup(html);
+    const hint =
+      plainOneLine.length < 400
+        ? " Response was very short — check network / redirect."
+        : looksMenuOrPortal
+          ? " This page is the county portal, not the results iframe — the app should have followed ElectionId to eResults.aspx; if you still see this, try saving a feed URL that includes ?ElectionId= in the address bar after results open."
+          : " No contest tables found in HTML.";
+    throw new Error(
+      `Montgomery eResults: could not parse candidate rows (${pageUrl}).${hint} ` +
+        `Use “Montgomery County eResults (live HTML)” with the county portal URL (e.g. index.asp) or the address bar URL after “Click for Results” loads.`,
+    );
+  }
+
+  const outRows = flat.map((rec, idx) => {
+    const voteSum = flat
+      .filter((r) => r.contestName === rec.contestName)
+      .reduce((s, x) => s + x.totalVotes, 0);
+    return {
+      lineNumber: idx + 1,
+      contestName: rec.contestName,
+      choiceName: rec.choiceName,
+      partyName: rec.partyName,
+      earlyVotes: rec.earlyVotes,
+      electionDayVotes: rec.electionDayVotes,
+      totalVotes: rec.totalVotes,
+      percentOfVotes:
+        rec.totalVotes > 0 && voteSum > 0 ? ((rec.totalVotes / voteSum) * 100).toFixed(2) : "0.00",
+      registeredVoters: 0,
+      ballotsCast: 0,
+      precinctTotal,
+      precinctReporting,
+      overVotes: 0,
+      underVotes: 0,
+    };
+  });
 
   return {
     source: {
       id: "county-montgomery",
       type: "county",
       county: "Montgomery",
-      contest: contestName,
       pageUrl,
     },
     rows: outRows,
@@ -558,59 +542,8 @@ export function parseMontgomeryEresultsHtml(html, pageUrl) {
   };
 }
 
-/**
- * Fallback: linear text search + candidate patterns (spacing varies).
- * @param {string} plain one long line
- */
-function parseSd4RowsFromPlainText(plain) {
-  let bestIdx = -1;
-  const patterns = [
-    /state\s+senator[^.]{0,160}district\s*(?:no\.?\s*)?\s*4/gi,
-    /state\s+senate[^.]{0,160}district\s*(?:no\.?\s*)?\s*4/gi,
-    /senate[^.]{0,120}district\s*(?:no\.?\s*)?\s*4[^.]{0,120}unexpired/gi,
-  ];
-  for (const re of patterns) {
-    re.lastIndex = 0;
-    const m = re.exec(plain);
-    if (m && m.index != null && (bestIdx === -1 || m.index < bestIdx)) bestIdx = m.index;
-  }
-  if (bestIdx < 0) {
-    const loose = plain.search(/district\s*(?:no\.?\s*)?\s*4.{0,200}(?:senat|unexpired)/i);
-    if (loose >= 0) bestIdx = loose;
-  }
-  if (bestIdx < 0) return { rows: [], contestLine: "" };
-
-  const slice = plain.slice(bestIdx, bestIdx + 14000);
-  const contestLine = slice.split(/\s{2,}/)[0]?.slice(0, 220).trim() ?? "";
-
-  const rows = [];
-  const patternsCand = [
-    /([A-Za-z][^(]{1,120}?)\s*\(([A-Z]{2,4})\)\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)\s+\d+\.\d+%/g,
-    /([A-Za-z][^(]{1,120}?)\s*\(([A-Z]{2,4})\)\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)\s*(?:\d+\.\d+%)?/g,
-  ];
-  for (const candRe of patternsCand) {
-    candRe.lastIndex = 0;
-    let m;
-    while ((m = candRe.exec(slice)) !== null) {
-      const absentee = asNum(m[3]);
-      const early = asNum(m[4]);
-      const ed = asNum(m[5]);
-      const total = asNum(m[6]);
-      rows.push({
-        choiceName: m[1].trim(),
-        partyName: String(m[2] ?? "").toUpperCase(),
-        earlyVotes: absentee + early,
-        electionDayVotes: ed,
-        totalVotes: total,
-      });
-    }
-    if (rows.length) break;
-  }
-  return { rows, contestLine: contestLine || "" };
-}
-
 /** @param {string} pageUrl */
-export async function fetchMontgomeryEresultsSd4Summary(pageUrl = DEFAULT_PAGE_URL) {
+export async function fetchMontgomeryEresultsAllContests(pageUrl = DEFAULT_PAGE_URL) {
   const chain = uniqueMontgomeryUrlChain(pageUrl);
   const tried404 = [];
 
@@ -620,10 +553,7 @@ export async function fetchMontgomeryEresultsSd4Summary(pageUrl = DEFAULT_PAGE_U
       attempt = await fetchMontgomeryHttpOnce(url);
     } catch (e) {
       const detail = unwrapFetchError(e);
-      throw new Error(
-        `Montgomery eResults cannot fetch ${url}: ${detail}. ` +
-          `If TLS fails after DNS alias, try MONTGOMERY_DISABLE_ELECTION_DNS_ALIAS=1 or fix DNS/firewall for election.mctx.org.`,
-      );
+      throw new Error(`Montgomery eResults cannot fetch ${url}: ${detail}.`);
     }
 
     const { res, buf } = attempt;
@@ -633,7 +563,7 @@ export async function fetchMontgomeryEresultsSd4Summary(pageUrl = DEFAULT_PAGE_U
       const head = buf.slice(0, 5).toString("ascii");
       if (head.startsWith("%PDF")) {
         throw new Error(
-          "That URL returned a file download, not the live eResults HTML page. Paste the address-bar URL from the results screen while SD4 totals are visible.",
+          "That URL returned a file download, not the live eResults HTML page. Paste the address-bar URL from the live results screen.",
         );
       }
       let html = buf.toString("utf8");
@@ -675,6 +605,9 @@ export async function fetchMontgomeryEresultsSd4Summary(pageUrl = DEFAULT_PAGE_U
 
   throw new Error(
     `Montgomery eResults: HTTP 404 for ${tried404.length ? tried404.join(", ") : "all fallback URLs"}. ` +
-      `The county often moves paths between elections — open results in your browser, copy the **full address bar URL** after SD4 loads, and save it as the Montgomery feed URL.`,
+      `The county often moves paths between elections — open results in your browser, copy the **full address bar URL**, and save it as the Montgomery feed URL.`,
   );
 }
+
+/** @deprecated Use fetchMontgomeryEresultsAllContests */
+export const fetchMontgomeryEresultsSd4Summary = fetchMontgomeryEresultsAllContests;
