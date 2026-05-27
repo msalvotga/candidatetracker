@@ -23,7 +23,9 @@ function isVoteTypeLabel(v) {
   if (!s) return "";
   if (/\babsentee\b|\bmail\b/.test(s)) return "absentee";
   if (/\bearly\b/.test(s)) return "early";
-  if (/\belection day\b|\beday\b/.test(s)) return "election_day";
+  if (/\belection\s*day\b/.test(s)) return "election_day";
+  if (s === "election") return "election_day";
+  if (/\beday\b/.test(s) && !/\bearly\b/.test(s)) return "election_day";
   if (/\btotal\b/.test(s)) return "total";
   return "";
 }
@@ -174,9 +176,11 @@ function detectLikelyTotalRows(matrix, candidateByCol, voteTypeByCol) {
   return rows;
 }
 
-function parseContestSheetRows(ws, contestName) {
+function parseContestSheetRows(ws, fallbackContestName = "") {
   const matrix = sheetToMatrix(ws);
   if (!matrix.length) return [];
+  const contestName = matrixCell(matrix, 0, 0) || asText(fallbackContestName);
+  if (!contestName) return [];
 
   const candidateByCol = buildCandidateColumns(ws, matrix);
   const voteTypeByCol = buildVoteTypeColumns(matrix);
@@ -210,7 +214,6 @@ function parseContestSheetRows(ws, contestName) {
     const earlyVotes = v.absentee + v.early;
     const electionDayVotes = v.election_day;
     const totalVotes = v.total > 0 ? v.total : earlyVotes + electionDayVotes;
-    if (totalVotes <= 0 && earlyVotes <= 0 && electionDayVotes <= 0) continue;
     rows.push({
       lineNumber: 0,
       contestName,
@@ -229,6 +232,22 @@ function parseContestSheetRows(ws, contestName) {
     });
   }
   return rows;
+}
+
+function isSkippedSheetName(name) {
+  const s = asText(name).toLowerCase();
+  return !s || s.includes("table of contents") || s === "registered voters";
+}
+
+/** Contest tabs only — race title always from A1 (TOC contest text is unreliable on some counties). */
+function listContestSheetNames(workbook) {
+  return workbook.SheetNames.filter((n) => !isSkippedSheetName(n));
+}
+
+export function normalizeDetailXlsxZipUrl(zipUrl) {
+  const u = String(zipUrl ?? "").trim();
+  if (!u) return u;
+  return u.replace(/summary\.zip(\?.*)?$/i, "detailxlsx.zip$1");
 }
 
 async function fetchDetailXlsxWorkbook(zipUrl) {
@@ -253,23 +272,21 @@ async function fetchDetailXlsxWorkbook(zipUrl) {
 }
 
 export async function fetchCivixDetailXlsxAllContests(zipUrl) {
-  const { workbook, xlsxEntryName } = await fetchDetailXlsxWorkbook(zipUrl);
-  const tocEntries = parseTocEntries(workbook);
+  const resolvedUrl = normalizeDetailXlsxZipUrl(zipUrl);
+  const { workbook, xlsxEntryName } = await fetchDetailXlsxWorkbook(resolvedUrl);
 
   const rows = [];
-  for (const entry of tocEntries) {
-    const sheetName = resolveSheetNameForPage(workbook, entry);
-    if (!sheetName) continue;
+  for (const sheetName of listContestSheetNames(workbook)) {
     const ws = workbook.Sheets[sheetName];
     if (!ws) continue;
-    rows.push(...parseContestSheetRows(ws, entry.contestName));
+    rows.push(...parseContestSheetRows(ws));
   }
 
   return {
     source: {
       id: "county-civix-detail-xlsx",
       type: "county",
-      zipUrl,
+      zipUrl: resolvedUrl,
       xlsxEntryName,
       tocSheetName: workbook.SheetNames[0] ?? "",
     },

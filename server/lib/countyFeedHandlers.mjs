@@ -19,6 +19,7 @@ const COUNTY_FALLBACK_HANDLER_KEY = {
   hays: "hays_egovlink_cumulative_pdf",
   mclennan: "mclennan_civicplus_cumulative_pdf",
   ellis: "ellis_livevoterturnout_html",
+  hidalgo: "civix_detail_xlsx",
 };
 
 /**
