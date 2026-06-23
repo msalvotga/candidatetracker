@@ -18,6 +18,11 @@ server/data/*.db-wal
 server/data/*.db-shm
 server/data/*.db-journal
 elections.db
+candidate-lookup/data/*.db
+candidate-lookup/data/*.db-wal
+candidate-lookup/data/*.db-shm
+candidate-lookup/node_modules
+candidate-lookup/dist
 
 # Logs and local scratch
 debug.log
