@@ -37,7 +37,18 @@ export DATABASE_URL="postgresql://..."
 npm run db:migrate-from-sqlite -- path/to/candidates.db
 ```
 
-Defaults to `data/candidates.db` if no path is given. This drops and recreates all tables in PostgreSQL, then copies every row.
+Defaults to `data/candidates.db` (or pass a path). This drops and recreates all tables in PostgreSQL, then copies every row.
+
+## Sync missing SQLite data into Postgres
+
+If Postgres is missing fields (e.g. `seat_holder_name` on `offices`) but your SQLite file has them:
+
+```bash
+export DATABASE_URL="postgresql://..."
+npm run db:sync-from-sqlite -- data/candidates.db
+```
+
+Use **`data/candidates.db`** — the copy at the repo root (`candidates.db`) is often an older schema without seat-holder columns.
 
 ## Run locally
 

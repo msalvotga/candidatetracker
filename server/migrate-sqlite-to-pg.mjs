@@ -39,7 +39,9 @@ const IDENTITY_TABLES = new Set([
 function sqlitePathFromArgs() {
   const arg = process.argv[2];
   if (arg) return path.resolve(arg);
-  return path.join(__dirname, "..", "data", "candidates.db");
+  const dataPath = path.join(__dirname, "..", "data", "candidates.db");
+  if (fs.existsSync(dataPath)) return dataPath;
+  return path.join(__dirname, "..", "candidates.db");
 }
 
 function pgUrlFromEnv() {
