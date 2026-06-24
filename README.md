@@ -1,6 +1,6 @@
-# candidatetracker
+# Texas Candidate Lookup
 
-Texas candidate lookup and tracking for the 2026 cycle. Uses a local SQLite database — independent from the election night tracker app (separate repo).
+Separate app for looking up and editing GOP/Dem candidates by Texas race. Uses a local SQLite database — independent from the main election night tracker (PostgreSQL).
 
 ## Data model
 
@@ -45,4 +45,34 @@ Edit GOP/Dem cells in the table; changes save on blur or Enter.
 - `PUT /api/candidates` — upsert candidate name for office/year/party
 - `GET /api/offices/:id/history` — results + finance for one seat
 
-Database file: `candidate-lookup/data/candidates.db` (gitignored).
+Database file: `data/candidates.db` locally (gitignored). On Render, set `CANDIDATE_LOOKUP_DB_PATH=/var/data/candidates.db` with a persistent disk mounted at `/var/data`.
+
+## Deploy on Render
+
+| Setting | Value |
+|--------|--------|
+| **Root directory** | `.` (repo root) |
+| **Runtime** | Node |
+| **Build command** | `npm install && npm run build` |
+| **Start command** | `npm start` |
+| **Health check path** | `/api/health` |
+
+**Environment variables**
+
+| Variable | Value |
+|----------|--------|
+| `NODE_ENV` | `production` |
+| `CANDIDATE_LOOKUP_DB_PATH` | `/var/data/candidates.db` |
+
+**Persistent disk** (required — SQLite data survives redeploys):
+
+| Setting | Value |
+|--------|--------|
+| Mount path | `/var/data` |
+| Size | 1 GB (or more if needed) |
+
+Render sets `PORT` automatically; the server listens on that port and serves the built UI from `dist/`.
+
+First deploy seeds Texas offices automatically if the database is empty. To load spreadsheet data after deploy, run import scripts locally against a copy of the DB, or use the in-app admin UI.
+
+Alternatively, connect this repo with the included `render.yaml` blueprint.

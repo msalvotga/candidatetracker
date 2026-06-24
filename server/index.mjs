@@ -1,5 +1,8 @@
 import cors from "cors";
 import express from "express";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getDb } from "./db.mjs";
 import {
   adminQueryTable,
@@ -14,7 +17,6 @@ import {
 import { listConsultants, loadCandidateConsultantsMap, attachConsultantsToRaces, addConsultant } from "./lib/consultants.mjs";
 import { syncRaceCandidates, updateCandidateVuid } from "./lib/candidates.mjs";
 import { addFinanceReport, attachFinanceHistoryToRaces, bulkImportFinanceReports, loadFinanceHistoryMap } from "./lib/financeReports.mjs";
-import { buildBallotWorkbookBuffer } from "./lib/ballotExport.mjs";
 import { addFilingPeriod, listFilingPeriods } from "./lib/filingPeriods.mjs";
 import { buildContestResponse, detectUncontested } from "./lib/metricContest.mjs";
 import { gopShareFromMargin, isLegMetricKey } from "./lib/benchmarkMargin.mjs";
@@ -29,7 +31,9 @@ import {
   loadOfficeTargetsByOffice,
 } from "./lib/targeting.mjs";
 
-const PORT = Number(process.env.CANDIDATE_LOOKUP_PORT ?? 3850);
+const PORT = Number(process.env.PORT || process.env.CANDIDATE_LOOKUP_PORT || 3850);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const distDir = path.join(__dirname, "..", "dist");
 const app = express();
 
 app.use(cors());
@@ -46,7 +50,12 @@ function parseYear(value, fallback = new Date().getFullYear()) {
 }
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true });
+  try {
+    getDb().prepare("SELECT 1 AS ok").get();
+    res.json({ ok: true, db: "sqlite" });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
 });
 
 app.get("/api/cycles", (_req, res) => {
@@ -510,19 +519,12 @@ app.get("/api/admin/tables/:tableName", (req, res) => {
   const tableName = String(req.params.tableName ?? "");
   const cycleYear = req.query.cycle_year ? Number(req.query.cycle_year) : null;
   const category = req.query.category ? String(req.query.category) : null;
-  const singleCandidateRaces = String(req.query.single_candidate_races ?? "") === "1";
   const limit = Math.min(Number(req.query.limit ?? 200), 1000);
   const offset = Math.max(Number(req.query.offset ?? 0), 0);
 
   try {
     const db = getDb();
-    const result = adminQueryTable(db, tableName, {
-      cycleYear,
-      category,
-      limit,
-      offset,
-      singleCandidateRaces,
-    });
+    const result = adminQueryTable(db, tableName, { cycleYear, category, limit, offset });
     res.json({ table: tableName, ...result, limit, offset });
   } catch (err) {
     res.status(400).json({ error: err.message ?? "invalid table" });
@@ -601,25 +603,6 @@ app.get("/api/admin/export/:tableName.csv", (req, res) => {
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${tableName}.csv"`);
     res.send(csv);
-  } catch (err) {
-    res.status(400).json({ error: err.message ?? "export failed" });
-  }
-});
-
-app.get("/api/export/ballot", (req, res) => {
-  const cycleYear = parseYear(req.query.year);
-  try {
-    const db = getDb();
-    const buffer = buildBallotWorkbookBuffer(db, cycleYear);
-    res.setHeader(
-      "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    );
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="ballot-summary-${cycleYear}.xlsx"`
-    );
-    res.send(buffer);
   } catch (err) {
     res.status(400).json({ error: err.message ?? "export failed" });
   }
@@ -777,6 +760,15 @@ app.get("/api/offices/:officeId/history", (req, res) => {
 
 seedOfficesIfEmpty(getDb());
 
+const distIndex = path.join(distDir, "index.html");
+if (fs.existsSync(distIndex)) {
+  app.use(express.static(distDir, { index: false, maxAge: "1h" }));
+  app.get(/^(?!\/api\/).*/, (_req, res) => {
+    res.sendFile(distIndex);
+  });
+}
+
 app.listen(PORT, () => {
-  console.log(`Candidate lookup API on http://127.0.0.1:${PORT}`);
+  const mode = fs.existsSync(distIndex) ? "production (API + static UI)" : "API only";
+  console.log(`Candidate tracker listening on port ${PORT} — ${mode}`);
 });

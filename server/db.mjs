@@ -9,8 +9,11 @@ import { migrateTargetingAndConsultants } from "./lib/targetConsultantMigration.
 import { migrateOfficeSeatHolders } from "./lib/seatHolderMigration.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.join(__dirname, "..", "data");
-const dbPath = path.join(dataDir, "candidates.db");
+const defaultDataDir = path.join(__dirname, "..", "data");
+const dbPath = process.env.CANDIDATE_LOOKUP_DB_PATH
+  ? path.resolve(process.env.CANDIDATE_LOOKUP_DB_PATH)
+  : path.join(defaultDataDir, "candidates.db");
+const dataDir = path.dirname(dbPath);
 const schemaPath = path.join(__dirname, "..", "schema.sql");
 
 let db;
