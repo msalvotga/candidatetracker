@@ -1,0 +1,186 @@
+/**
+ * Current Texas House seat holders (89th Legislature, 2025).
+ * Source: Texas Legislative Reference Library member roster.
+ * Used to repair last-name-only values from TED election imports.
+ */
+export const TEXAS_HOUSE_SEAT_HOLDERS = [
+  { district: 1, name: "Gary VanDeaver", party: "R" },
+  { district: 2, name: "Brent Money", party: "R" },
+  { district: 3, name: "Cecil Bell Jr.", party: "R" },
+  { district: 4, name: "Keith Bell", party: "R" },
+  { district: 5, name: "Cole Hefner", party: "R" },
+  { district: 6, name: "Daniel Alders", party: "R" },
+  { district: 7, name: "Jay Dean", party: "R" },
+  { district: 8, name: "Cody Harris", party: "R" },
+  { district: 9, name: "Trent Ashby", party: "R" },
+  { district: 10, name: "Brian Harrison", party: "R" },
+  { district: 11, name: "Joanne Shofner", party: "R" },
+  { district: 12, name: "Trey Wharton", party: "R" },
+  { district: 13, name: "Angelia Orr", party: "R" },
+  { district: 14, name: "Paul Dyson", party: "R" },
+  { district: 15, name: "Steve Toth", party: "R" },
+  { district: 16, name: "Will Metcalf", party: "R" },
+  { district: 17, name: "Stan Gerdes", party: "R" },
+  { district: 18, name: "Janis Holt", party: "R" },
+  { district: 19, name: "Ellen Troxclair", party: "R" },
+  { district: 20, name: "Terry M. Wilson", party: "R" },
+  { district: 21, name: "Dade Phelan", party: "R" },
+  { district: 22, name: "Christian Manuel", party: "D" },
+  { district: 23, name: "Terri Leo Wilson", party: "R" },
+  { district: 24, name: "Greg Bonnen", party: "R" },
+  { district: 25, name: "Cody Vasut", party: "R" },
+  { district: 26, name: "Matt Morgan", party: "R" },
+  { district: 27, name: "Ron Reynolds", party: "D" },
+  { district: 28, name: "Gary Gates", party: "R" },
+  { district: 29, name: "Jeff Barry", party: "R" },
+  { district: 30, name: "AJ Louderback", party: "R" },
+  { district: 31, name: "Ryan Guillen", party: "R" },
+  { district: 32, name: "Todd Hunter", party: "R" },
+  { district: 33, name: "Katrina Pierson", party: "R" },
+  { district: 34, name: "Denise Villalobos", party: "R" },
+  { district: 35, name: "Oscar Longoria", party: "D" },
+  { district: 36, name: "Sergio Muñoz Jr.", party: "D" },
+  { district: 37, name: "Janie Lopez", party: "R" },
+  { district: 38, name: "Erin Elizabeth Gámez", party: "D" },
+  { district: 39, name: "Armando Martinez", party: "D" },
+  { district: 40, name: "Terry Canales", party: "D" },
+  { district: 41, name: "R.D. 'Bobby' Guerra", party: "D" },
+  { district: 42, name: "Richard Peña Raymond", party: "D" },
+  { district: 43, name: "J.M. Lozano", party: "R" },
+  { district: 44, name: "Alan Schoolcraft", party: "R" },
+  { district: 45, name: "Erin Zwiener", party: "D" },
+  { district: 46, name: "Sheryl Cole", party: "D" },
+  { district: 47, name: "Vikki Goodwin", party: "D" },
+  { district: 48, name: "Donna Howard", party: "D" },
+  { district: 49, name: "Gina Hinojosa", party: "D" },
+  { district: 50, name: "James Talarico", party: "D" },
+  { district: 51, name: "Lulu Flores", party: "D" },
+  { district: 52, name: "Caroline Harris Davila", party: "R" },
+  { district: 53, name: "Wes Virdell", party: "R" },
+  { district: 54, name: "Brad Buckley", party: "R" },
+  { district: 55, name: "Hillary Hickland", party: "R" },
+  { district: 56, name: "Pat Curry", party: "R" },
+  { district: 57, name: "Richard Hayes", party: "R" },
+  { district: 58, name: "Helen Kerwin", party: "R" },
+  { district: 59, name: "Shelby Slawson", party: "R" },
+  { district: 60, name: "Mike Olcott", party: "R" },
+  { district: 61, name: "Keresa Richardson", party: "R" },
+  { district: 62, name: "Shelley Luther", party: "R" },
+  { district: 63, name: "Benjamin Bumgarner", party: "R" },
+  { district: 64, name: "Andy Hopper", party: "R" },
+  { district: 65, name: "Mitch Little", party: "R" },
+  { district: 66, name: "Matt Shaheen", party: "R" },
+  { district: 67, name: "Jeff Leach", party: "R" },
+  { district: 68, name: "David Spiller", party: "R" },
+  { district: 69, name: "James Frank", party: "R" },
+  { district: 70, name: "Mihaela Plesa", party: "D" },
+  { district: 71, name: "Stan Lambert", party: "R" },
+  { district: 72, name: "Drew Darby", party: "R" },
+  { district: 73, name: "Carrie Isaac", party: "R" },
+  { district: 74, name: "Eddie Morales", party: "D" },
+  { district: 75, name: "Mary González", party: "D" },
+  { district: 76, name: "Suleman Lalani", party: "D" },
+  { district: 77, name: "Vince Perez", party: "D" },
+  { district: 78, name: "Joe Moody", party: "D" },
+  { district: 79, name: "Claudia Ordaz", party: "D" },
+  { district: 80, name: "Don McLaughlin Jr.", party: "R" },
+  { district: 81, name: "Brooks Landgraf", party: "R" },
+  { district: 82, name: "Tom Craddick", party: "R" },
+  { district: 83, name: "Dustin Burrows", party: "R" },
+  { district: 84, name: "Carl H. Tepper", party: "R" },
+  { district: 85, name: "Stan Kitzman", party: "R" },
+  { district: 86, name: "John Smithee", party: "R" },
+  { district: 87, name: "Caroline Fairly", party: "R" },
+  { district: 88, name: "Ken King", party: "R" },
+  { district: 89, name: "Candy Noble", party: "R" },
+  { district: 90, name: "Ramon Romero Jr.", party: "D" },
+  { district: 91, name: "David Lowe", party: "R" },
+  { district: 92, name: "Salman Bhojani", party: "D" },
+  { district: 93, name: "Nate Schatzline", party: "R" },
+  { district: 94, name: "Tony Tinderholt", party: "R" },
+  { district: 95, name: "Nicole Collier", party: "D" },
+  { district: 96, name: "David Cook", party: "R" },
+  { district: 97, name: "John McQueeney", party: "R" },
+  { district: 98, name: "Giovanni Capriglione", party: "R" },
+  { district: 99, name: "Charlie Geren", party: "R" },
+  { district: 100, name: "Venton Jones", party: "D" },
+  { district: 101, name: "Chris Turner", party: "D" },
+  { district: 102, name: "Ana-María Rodríguez Ramos", party: "D" },
+  { district: 103, name: "Rafael Anchía", party: "D" },
+  { district: 104, name: "Jessica González", party: "D" },
+  { district: 105, name: "Terry Meza", party: "D" },
+  { district: 106, name: "Jared Patterson", party: "R" },
+  { district: 107, name: "Linda Garcia", party: "D" },
+  { district: 108, name: "Morgan Meyer", party: "R" },
+  { district: 109, name: "Aicha Davis", party: "D" },
+  { district: 110, name: "Toni Rose", party: "D" },
+  { district: 111, name: "Yvonne Davis", party: "D" },
+  { district: 112, name: "Angie Chen Button", party: "R" },
+  { district: 113, name: "Rhetta Bowers", party: "D" },
+  { district: 114, name: "John Bryant", party: "D" },
+  { district: 115, name: "Cassandra Garcia Hernandez", party: "D" },
+  { district: 116, name: "Trey Martinez Fischer", party: "D" },
+  { district: 117, name: "Philip Cortez", party: "D" },
+  { district: 118, name: "John Lujan", party: "R" },
+  { district: 119, name: "Liz Campos", party: "D" },
+  { district: 120, name: "Barbara Gervin-Hawkins", party: "D" },
+  { district: 121, name: "Marc LaHood", party: "R" },
+  { district: 122, name: "Mark Dorazio", party: "R" },
+  { district: 123, name: "Diego Bernal", party: "D" },
+  { district: 124, name: "Josey Garcia", party: "D" },
+  { district: 125, name: "Ray López", party: "D" },
+  { district: 126, name: "Sam Harless", party: "R" },
+  { district: 127, name: "Charles Cunningham", party: "R" },
+  { district: 128, name: "Briscoe Cain", party: "R" },
+  { district: 129, name: "Dennis Paul", party: "R" },
+  { district: 130, name: "Tom Oliverson", party: "R" },
+  { district: 131, name: "Alma Allen", party: "D" },
+  { district: 132, name: "Mike Schofield", party: "R" },
+  { district: 133, name: "Mano DeAyala", party: "R" },
+  { district: 134, name: "Ann Johnson", party: "D" },
+  { district: 135, name: "Jon Rosenthal", party: "D" },
+  { district: 136, name: "John H. Bucy III", party: "D" },
+  { district: 137, name: "Gene Wu", party: "D" },
+  { district: 138, name: "Lacey Hull", party: "R" },
+  { district: 139, name: "Charlene Ward Johnson", party: "D" },
+  { district: 140, name: "Armando Walle", party: "D" },
+  { district: 141, name: "Senfronia Thompson", party: "D" },
+  { district: 142, name: "Harold V. Dutton Jr.", party: "D" },
+  { district: 143, name: "Ana Hernandez", party: "D" },
+  { district: 144, name: "Mary Ann Perez", party: "D" },
+  { district: 145, name: "Christina Morales", party: "D" },
+  { district: 146, name: "Lauren A. Simmons", party: "D" },
+  { district: 147, name: 'Jolanda "Jo" Jones', party: "D" },
+  { district: 148, name: "Penny Morales Shaw", party: "D" },
+  { district: 149, name: "Hubert Vo", party: "D" },
+  { district: 150, name: "Valoree Swanson", party: "R" },
+];
+
+const byDistrict = new Map(TEXAS_HOUSE_SEAT_HOLDERS.map((row) => [row.district, row]));
+
+export function texasHouseSeatHolderByDistrict(district) {
+  return byDistrict.get(Number(district)) ?? null;
+}
+
+/** Last token of a name, ignoring suffixes like Jr. and III. */
+export function seatHolderLastName(name) {
+  const tokens = String(name ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!tokens.length) return "";
+  const last = tokens[tokens.length - 1].replace(/[.,]/g, "");
+  if (/^(jr|sr|ii|iii|iv)$/i.test(last) && tokens.length > 1) {
+    return tokens[tokens.length - 2].replace(/[.,]/g, "");
+  }
+  return last;
+}
+
+export function lastNameMatchesSeatHolder(storedName, rosterName) {
+  const stored = String(storedName ?? "")
+    .trim()
+    .replace(/[.,]/g, "");
+  if (!stored) return false;
+  const rosterLast = seatHolderLastName(rosterName);
+  return stored.localeCompare(rosterLast, undefined, { sensitivity: "base" }) === 0;
+}
