@@ -89,7 +89,16 @@ export async function initDb() {
   dbWrapper = createDb(pool, { pool });
   const schema = fs.readFileSync(schemaPath, "utf8");
   await pool.query(schema);
+  await runMigrations(pool);
   return dbWrapper;
+}
+
+async function runMigrations(pool) {
+  await pool.query(`
+    ALTER TABLE offices
+    ADD COLUMN IF NOT EXISTS up_for_reelection INTEGER NOT NULL DEFAULT 0
+    CHECK (up_for_reelection IN (0, 1))
+  `);
 }
 
 export function getDb() {

@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS offices (
   office_name TEXT NOT NULL,
   sort_order INTEGER NOT NULL DEFAULT 0,
   seat_holder_name TEXT,
-  seat_holder_party TEXT CHECK (seat_holder_party IS NULL OR seat_holder_party IN ('R', 'D', 'I', 'L', 'G', 'O'))
+  seat_holder_party TEXT CHECK (seat_holder_party IS NULL OR seat_holder_party IN ('R', 'D', 'I', 'L', 'G', 'O')),
+  up_for_reelection INTEGER NOT NULL DEFAULT 0 CHECK (up_for_reelection IN (0, 1))
 );
 
 CREATE INDEX IF NOT EXISTS idx_offices_category_sort ON offices(category, sort_order, district);

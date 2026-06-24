@@ -251,6 +251,23 @@ export async function bulkImportFinance(rows: Record<string, string>[]) {
   return res.json() as Promise<{ imported: number; errors: { row: number; error: string }[] }>;
 }
 
+export async function saveCandidateConsultants(candidateId: number, consultant_keys: string[]) {
+  const res = await fetch(`/api/candidates/${candidateId}/consultants`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ consultant_keys }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "Failed to save consultants");
+  }
+  return res.json() as Promise<{
+    consultant_keys: string[];
+    consultants: { consultant_key: string; name: string }[];
+    consultant: string | null;
+  }>;
+}
+
 export async function updateCandidateVuid(candidateId: number, vuid: string | null) {
   const res = await fetch(`/api/admin/candidates/${candidateId}/vuid`, {
     method: "PATCH",

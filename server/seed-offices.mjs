@@ -9,9 +9,6 @@ const STATEWIDE_OFFICES = [
   { code: "COMPT", name: "Comptroller of Public Accounts" },
   { code: "GLO", name: "Commissioner of the General Land Office" },
   { code: "AGRI", name: "Commissioner of Agriculture" },
-  { code: "RRC-1", name: "Railroad Commissioner (Place 1)" },
-  { code: "RRC-2", name: "Railroad Commissioner (Place 2)" },
-  { code: "RRC-3", name: "Railroad Commissioner (Place 3)" },
 ];
 
 function padDistrict(n, width = 3) {

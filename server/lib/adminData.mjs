@@ -129,7 +129,7 @@ const ADMIN_TABLES = {
       const rows = await db
         .prepare(
           `SELECT o.id, o.category, o.district, o.office_code, o.office_name, o.sort_order,
-                  o.seat_holder_name, o.seat_holder_party,
+                  o.seat_holder_name, o.seat_holder_party, o.up_for_reelection,
                   COALESCE((
                     SELECT GROUP_CONCAT(ot.org_key)
                     FROM office_targets ot
@@ -217,7 +217,7 @@ export const EDITABLE_COLUMNS = {
   filing_periods: ["label", "sort_order", "default_report_period_end"],
   candidates: ["vuid", "name", "party", "is_incumbent", "tec_filer_id", "filed", "consultant_keys", "notes"],
   finance_reports: ["period_key", "report_period_end", "total_raised", "total_spent", "cash_on_hand"],
-  offices: ["office_name", "district", "sort_order", "seat_holder_name", "seat_holder_party", "target_org_keys"],
+  offices: ["office_name", "district", "sort_order", "seat_holder_name", "seat_holder_party", "up_for_reelection", "target_org_keys"],
   race_sheet_rows: [
     "incumbent_name",
     "incumbent_party",
@@ -258,6 +258,7 @@ export const DELETABLE_TABLES = {
 const INTEGER_COLUMNS = new Set([
   "is_incumbent",
   "filed",
+  "up_for_reelection",
   "sort_order",
   "district",
   "row_order",

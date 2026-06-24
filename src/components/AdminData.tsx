@@ -23,7 +23,7 @@ const CATEGORY_OPTIONS: { id: OfficeCategory | ""; label: string }[] = [
 ];
 
 const PARTY_OPTIONS = ["R", "D", "I", "L", "G", "O"];
-const BOOLEAN_COLUMNS = new Set(["is_incumbent", "filed"]);
+const BOOLEAN_COLUMNS = new Set(["is_incumbent", "filed", "up_for_reelection"]);
 const NUMERIC_COLUMNS = new Set([
   "total_raised",
   "total_spent",
@@ -40,6 +40,7 @@ const COLUMN_LABELS: Record<string, string> = {
   target_org_keys: "Target orgs",
   seat_holder_name: "Seat holder",
   seat_holder_party: "Seat holder party",
+  up_for_reelection: "Up for reelection",
   office_id: "Office",
   cycle_year: "Cycle year",
   is_incumbent: "Incumbent",
@@ -48,7 +49,7 @@ const COLUMN_LABELS: Record<string, string> = {
 const TABLE_COLUMNS: Record<string, string[]> = {
   consultants: ["consultant_key", "name", "candidate_count"],
   targeting_organizations: ["org_key", "name"],
-  offices: ["office_code", "office_name", "district", "seat_holder_name", "seat_holder_party", "target_org_keys"],
+  offices: ["office_code", "office_name", "district", "seat_holder_name", "seat_holder_party", "up_for_reelection", "target_org_keys"],
 };
 
 function visibleColumns(tableId: string, row: Record<string, unknown>) {
@@ -576,7 +577,8 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
       {editMode && selectedTable === "offices" ? (
         <p className="admin-add-hint">
           Edit <strong>seat_holder_name</strong> and <strong>seat_holder_party</strong> for the current office holder shown in
-          the race list. Target orgs use cycle {cycleYear}. Deleting an office also removes its candidates, sheet rows, and
+          the race list. Set <strong>up_for_reelection</strong> for Senate, SBOE, and statewide offices on the ballot this
+          cycle. Target orgs use cycle {cycleYear}. Deleting an office also removes its candidates, sheet rows, and
           metrics.
         </p>
       ) : null}

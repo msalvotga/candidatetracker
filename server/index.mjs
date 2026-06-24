@@ -15,7 +15,7 @@ import {
   loadAdminMultiSelectOptions,
   deleteAdminTableRow,
 } from "./lib/adminData.mjs";
-import { listConsultants, loadCandidateConsultantsMap, attachConsultantsToRaces, addConsultant } from "./lib/consultants.mjs";
+import { listConsultants, loadCandidateConsultantsMap, attachConsultantsToRaces, addConsultant, syncCandidateConsultants, parseKeyList } from "./lib/consultants.mjs";
 import { syncRaceCandidates, updateCandidateVuid } from "./lib/candidates.mjs";
 import { addFinanceReport, attachFinanceHistoryToRaces, bulkImportFinanceReports, loadFinanceHistoryMap } from "./lib/financeReports.mjs";
 import { addFilingPeriod, listFilingPeriods, seedFilingPeriods } from "./lib/filingPeriods.mjs";
@@ -139,7 +139,7 @@ async function buildUncontestedMap(database, category) {
   return map;
 }
 
-const EDITABLE_METRIC_KEYS = new Set(["trump_2024", "cruz_2024", "abbott_2022"]);
+const EDITABLE_METRIC_KEYS = new Set([]);
 
 function attachSheetMeta(candidate, row, isIncumbent) {
   candidate.filed = Boolean(row.filed);
@@ -643,6 +643,36 @@ app.patch("/api/admin/candidates/:candidateId/vuid", async (req, res) => {
     res.json({ id: candidateId, vuid });
   } catch (err) {
     res.status(409).json({ error: err.message ?? "failed to update vuid" });
+  }
+});
+
+app.patch("/api/candidates/:candidateId/consultants", async (req, res) => {
+  const candidateId = Number(req.params.candidateId);
+  if (!Number.isInteger(candidateId) || candidateId < 1) {
+    res.status(400).json({ error: "invalid candidate id" });
+    return;
+  }
+  const db = getDb();
+  const exists = await db.prepare(`SELECT id FROM candidates WHERE id = ?`).get(candidateId);
+  if (!exists) {
+    res.status(404).json({ error: "candidate not found" });
+    return;
+  }
+  try {
+    const consultantKeys = await syncCandidateConsultants(db, candidateId, parseKeyList(req.body?.consultant_keys));
+    const consultants = consultantKeys.length
+      ? await db
+          .prepare(
+            `SELECT consultant_key, name FROM consultants
+             WHERE consultant_key IN (${consultantKeys.map(() => "?").join(", ")})
+             ORDER BY name COLLATE NOCASE`
+          )
+          .all(...consultantKeys)
+      : [];
+    const consultant = consultants.map((row) => row.name).join(", ") || null;
+    res.json({ consultant_keys: consultantKeys, consultants, consultant });
+  } catch (err) {
+    res.status(400).json({ error: err.message ?? "failed to update consultants" });
   }
 });
 

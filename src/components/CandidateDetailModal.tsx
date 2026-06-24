@@ -5,6 +5,7 @@ import {
   mergeFinanceHistory,
   sortFinanceHistoryByPeriod,
 } from "../lib/finance";
+import { consultantLabel } from "./CandidateFinance";
 import type { RaceCandidate } from "../types";
 
 function partyLabel(party: string) {
@@ -21,13 +22,13 @@ function displayValue(value: string | null | undefined) {
 }
 
 export function CandidateSummary({ candidate }: { candidate: RaceCandidate }) {
-  const hasMeta = candidate.filed || candidate.running_for_reelection;
-
-  if (!hasMeta) return null;
+  const consultant = consultantLabel(candidate);
 
   return (
     <div className="candidate-summary">
-      {candidate.filed ? <span className="candidate-summary-tag">Filed</span> : null}
+      <span className="candidate-summary-detail">
+        <strong>Consultant</strong> {consultant ?? "—"}
+      </span>
       {candidate.running_for_reelection ? (
         <span className="candidate-summary-detail">{candidate.running_for_reelection}</span>
       ) : null}

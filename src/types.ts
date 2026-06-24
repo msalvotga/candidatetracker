@@ -78,6 +78,8 @@ export interface Race {
   seat_holder?: SeatHolder | null;
   /** Incumbent is not on the November ballot for this race. */
   is_open?: boolean;
+  /** Office is on the ballot this cycle (senate, SBOE, statewide only). */
+  up_for_reelection?: boolean;
   targeting_organizations?: TargetingOrganizationRef[];
   targeting_organization_keys?: string[];
 }

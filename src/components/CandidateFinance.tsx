@@ -10,12 +10,72 @@ import {
   mergeFinanceHistory,
   sortFinanceHistoryByPeriod,
 } from "../lib/finance";
-import type { PendingFinanceEntry, RaceCandidate } from "../types";
+import type { Consultant, PendingFinanceEntry, RaceCandidate } from "../types";
 
 export function consultantLabel(candidate: Pick<RaceCandidate, "consultants" | "consultant">) {
   const fromRefs = candidate.consultants?.map((c) => c.name).join(", ");
   const legacy = candidate.consultant?.trim();
   return fromRefs || legacy || null;
+}
+
+function sortedKeys(keys: string[]) {
+  return [...keys].sort();
+}
+
+function keysEqual(a: string[], b: string[]) {
+  const left = sortedKeys(a);
+  const right = sortedKeys(b);
+  return left.length === right.length && left.every((key, index) => key === right[index]);
+}
+
+export function CandidateConsultantEditor({
+  candidate,
+  consultants,
+  value,
+  onChange,
+}: {
+  candidate: RaceCandidate;
+  consultants: Consultant[];
+  value?: string[];
+  onChange: (keys: string[] | undefined) => void;
+}) {
+  const baseline = candidate.consultant_keys ?? [];
+  const selectedKeys = value ?? baseline;
+  const selected = new Set(selectedKeys);
+  const changed = value !== undefined;
+
+  function toggle(consultantKey: string) {
+    const next = new Set(selectedKeys);
+    if (next.has(consultantKey)) next.delete(consultantKey);
+    else next.add(consultantKey);
+    const keys = sortedKeys([...next]);
+    onChange(keysEqual(keys, baseline) ? undefined : keys);
+  }
+
+  return (
+    <div className={`candidate-consultant-editor${changed ? " candidate-consultant-editor-changed" : ""}`}>
+      <span className="candidate-consultant-label">Consultant</span>
+      {consultants.length === 0 ? (
+        <span className="coh-empty">Add consultants on the Data tab first.</span>
+      ) : (
+        <div className="candidate-consultant-options">
+          {consultants.map((consultant) => (
+            <label key={consultant.consultant_key} className="candidate-consultant-option">
+              <input
+                type="checkbox"
+                checked={selected.has(consultant.consultant_key)}
+                onChange={() => toggle(consultant.consultant_key)}
+              />
+              <span>{consultant.name}</span>
+            </label>
+          ))}
+        </div>
+      )}
+      {candidate.running_for_reelection ? (
+        <span className="candidate-summary-detail">{candidate.running_for_reelection}</span>
+      ) : null}
+    </div>
+  );
 }
 
 function reportSummary(entry: {
@@ -38,43 +98,27 @@ export function LatestFinanceDisplay({
   pendingAdds?: PendingFinanceEntry[];
 }) {
   const latest = latestFilingForCandidate(candidate, pendingAdds);
-  const consultant = consultantLabel(candidate);
 
-  if (!latest && !consultant) return <span className="coh-empty">—</span>;
+  if (!latest) return <span className="coh-empty">—</span>;
 
   return (
     <div className="latest-finance">
-      {latest ? (
-        <>
-          <div className="latest-finance-primary">
-            <span className="latest-finance-heading">
-              <strong>Most recent filing:</strong> {formatMostRecentFilingLabel(latest)}
-            </span>
-            {consultant ? (
-              <span className="latest-finance-consultant">
-                <strong>Consultant</strong> {consultant}
-              </span>
-            ) : null}
-          </div>
-          <div className="latest-finance-metrics">
-            <span className="latest-finance-metric">
-              <strong>Contributions</strong> {formatMoney(latest.contributions)}
-            </span>
-            <span className="latest-finance-metric">
-              <strong>Expenditures</strong> {formatMoney(latest.expenditures)}
-            </span>
-            <span className="latest-finance-metric">
-              <strong>COH</strong> {formatMoney(latest.cash_on_hand)}
-            </span>
-          </div>
-        </>
-      ) : consultant ? (
-        <div className="latest-finance-primary">
-          <span className="latest-finance-consultant">
-            <strong>Consultant</strong> {consultant}
-          </span>
-        </div>
-      ) : null}
+      <div className="latest-finance-primary">
+        <span className="latest-finance-heading">
+          <strong>Most recent filing:</strong> {formatMostRecentFilingLabel(latest)}
+        </span>
+      </div>
+      <div className="latest-finance-metrics">
+        <span className="latest-finance-metric">
+          <strong>Contributions</strong> {formatMoney(latest.contributions)}
+        </span>
+        <span className="latest-finance-metric">
+          <strong>Expenditures</strong> {formatMoney(latest.expenditures)}
+        </span>
+        <span className="latest-finance-metric">
+          <strong>COH</strong> {formatMoney(latest.cash_on_hand)}
+        </span>
+      </div>
     </div>
   );
 }

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { addFinanceReport, fetchCounties, fetchCycles, fetchMetricContest, fetchRaces, saveOfficeMetric } from "./api";
+import { addFinanceReport, fetchCounties, fetchCycles, fetchMetricContest, fetchRaces, saveCandidateConsultants } from "./api";
 import { AdminDataPanel } from "./components/AdminData";
 import { CandidateDetailModal, CandidateSummary } from "./components/CandidateDetailModal";
-import { FinanceHistoryEditor, LatestFinanceDisplay } from "./components/CandidateFinance";
+import { CandidateConsultantEditor, FinanceHistoryEditor, LatestFinanceDisplay } from "./components/CandidateFinance";
 import { CountyHeatmap, RaceMetrics } from "./components/CountyHeatmap";
 import { MetricContestModal } from "./components/MetricContestModal";
 import { PendingSaveBar } from "./components/PendingSaveBar";
@@ -12,10 +12,15 @@ import {
   matchesOrganizationFilter,
   matchesConsultantFilter,
   matchesOpenSeatFilter,
+  matchesUpForReelectionFilter,
+  isUpForReelectionRelevant,
+  isOfficeFlagTrue,
   matchesSeatHolderFilter,
   matchesTrumpSwingFilter,
   raceHasSeatHolder,
   raceSeatHolder,
+  raceCurrentHolderLabel,
+  raceGopCandidateLabel,
   type SeatHolderFilter,
 } from "./lib/raceFilters";
 import type {
@@ -53,6 +58,12 @@ function partyLabel(party: string) {
   return party;
 }
 
+function partyBadgeClass(party: string | null | undefined) {
+  if (party === "R") return "party-badge party-badge-r";
+  if (party === "D") return "party-badge party-badge-d";
+  return null;
+}
+
 function raceListLabel(race: Race, tab: OfficeCategory) {
   if (tab === "statewide") return race.office_name;
   if (race.district != null) return `District ${race.district}`;
@@ -81,12 +92,27 @@ function mergeRaceMetrics(race: Race, tab: OfficeCategory): RaceMetric[] {
   });
 }
 
-function updateRaceMetric(races: Race[], officeId: number, key: string, value: number | null): Race[] {
+function updateCandidateConsultants(
+  races: Race[],
+  officeId: number,
+  candidateKeyValue: string,
+  consultants: RaceCandidate["consultants"],
+  consultantKeys: string[],
+  consultantLabel: string | null
+): Race[] {
   return races.map((race) => {
     if (race.office_id !== officeId) return race;
     return {
       ...race,
-      metrics: (race.metrics ?? []).map((m) => (m.key === key ? { ...m, value } : m)),
+      candidates: race.candidates.map((candidate) => {
+        if (candidateKey(candidate) !== candidateKeyValue) return candidate;
+        return {
+          ...candidate,
+          consultants: consultants ?? [],
+          consultant_keys: consultantKeys,
+          consultant: consultantLabel,
+        };
+      }),
     };
   });
 }
@@ -125,6 +151,7 @@ export default function App() {
   const [seatHolderFilter, setSeatHolderFilter] = useState<SeatHolderFilter>("all");
   const [trumpSwingFilter, setTrumpSwingFilter] = useState(false);
   const [openSeatFilter, setOpenSeatFilter] = useState(false);
+  const [upForReelectionOnly, setUpForReelectionOnly] = useState(true);
   const [organizationFilter, setOrganizationFilter] = useState<string[]>([]);
   const [consultantFilter, setConsultantFilter] = useState<string[]>([]);
   const [showMoreFilters, setShowMoreFilters] = useState(false);
@@ -132,7 +159,7 @@ export default function App() {
   const [consultants, setConsultants] = useState<Consultant[]>([]);
   const [showCoh, setShowCoh] = useState(true);
   const [editMode, setEditMode] = useState(false);
-  const [pendingMetrics, setPendingMetrics] = useState<Record<string, number | null>>({});
+  const [pendingConsultantEdits, setPendingConsultantEdits] = useState<Record<string, string[]>>({});
   const [pendingCohAdds, setPendingCohAdds] = useState<PendingFinanceEntry[]>([]);
   const [raceSaving, setRaceSaving] = useState(false);
   const [raceSaved, setRaceSaved] = useState(false);
@@ -151,7 +178,10 @@ export default function App() {
     try {
       const data = await fetchRaces(tab, cycleYear);
       if (data.filing_periods?.length) setFilingPeriods(data.filing_periods);
-      const nextRaces = data.races ?? [];
+      const nextRaces = (data.races ?? []).map((race) => ({
+        ...race,
+        up_for_reelection: isOfficeFlagTrue(race.up_for_reelection),
+      }));
       setRaces(nextRaces);
       setTargetingOrgs(data.targeting_organizations ?? []);
       setConsultants(data.consultants ?? []);
@@ -194,6 +224,7 @@ export default function App() {
     setIncumbentFilter("all");
     setSeatHolderFilter("all");
     setTrumpSwingFilter(false);
+    setOpenSeatFilter(false);
     setOrganizationFilter([]);
     setConsultantFilter([]);
     setShowMoreFilters(false);
@@ -202,9 +233,20 @@ export default function App() {
     } else if (tab === "data") {
       setLoading(false);
     } else {
+      setRaces([]);
       void loadRaces();
     }
   }, [loadRaces, loadCounties, tab, cycleYear]);
+
+  const handleUpForReelectionOnlyChange = useCallback(
+    (upOnly: boolean) => {
+      setUpForReelectionOnly(upOnly);
+      if (upOnly && isUpForReelectionRelevant(tab as OfficeCategory)) {
+        void loadRaces();
+      }
+    },
+    [loadRaces, tab]
+  );
 
   const filteredRaces = useMemo(() => {
     if (tab === "counties" || tab === "data") return [];
@@ -225,12 +267,13 @@ export default function App() {
       if (!matchesSeatHolderFilter(race, seatHolderFilter)) return false;
       if (!matchesTrumpSwingFilter(race, trumpSwingFilter)) return false;
       if (!matchesOpenSeatFilter(race, openSeatFilter)) return false;
+      if (!matchesUpForReelectionFilter(race, tab as OfficeCategory, upForReelectionOnly)) return false;
       if (!matchesOrganizationFilter(race, organizationFilter)) return false;
       if (!matchesConsultantFilter(race, consultantFilter)) return false;
 
       return true;
     });
-  }, [races, filter, tab, incumbentFilter, seatHolderFilter, trumpSwingFilter, openSeatFilter, organizationFilter, consultantFilter]);
+  }, [races, filter, tab, incumbentFilter, seatHolderFilter, trumpSwingFilter, openSeatFilter, upForReelectionOnly, organizationFilter, consultantFilter]);
 
   useEffect(() => {
     if (tab === "counties" || tab === "data") return;
@@ -251,7 +294,7 @@ export default function App() {
   const countyTitle = COUNTY_ELECTIONS.find((e) => e.id === countyElection)?.label ?? "County results";
 
   useEffect(() => {
-    setPendingMetrics({});
+    setPendingConsultantEdits({});
     setPendingCohAdds([]);
     setRaceSaved(false);
     setSaveError("");
@@ -264,13 +307,13 @@ export default function App() {
   }, [raceSaved]);
 
   const hasPendingRaceEdits =
-    Object.keys(pendingMetrics).length > 0 || pendingCohAdds.length > 0;
+    Object.keys(pendingConsultantEdits).length > 0 || pendingCohAdds.length > 0;
 
-  const handlePendingMetricChange = useCallback((key: string, value: number | null | undefined) => {
-    setPendingMetrics((prev) => {
+  const handlePendingConsultantChange = useCallback((candidateKeyValue: string, keys: string[] | undefined) => {
+    setPendingConsultantEdits((prev) => {
       const next = { ...prev };
-      if (value === undefined) delete next[key];
-      else next[key] = value;
+      if (keys === undefined) delete next[candidateKeyValue];
+      else next[candidateKeyValue] = keys;
       return next;
     });
     setRaceSaved(false);
@@ -302,7 +345,7 @@ export default function App() {
   }
 
   function discardRaceEdits() {
-    setPendingMetrics({});
+    setPendingConsultantEdits({});
     setPendingCohAdds([]);
     setSaveError("");
     setRaceSaved(false);
@@ -315,11 +358,21 @@ export default function App() {
     try {
       const tasks: Promise<void>[] = [];
 
-      for (const [key, value] of Object.entries(pendingMetrics)) {
-        if (!isBenchmarkMetricKey(key)) continue;
+      for (const [candidateKeyValue, consultantKeys] of Object.entries(pendingConsultantEdits)) {
+        const candidate = selectedRace.candidates.find((item) => candidateKey(item) === candidateKeyValue);
+        if (!candidate?.candidate_id) continue;
         tasks.push(
-          saveOfficeMetric(selectedRace.office_id, key, value).then(() => {
-            setRaces((prev) => updateRaceMetric(prev, selectedRace.office_id, key, value));
+          saveCandidateConsultants(candidate.candidate_id, consultantKeys).then((result) => {
+            setRaces((prev) =>
+              updateCandidateConsultants(
+                prev,
+                selectedRace.office_id,
+                candidateKeyValue,
+                result.consultants,
+                result.consultant_keys,
+                result.consultant
+              )
+            );
           })
         );
       }
@@ -350,7 +403,7 @@ export default function App() {
       }
 
       await Promise.all(tasks);
-      setPendingMetrics({});
+      setPendingConsultantEdits({});
       setPendingCohAdds([]);
       setRaceSaved(true);
     } catch (err) {
@@ -556,6 +609,29 @@ export default function App() {
                   </div>
                 </div>
 
+                {isUpForReelectionRelevant(tab as OfficeCategory) ? (
+                  <div className="filter-group">
+                    <span className="filter-label">Up for reelection</span>
+                    <div className="filter-chips">
+                      <button
+                        type="button"
+                        className={!upForReelectionOnly ? "filter-chip active" : "filter-chip"}
+                        onClick={() => handleUpForReelectionOnlyChange(false)}
+                      >
+                        All
+                      </button>
+                      <button
+                        type="button"
+                        className={upForReelectionOnly ? "filter-chip active" : "filter-chip"}
+                        onClick={() => handleUpForReelectionOnlyChange(true)}
+                        title="Offices marked up for reelection on the Data tab"
+                      >
+                        Up only
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="filter-group">
                   <span className="filter-label">2024 Trump margin</span>
                   <div className="filter-chips">
@@ -681,19 +757,13 @@ export default function App() {
                       <span className="race-item-label">
                         {raceListLabel(race, tab as OfficeCategory)}
                         {race.is_open ? <span className="open-badge">Open</span> : null}
+                        {holder?.party && partyBadgeClass(holder.party) ? (
+                          <span className={partyBadgeClass(holder.party)!}>{partyLabel(holder.party)}</span>
+                        ) : null}
                       </span>
-                      {holder ? (
-                        <span
-                          className={
-                            holder.party
-                              ? `race-item-meta party-text-${holder.party.toLowerCase()}`
-                              : "race-item-meta"
-                          }
-                        >
-                          {holder.name}
-                          {holder.party ? ` · ${partyLabel(holder.party)}` : ""}
-                        </span>
-                      ) : null}
+                      <span className="race-item-meta">
+                        Current: {raceCurrentHolderLabel(race)} | GOP Candidate: {raceGopCandidateLabel(race)}
+                      </span>
                     </button>
                   </li>
                 );
@@ -711,11 +781,27 @@ export default function App() {
                   <h2>{raceDetailTitle(selectedRace)}</h2>
                 </header>
 
+                {(() => {
+                  const holder = raceSeatHolder(selectedRace);
+                  const holderParty = holder?.party ?? null;
+                  const holderPartyBadge = holderParty ? partyBadgeClass(holderParty) : null;
+                  return (
+                    <div className="race-seat-holder-block">
+                      <h3 className="race-seat-holder-heading">Current office holder</h3>
+                      <div className="race-seat-holder-row">
+                        <span className="race-seat-holder-name">{raceCurrentHolderLabel(selectedRace)}</span>
+                        {holderPartyBadge && holderParty ? (
+                          <span className={holderPartyBadge}>{partyLabel(holderParty)}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 <RaceMetrics
                   metrics={selectedMetrics}
                   category={tab}
                   editMode={editMode}
-                  onPendingMetricChange={handlePendingMetricChange}
                   onMetricClick={(metric) => void handleMetricClick(metric)}
                 />
 
@@ -749,7 +835,12 @@ export default function App() {
                               </span>
                               <span className="candidate-party">{partyLabel(candidate.party)}</span>
                             </div>
-                            <CandidateSummary candidate={candidate} />
+                            <CandidateConsultantEditor
+                              candidate={candidate}
+                              consultants={consultants}
+                              value={pendingConsultantEdits[key]}
+                              onChange={(keys) => handlePendingConsultantChange(key, keys)}
+                            />
                             <div className="candidate-finance candidate-finance-edit">
                               <strong className="coh-section-title">Finance reports</strong>
                               <FinanceHistoryEditor

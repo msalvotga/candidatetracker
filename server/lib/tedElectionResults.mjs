@@ -16,9 +16,6 @@ export const STATEWIDE_TED_MAP = {
     Comptroller: "COMPT",
     "Land Commissioner": "GLO",
     "Agriculture Commissioner": "AGRI",
-    "Railroad Commissioner 1": "RRC-1",
-    "Railroad Commissioner 2": "RRC-2",
-    "Railroad Commissioner 3": "RRC-3",
     "Justice Of The Supreme Court Place 3": "SCOTX-PL3",
     "Justice Of The Supreme Court Place 5": "SCOTX-PL5",
     "Justice Of The Supreme Court Place 9": "SCOTX-PL9",
@@ -27,7 +24,6 @@ export const STATEWIDE_TED_MAP = {
     "Court Of Criminal Appeals Place 6": "CCA-PL6",
   },
   2024: {
-    "Railroad Commissioner 1": "RRC-1",
     "Justice Of The Supreme Court Place 2": "SCOTX-PL2",
     "Justice Of The Supreme Court Place 4": "SCOTX-PL4",
     "Justice Of The Supreme Court Place 6": "SCOTX-PL6",

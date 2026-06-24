@@ -1,4 +1,4 @@
-import type { Race, SeatHolder } from "../types";
+import type { OfficeCategory, Race, SeatHolder } from "../types";
 
 export function raceSeatHolder(race: Race): SeatHolder | null {
   if (race.seat_holder?.name) return race.seat_holder;
@@ -20,6 +20,27 @@ export function raceIncumbent(race: Race) {
 
 export function raceHasSeatHolder(race: Race) {
   return raceSeatHolder(race) != null;
+}
+
+/** Named GOP candidate on the ballot for this race, if any. */
+export function raceGopCandidate(race: Race) {
+  return (
+    race.candidates.find((candidate) => candidate.party === "R" && String(candidate.name ?? "").trim()) ??
+    null
+  );
+}
+
+export function raceGopCandidateName(race: Race) {
+  return raceGopCandidate(race)?.name?.trim() || null;
+}
+
+export function raceCurrentHolderLabel(race: Race) {
+  const holder = raceSeatHolder(race);
+  return holder?.name?.trim() || "Vacant";
+}
+
+export function raceGopCandidateLabel(race: Race) {
+  return raceGopCandidateName(race) || "none";
 }
 
 export function raceMetricValue(race: Race, key: string) {
@@ -48,6 +69,22 @@ export function matchesTrumpSwingFilter(race: Race, enabled: boolean) {
 export function matchesOpenSeatFilter(race: Race, openOnly: boolean) {
   if (!openOnly) return true;
   return Boolean(race.is_open);
+}
+
+const REELECTION_RELEVANT_CATEGORIES = new Set<OfficeCategory>(["senate", "sboe", "statewide"]);
+
+export function isOfficeFlagTrue(value: unknown) {
+  return value === true || value === 1 || value === "1";
+}
+
+export function isUpForReelectionRelevant(category: OfficeCategory) {
+  return REELECTION_RELEVANT_CATEGORIES.has(category);
+}
+
+export function matchesUpForReelectionFilter(race: Race, category: OfficeCategory, upOnly: boolean) {
+  if (!upOnly) return true;
+  if (!isUpForReelectionRelevant(category)) return true;
+  return isOfficeFlagTrue(race.up_for_reelection);
 }
 
 export function matchesOrganizationFilter(race: Race, selectedOrgKeys: string[]) {

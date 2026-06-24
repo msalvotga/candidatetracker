@@ -4,9 +4,7 @@ import texasPaths from "../data/texasCountyPaths.json";
 import { saveCountyResult } from "../api";
 import {
   formatMetricDisplay,
-  gopShareToMarginPoints,
   marginFillColor,
-  marginPointsToValue,
   metricDisplayClass,
   metricDisplayOptions,
   isBenchmarkMetricKey,
@@ -299,29 +297,17 @@ export function RaceMetrics({
   metrics,
   category,
   editMode,
-  onPendingMetricChange,
   onMetricClick,
 }: {
   metrics?: RaceMetric[];
   category: OfficeCategory;
   editMode?: boolean;
-  onPendingMetricChange?: (key: string, value: number | null | undefined) => void;
   onMetricClick?: (metric: RaceMetric) => void;
 }) {
   const byKey = new Map((metrics ?? []).map((metric) => [metric.key, metric]));
   const groups = metricGroupsForCategory(category);
 
   function renderMetric(metric: RaceMetric) {
-    if (editMode && isBenchmarkMetricKey(metric.key)) {
-      return (
-        <MetricEditor
-          key={metric.key}
-          metric={metric}
-          onPendingChange={onPendingMetricChange}
-        />
-      );
-    }
-
     if (isBenchmarkMetricKey(metric.key)) {
       return (
         <div
@@ -385,47 +371,6 @@ export function RaceMetrics({
           <div className="race-metrics">{visible.map(renderMetric)}</div>
         </section>
       ))}
-    </div>
-  );
-}
-
-function MetricEditor({
-  metric,
-  onPendingChange,
-}: {
-  metric: RaceMetric;
-  onPendingChange?: (key: string, value: number | null | undefined) => void;
-}) {
-  const [draft, setDraft] = useState(gopShareToMarginPoints(metric.value, metric.key));
-  const preview = marginPointsToValue(draft, metric.key);
-
-  useEffect(() => {
-    setDraft(gopShareToMarginPoints(metric.value, metric.key));
-  }, [metric.key, metric.value]);
-
-  useEffect(() => {
-    if (!onPendingChange) return;
-    const parsed = marginPointsToValue(draft, metric.key);
-    const isDirty = !valuesEqual(parsed, metric.value);
-    onPendingChange(metric.key, isDirty ? parsed : undefined);
-  }, [draft, metric.key, metric.value, onPendingChange]);
-
-  return (
-    <div className={`race-metric race-metric-edit ${metricDisplayClass(preview ?? metric.value, metricDisplayOptions(metric))}`}>
-      <span className="race-metric-label">{metric.label}</span>
-      <div className="metric-edit-row">
-        <input
-          className="edit-input"
-          type="number"
-          step={0.1}
-          placeholder={isBenchmarkMetricKey(metric.key) ? "pts (+R / −D)" : "pts (+R / −D from 50%)"}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-        />
-        <span className="race-metric-value">
-          {formatMetricDisplay(preview ?? metric.value, metricDisplayOptions(metric))}
-        </span>
-      </div>
     </div>
   );
 }
