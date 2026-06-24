@@ -62,7 +62,7 @@ Edit GOP/Dem cells in the table; changes save on blur or Enter.
 |--------|--------|
 | **Root directory** | `.` (repo root) |
 | **Runtime** | Node |
-| **Build command** | `npm install && npm run build` |
+| **Build command** | `npm install --include=dev && npm run build` |
 | **Start command** | `npm start` |
 | **Health check path** | `/api/health` |
 
