@@ -1,10 +1,11 @@
-import { getDb, closeDb } from "./db.mjs";
+import { getDb, closeDb, initDb } from "./db.mjs";
 
+await initDb();
 const db = getDb();
 const categories = ["house", "senate", "congressional", "sboe", "statewide"];
 
 for (const cat of categories) {
-  const row = db
+  const row = await db
     .prepare(
       `SELECT COUNT(*) AS total,
               SUM(CASE WHEN m.leg_2024 IS NOT NULL THEN 1 ELSE 0 END) AS y24,
@@ -17,4 +18,4 @@ for (const cat of categories) {
   console.log(cat, row);
 }
 
-closeDb();
+await closeDb();

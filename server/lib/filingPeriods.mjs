@@ -62,18 +62,18 @@ const LABEL_ALIASES = {
   "general 8 day": "general_8day_26",
 };
 
-export function seedFilingPeriods(database) {
+export async function seedFilingPeriods(database) {
   const insert = database.prepare(
     `INSERT INTO filing_periods (period_key, label, sort_order, default_report_period_end)
      VALUES (@period_key, @label, @sort_order, @default_report_period_end)
      ON CONFLICT(period_key) DO NOTHING`
   );
   for (const period of DEFAULT_FILING_PERIODS) {
-    insert.run(period);
+    await insert.run(period);
   }
 }
 
-export function listFilingPeriods(database) {
+export async function listFilingPeriods(database) {
   return database
     .prepare(
       `SELECT period_key, label, sort_order, default_report_period_end
@@ -82,8 +82,8 @@ export function listFilingPeriods(database) {
     .all();
 }
 
-export function loadFilingPeriodMaps(database) {
-  const periods = listFilingPeriods(database);
+export async function loadFilingPeriodMaps(database) {
+  const periods = await listFilingPeriods(database);
   const byKey = new Map(periods.map((p) => [p.period_key, p]));
   const byLabel = new Map(periods.map((p) => [p.label.toLowerCase(), p]));
   const byEnd = new Map();
@@ -140,19 +140,19 @@ export function canonicalReportEndForPeriod(periodKey, maps, overrideEnd) {
   return "label:report";
 }
 
-export function addFilingPeriod(database, { period_key, label, sort_order, default_report_period_end }) {
+export async function addFilingPeriod(database, { period_key, label, sort_order, default_report_period_end }) {
   const key = String(period_key ?? "").trim();
   const periodLabel = String(label ?? "").trim();
   if (!key || !periodLabel) throw new Error("period_key and label required");
   const order = Number(sort_order);
   if (!Number.isInteger(order)) throw new Error("sort_order must be an integer");
 
-  database
+  await database
     .prepare(
       `INSERT INTO filing_periods (period_key, label, sort_order, default_report_period_end)
        VALUES (?, ?, ?, ?)`
     )
     .run(key, periodLabel, order, default_report_period_end?.trim() || null);
 
-  return database.prepare(`SELECT * FROM filing_periods WHERE period_key = ?`).get(key);
+  return await database.prepare(`SELECT * FROM filing_periods WHERE period_key = ?`).get(key);
 }

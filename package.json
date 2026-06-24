@@ -17,19 +17,19 @@
     "db:seed-congressional-benchmarks": "node server/seed-congressional-benchmarks.mjs",
     "db:seed-senate-benchmarks": "node server/seed-senate-benchmarks.mjs",
     "db:seed-house-benchmarks": "node server/seed-house-benchmarks.mjs",
+    "db:migrate-from-sqlite": "node server/migrate-sqlite-to-pg.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "pg": "^8.16.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",

@@ -328,29 +328,31 @@ export function parseSheetRows(sheetRows, config) {
   return parsed;
 }
 
-export function upsertOffice(database, office, defaultCategory) {
+export async function upsertOffice(database, office, defaultCategory) {
   const category = office.category ?? defaultCategory;
-  const existing = database
+  const existing = await database
     .prepare(`SELECT id FROM offices WHERE office_code = ?`)
     .get(office.code);
 
   if (existing) return existing.id;
 
   const district = office.district ?? null;
-  const sortOrder = district ?? database.prepare(`SELECT COUNT(*) AS n FROM offices WHERE category = ?`).get(category).n + 1;
+  const countRow = district ?? await database.prepare(`SELECT COUNT(*) AS n FROM offices WHERE category = ?`).get(category);
+  const sortOrder = district ?? countRow.n + 1;
 
-  const result = database
+  const result = await database
     .prepare(
       `INSERT INTO offices (category, district, office_code, office_name, sort_order)
-       VALUES (?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?)
+       RETURNING id`
     )
     .run(category, district, office.code, office.name, sortOrder);
 
   return Number(result.lastInsertRowid);
 }
 
-function upsertCandidate(database, input) {
-  const existing = database
+async function upsertCandidate(database, input) {
+  const existing = await database
     .prepare(
       `SELECT id FROM candidates
        WHERE office_id = ? AND cycle_year = ? AND party = ? AND name = ? AND is_incumbent = ?`
@@ -358,7 +360,7 @@ function upsertCandidate(database, input) {
     .get(input.officeId, input.cycleYear, input.party, input.name, input.isIncumbent);
 
   if (existing) {
-    database
+    await database
       .prepare(
         `UPDATE candidates SET
           filed = @filed,
@@ -376,7 +378,7 @@ function upsertCandidate(database, input) {
     return existing.id;
   }
 
-  const result = database
+  const result = await database
     .prepare(
       `INSERT INTO candidates (
         office_id, cycle_year, party, name, is_incumbent, filed,
@@ -386,23 +388,24 @@ function upsertCandidate(database, input) {
         @officeId, @cycleYear, @party, @name, @isIncumbent, @filed,
         @runningForReelection, @tecFilerId, @consultant, @endorsements,
         @notes, @website, @socialMedia, @raceCategory
-      )`
+      )
+      RETURNING id`
     )
     .run(input);
 
   return Number(result.lastInsertRowid);
 }
 
-function upsertFinance(database, candidateId, periodKey, finance, prefix) {
+async function upsertFinance(database, candidateId, periodKey, finance, prefix) {
   const raised = finance[`${prefix}Raised`];
   const spent = finance[`${prefix}Spent`];
   const coh = finance[`${prefix}Coh`];
   if (raised == null && spent == null && coh == null) return;
 
-  const maps = loadFilingPeriodMaps(database);
+  const maps = await loadFilingPeriodMaps(database);
   const reportEnd = canonicalReportEndForPeriod(periodKey, maps, null);
 
-  database
+  await database
     .prepare(
       `INSERT INTO finance_reports (candidate_id, period_key, report_period_end, report_type, total_raised, total_spent, cash_on_hand)
        VALUES (@candidateId, @periodKey, @reportEnd, 'TEC', @raised, @spent, @coh)
@@ -415,7 +418,7 @@ function upsertFinance(database, candidateId, periodKey, finance, prefix) {
     .run({ candidateId, periodKey, reportEnd, raised, spent, coh });
 }
 
-export function importParsedRows(database, config, parsedRows) {
+export async function importParsedRows(database, config, parsedRows) {
   const clearSheet = database.prepare(
     `DELETE FROM race_sheet_rows WHERE category = ? AND cycle_year = ?`
   );
@@ -423,8 +426,8 @@ export function importParsedRows(database, config, parsedRows) {
     `DELETE FROM candidates WHERE office_id IN (SELECT id FROM offices WHERE category = ?) AND cycle_year = ?`
   );
 
-  clearSheet.run(config.category, config.cycleYear);
-  clearCandidates.run(config.category, config.cycleYear);
+  await clearSheet.run(config.category, config.cycleYear);
+  await clearCandidates.run(config.category, config.cycleYear);
 
   const insertSheetRow = database.prepare(`
     INSERT INTO race_sheet_rows (
@@ -440,12 +443,12 @@ export function importParsedRows(database, config, parsedRows) {
     )
   `);
 
-  const importMany = database.transaction((rows) => {
+  const importMany = database.transaction(async (rows) => {
     for (const row of rows) {
-      const officeId = upsertOffice(database, row.office, config.category);
+      const officeId = await upsertOffice(database, row.office, config.category);
       const finance = row.finance;
 
-      insertSheetRow.run({
+      await insertSheetRow.run({
         officeId,
         cycleYear: config.cycleYear,
         category: config.category,
@@ -466,7 +469,7 @@ export function importParsedRows(database, config, parsedRows) {
       });
 
       if (String(row.incumbentName ?? "").trim()) {
-        database
+        await database
           .prepare(
             `UPDATE offices SET seat_holder_name = @name, seat_holder_party = @party WHERE id = @officeId`
           )
@@ -477,9 +480,9 @@ export function importParsedRows(database, config, parsedRows) {
           });
       }
 
-      const syncCandidate = (name, party, isIncumbent, runningForReelection) => {
+      const syncCandidate = async (name, party, isIncumbent, runningForReelection) => {
         if (!name || !party) return;
-        const candidateId = upsertCandidate(database, {
+        const candidateId = await upsertCandidate(database, {
           officeId,
           cycleYear: config.cycleYear,
           party,
@@ -498,16 +501,16 @@ export function importParsedRows(database, config, parsedRows) {
 
         const attachFinance = row.financeTarget === (isIncumbent ? "incumbent" : "challenger");
         if (attachFinance) {
-          upsertFinance(database, candidateId, "july_25", finance, "july");
-          upsertFinance(database, candidateId, "jan_26", finance, "jan");
+          await upsertFinance(database, candidateId, "july_25", finance, "july");
+          await upsertFinance(database, candidateId, "jan_26", finance, "jan");
         }
       };
 
-      syncCandidate(row.incumbentName, row.incumbentParty, 1, row.runningForReelection);
-      syncCandidate(row.candidateName, row.candidateParty, 0, null);
+      await syncCandidate(row.incumbentName, row.incumbentParty, 1, row.runningForReelection);
+      await syncCandidate(row.candidateName, row.candidateParty, 0, null);
     }
   });
 
-  importMany(parsedRows);
+  await importMany(parsedRows);
   return parsedRows.length;
 }

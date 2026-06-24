@@ -5,8 +5,8 @@ import { syncOfficeTargets } from "./targeting.mjs";
 const ADMIN_TABLES = {
   filing_periods: {
     label: "Filing periods",
-    query: (db, { limit, offset }) => {
-      const rows = db
+    query: async (db, { limit, offset }) => {
+      const rows = await db
         .prepare(
           `SELECT period_key, period_key AS id, label, sort_order, default_report_period_end
            FROM filing_periods
@@ -14,14 +14,14 @@ const ADMIN_TABLES = {
            LIMIT @limit OFFSET @offset`
         )
         .all({ limit, offset });
-      const total = db.prepare(`SELECT COUNT(*) AS count FROM filing_periods`).get().count;
+      const total = (await db.prepare(`SELECT COUNT(*) AS count FROM filing_periods`).get()).count;
       return { rows, total };
     },
-    exportQuery: (db) => adminQueryTable(db, "filing_periods", { limit: 100000, offset: 0 }).rows,
+    exportQuery: async (db) => (await adminQueryTable(db, "filing_periods", { limit: 100000, offset: 0 })).rows,
   },
   candidates: {
     label: "Candidates",
-    query: (db, { cycleYear, category, limit, offset, singleCandidateRaces }) => {
+    query: async (db, { cycleYear, category, limit, offset, singleCandidateRaces }) => {
       const params = { limit, offset };
       let where = "WHERE 1=1";
       if (cycleYear) {
@@ -47,7 +47,7 @@ const ADMIN_TABLES = {
           HAVING COUNT(*) = 1
         )`;
       }
-      const rows = db
+      const rows = await db
         .prepare(
           `SELECT c.id, c.vuid, c.office_id, o.office_code, o.office_name, o.category,
                   c.cycle_year, c.name, c.party, c.is_incumbent, c.tec_filer_id,
@@ -64,20 +64,20 @@ const ADMIN_TABLES = {
            LIMIT @limit OFFSET @offset`
         )
         .all(params);
-      const total = db
+      const total = (await db
         .prepare(
           `SELECT COUNT(*) AS count FROM candidates c
            JOIN offices o ON o.id = c.office_id ${where}`
         )
-        .get(params).count;
+        .get(params)).count;
       return { rows, total };
     },
-    exportQuery: (db, filters) =>
-      adminQueryTable(db, "candidates", { ...filters, limit: 100000, offset: 0 }).rows,
+    exportQuery: async (db, filters) =>
+      (await adminQueryTable(db, "candidates", { ...filters, limit: 100000, offset: 0 })).rows,
   },
   finance_reports: {
     label: "Finance reports",
-    query: (db, { cycleYear, category, limit, offset }) => {
+    query: async (db, { cycleYear, category, limit, offset }) => {
       const params = { limit, offset };
       let where = "WHERE 1=1";
       if (cycleYear) {
@@ -88,7 +88,7 @@ const ADMIN_TABLES = {
         where += " AND o.category = @category";
         params.category = category;
       }
-      const rows = db
+      const rows = await db
         .prepare(
           `SELECT f.id, f.candidate_id, c.name AS candidate_name, c.party, c.is_incumbent,
                   o.office_code, c.cycle_year, f.period_key, fp.label AS period_label,
@@ -103,7 +103,7 @@ const ADMIN_TABLES = {
            LIMIT @limit OFFSET @offset`
         )
         .all(params);
-      const total = db
+      const total = (await db
         .prepare(
           `SELECT COUNT(*) AS count
            FROM finance_reports f
@@ -111,22 +111,22 @@ const ADMIN_TABLES = {
            JOIN offices o ON o.id = c.office_id
            ${where}`
         )
-        .get(params).count;
+        .get(params)).count;
       return { rows, total };
     },
-    exportQuery: (db, filters) =>
-      adminQueryTable(db, "finance_reports", { ...filters, limit: 100000, offset: 0 }).rows,
+    exportQuery: async (db, filters) =>
+      (await adminQueryTable(db, "finance_reports", { ...filters, limit: 100000, offset: 0 })).rows,
   },
   offices: {
     label: "Offices",
-    query: (db, { cycleYear, category, limit, offset }) => {
+    query: async (db, { cycleYear, category, limit, offset }) => {
       const params = { limit, offset, cycleYear: cycleYear ?? 2026 };
       let where = "WHERE 1=1";
       if (category) {
         where += " AND o.category = @category";
         params.category = category;
       }
-      const rows = db
+      const rows = await db
         .prepare(
           `SELECT o.id, o.category, o.district, o.office_code, o.office_name, o.sort_order,
                   o.seat_holder_name, o.seat_holder_party,
@@ -141,15 +141,15 @@ const ADMIN_TABLES = {
            LIMIT @limit OFFSET @offset`
         )
         .all(params);
-      const total = db.prepare(`SELECT COUNT(*) AS count FROM offices o ${where}`).get(params).count;
+      const total = (await db.prepare(`SELECT COUNT(*) AS count FROM offices o ${where}`).get(params)).count;
       return { rows, total };
     },
-    exportQuery: (db, filters) =>
-      adminQueryTable(db, "offices", { ...filters, limit: 100000, offset: 0 }).rows,
+    exportQuery: async (db, filters) =>
+      (await adminQueryTable(db, "offices", { ...filters, limit: 100000, offset: 0 })).rows,
   },
   race_sheet_rows: {
     label: "Race sheet rows",
-    query: (db, { cycleYear, category, limit, offset }) => {
+    query: async (db, { cycleYear, category, limit, offset }) => {
       const params = { limit, offset };
       let where = "WHERE 1=1";
       if (cycleYear) {
@@ -160,7 +160,7 @@ const ADMIN_TABLES = {
         where += " AND r.category = @category";
         params.category = category;
       }
-      const rows = db
+      const rows = await db
         .prepare(
           `SELECT r.id, r.office_id, o.office_code, r.cycle_year, r.category, r.row_order,
                   r.incumbent_name, r.incumbent_party, r.candidate_name, r.candidate_party,
@@ -172,41 +172,42 @@ const ADMIN_TABLES = {
            LIMIT @limit OFFSET @offset`
         )
         .all(params);
-      const total = db
+      const total = (await db
         .prepare(`SELECT COUNT(*) AS count FROM race_sheet_rows r ${where}`)
-        .get(params).count;
+        .get(params)).count;
       return { rows, total };
     },
-    exportQuery: (db, filters) =>
-      adminQueryTable(db, "race_sheet_rows", { ...filters, limit: 100000, offset: 0 }).rows,
+    exportQuery: async (db, filters) =>
+      (await adminQueryTable(db, "race_sheet_rows", { ...filters, limit: 100000, offset: 0 })).rows,
   },
   targeting_organizations: {
     label: "Targeting organizations",
-    query: (db, { limit, offset }) => {
-      const rows = db
+    query: async (db, { limit, offset }) => {
+      const rows = await db
         .prepare(
           `SELECT org_key, org_key AS id, name
            FROM targeting_organizations
            ORDER BY name COLLATE NOCASE LIMIT @limit OFFSET @offset`
         )
         .all({ limit, offset });
-      const total = db.prepare(`SELECT COUNT(*) AS count FROM targeting_organizations`).get().count;
+      const total = (await db.prepare(`SELECT COUNT(*) AS count FROM targeting_organizations`).get()).count;
       return { rows, total };
     },
-    exportQuery: (db) => adminQueryTable(db, "targeting_organizations", { limit: 100000, offset: 0 }).rows,
+    exportQuery: async (db) =>
+      (await adminQueryTable(db, "targeting_organizations", { limit: 100000, offset: 0 })).rows,
   },
   consultants: {
     label: "Consultants",
-    query: (db, { cycleYear, category, limit, offset }) => {
-      const all = listConsultants(db, { cycleYear, category });
+    query: async (db, { cycleYear, category, limit, offset }) => {
+      const all = await listConsultants(db, { cycleYear, category });
       const rows = all.slice(offset, offset + limit).map((row) => ({
         ...row,
         id: row.consultant_key,
       }));
       return { rows, total: all.length };
     },
-    exportQuery: (db, filters) =>
-      adminQueryTable(db, "consultants", { ...filters, limit: 100000, offset: 0 }).rows,
+    exportQuery: async (db, filters) =>
+      (await adminQueryTable(db, "consultants", { ...filters, limit: 100000, offset: 0 })).rows,
   },
 };
 
@@ -291,12 +292,12 @@ function coerceAdminValue(column, value) {
   return String(value);
 }
 
-export function bulkUpdateAdminTableRows(db, tableName, updates, { cycleYear } = {}) {
+export async function bulkUpdateAdminTableRows(db, tableName, updates, { cycleYear } = {}) {
   if (!ADMIN_TABLE_NAMES.has(tableName)) throw new Error("unknown table");
   const editable = new Set(EDITABLE_COLUMNS[tableName] ?? []);
   if (editable.size === 0) throw new Error("table is not editable");
 
-  const apply = db.transaction((rows) => {
+  const apply = db.transaction(async (rows) => {
     let updated = 0;
     for (const item of rows) {
       const fields = { ...(item?.fields ?? item?.patch ?? {}) };
@@ -313,7 +314,7 @@ export function bulkUpdateAdminTableRows(db, tableName, updates, { cycleYear } =
           params[paramKey] = coerceAdminValue(key, raw);
         }
         if (setParts.length === 0) continue;
-        const result = db
+        const result = await db
           .prepare(`UPDATE filing_periods SET ${setParts.join(", ")} WHERE period_key = @period_key`)
           .run(params);
         if (result.changes === 0) throw new Error(`period ${periodKey} not found`);
@@ -333,7 +334,7 @@ export function bulkUpdateAdminTableRows(db, tableName, updates, { cycleYear } =
           params[paramKey] = coerceAdminValue(key, raw);
         }
         if (setParts.length === 0) continue;
-        const result = db
+        const result = await db
           .prepare(`UPDATE targeting_organizations SET ${setParts.join(", ")} WHERE org_key = @org_key`)
           .run(params);
         if (result.changes === 0) throw new Error(`organization ${orgKey} not found`);
@@ -353,7 +354,7 @@ export function bulkUpdateAdminTableRows(db, tableName, updates, { cycleYear } =
           params[paramKey] = coerceAdminValue(key, raw);
         }
         if (setParts.length === 0) continue;
-        const result = db
+        const result = await db
           .prepare(`UPDATE consultants SET ${setParts.join(", ")} WHERE consultant_key = @consultant_key`)
           .run(params);
         if (result.changes === 0) throw new Error(`consultant ${consultantKey} not found`);
@@ -365,17 +366,17 @@ export function bulkUpdateAdminTableRows(db, tableName, updates, { cycleYear } =
       if (!Number.isInteger(rowId) || rowId < 1) throw new Error("invalid row id");
 
       if (tableName === "offices" && Object.prototype.hasOwnProperty.call(fields, "target_org_keys")) {
-        syncOfficeTargets(db, rowId, cycleYear ?? 2026, parseKeyList(fields.target_org_keys));
+        await syncOfficeTargets(db, rowId, cycleYear ?? 2026, parseKeyList(fields.target_org_keys));
         delete fields.target_org_keys;
       }
 
       if (tableName === "candidates" && Object.prototype.hasOwnProperty.call(fields, "consultant_keys")) {
-        syncCandidateConsultants(db, rowId, parseKeyList(fields.consultant_keys));
+        await syncCandidateConsultants(db, rowId, parseKeyList(fields.consultant_keys));
         delete fields.consultant_keys;
       }
 
       if (tableName === "finance_reports" && fields.period_key != null) {
-        const maps = loadFilingPeriodMaps(db);
+        const maps = await loadFilingPeriodMaps(db);
         const periodKey = String(fields.period_key).trim();
         fields.report_period_end = canonicalReportEndForPeriod(
           periodKey,
@@ -396,17 +397,17 @@ export function bulkUpdateAdminTableRows(db, tableName, updates, { cycleYear } =
         if (tableName === "offices" || tableName === "candidates") updated += 1;
         continue;
       }
-      const result = db.prepare(`UPDATE ${tableName} SET ${setParts.join(", ")} WHERE id = @id`).run(params);
+      const result = await db.prepare(`UPDATE ${tableName} SET ${setParts.join(", ")} WHERE id = @id`).run(params);
       if (result.changes === 0) throw new Error(`row ${rowId} not found`);
       updated += 1;
     }
     return { updated };
   });
 
-  return apply(updates);
+  return await apply(updates);
 }
 
-export function insertAdminTableRow(db, tableName, fields) {
+export async function insertAdminTableRow(db, tableName, fields) {
   const columns = INSERTABLE_TABLES[tableName];
   if (!columns?.length) throw new Error("table does not support inserts");
 
@@ -422,35 +423,36 @@ export function insertAdminTableRow(db, tableName, fields) {
   }
 
   if (tableName === "targeting_organizations") {
-    db.prepare(
+    await db.prepare(
       `INSERT INTO targeting_organizations (${columns.join(", ")}) VALUES (${values.join(", ")})`
     ).run(params);
-    return db.prepare(`SELECT org_key AS id, org_key, name FROM targeting_organizations WHERE org_key = ?`).get(params.org_key);
+    return await db.prepare(`SELECT org_key AS id, org_key, name FROM targeting_organizations WHERE org_key = ?`).get(params.org_key);
   }
 
   if (tableName === "consultants") {
-    db.prepare(`INSERT INTO consultants (${columns.join(", ")}) VALUES (${values.join(", ")})`).run(params);
-    return db
+    await db.prepare(`INSERT INTO consultants (${columns.join(", ")}) VALUES (${values.join(", ")})`).run(params);
+    return await db
       .prepare(`SELECT consultant_key AS id, consultant_key, name FROM consultants WHERE consultant_key = ?`)
       .get(params.consultant_key);
   }
 
   if (tableName === "filing_periods") {
-    db.prepare(`INSERT INTO filing_periods (${columns.join(", ")}) VALUES (${values.join(", ")})`).run(params);
-    return db.prepare(`SELECT * FROM filing_periods WHERE period_key = ?`).get(params.period_key);
+    await db.prepare(`INSERT INTO filing_periods (${columns.join(", ")}) VALUES (${values.join(", ")})`).run(params);
+    return await db.prepare(`SELECT * FROM filing_periods WHERE period_key = ?`).get(params.period_key);
   }
 
   if (tableName === "candidates") {
-    const office = db.prepare(`SELECT id FROM offices WHERE id = ?`).get(params.office_id);
+    const office = await db.prepare(`SELECT id FROM offices WHERE id = ?`).get(params.office_id);
     if (!office) throw new Error("office not found");
 
-    db.prepare(
+    const result = await db.prepare(
       `INSERT INTO candidates (office_id, cycle_year, name, party, is_incumbent, filed, withdrew)
-       VALUES (@office_id, @cycle_year, @name, @party, @is_incumbent, 0, 0)`
+       VALUES (@office_id, @cycle_year, @name, @party, @is_incumbent, 0, 0)
+       RETURNING id`
     ).run(params);
 
-    const id = db.prepare(`SELECT last_insert_rowid() AS id`).get().id;
-    return db
+    const id = result.lastInsertRowid;
+    return await db
       .prepare(
         `SELECT c.id, c.vuid, c.office_id, o.office_code, o.office_name, o.category,
                 c.cycle_year, c.name, c.party, c.is_incumbent, c.tec_filer_id,
@@ -465,7 +467,7 @@ export function insertAdminTableRow(db, tableName, fields) {
   throw new Error("unsupported insert table");
 }
 
-export function deleteAdminTableRow(db, tableName, rowId) {
+export async function deleteAdminTableRow(db, tableName, rowId) {
   const config = DELETABLE_TABLES[tableName];
   if (!config) throw new Error("table rows cannot be deleted");
 
@@ -476,19 +478,19 @@ export function deleteAdminTableRow(db, tableName, rowId) {
     throw new Error("invalid row id");
   }
 
-  const result = db.prepare(`DELETE FROM ${tableName} WHERE ${config.keyColumn} = ?`).run(key);
+  const result = await db.prepare(`DELETE FROM ${tableName} WHERE ${config.keyColumn} = ?`).run(key);
   if (result.changes === 0) throw new Error("row not found");
   return { deleted: result.changes };
 }
 
-export function loadAdminMultiSelectOptions(db, refTable, { cycleYear, category } = {}) {
+export async function loadAdminMultiSelectOptions(db, refTable, { cycleYear, category } = {}) {
   if (refTable === "targeting_organizations") {
-    return db
+    return await db
       .prepare(`SELECT org_key AS value, name AS label FROM targeting_organizations ORDER BY name COLLATE NOCASE`)
       .all();
   }
   if (refTable === "consultants") {
-    return listConsultants(db, { cycleYear, category }).map((row) => ({
+    return (await listConsultants(db, { cycleYear, category })).map((row) => ({
       value: row.consultant_key,
       label: `${row.name} (${row.candidate_count ?? 0})`,
       count: row.candidate_count ?? 0,
@@ -501,7 +503,7 @@ export function loadAdminMultiSelectOptions(db, refTable, { cycleYear, category 
       where += " AND category = @category";
       params.category = category;
     }
-    return db
+    return await db
       .prepare(
         `SELECT id AS value, office_code || ' — ' || office_name AS label
          FROM offices
@@ -524,7 +526,7 @@ export function listAdminTables() {
   }));
 }
 
-export function adminQueryTable(
+export async function adminQueryTable(
   db,
   tableName,
   { cycleYear, category, limit = 100, offset = 0, singleCandidateRaces = false } = {}
@@ -534,10 +536,10 @@ export function adminQueryTable(
   return table.query(db, { cycleYear, category, limit, offset, singleCandidateRaces });
 }
 
-export function exportTableCsv(db, tableName, filters = {}) {
+export async function exportTableCsv(db, tableName, filters = {}) {
   const table = ADMIN_TABLES[tableName];
   if (!table) throw new Error("unknown table");
-  const rows = table.exportQuery(db, filters);
+  const rows = await table.exportQuery(db, filters);
   if (rows.length === 0) return "";
   const headers = Object.keys(rows[0]);
   const lines = [headers.join(",")];

@@ -102,8 +102,8 @@ function partyBallotNames(candidates, party, onBallot, seatHolderName, seatHolde
     .join("; ");
 }
 
-export function buildBallotRowsForCategory(database, category, cycleYear) {
-  const offices = database
+export async function buildBallotRowsForCategory(database, category, cycleYear) {
+  const offices = await database
     .prepare(
       `SELECT id, office_name, seat_holder_name, seat_holder_party
        FROM offices
@@ -112,7 +112,7 @@ export function buildBallotRowsForCategory(database, category, cycleYear) {
     )
     .all(category);
 
-  const sheetRows = database
+  const sheetRows = await database
     .prepare(
       `SELECT office_id, incumbent_name, incumbent_party, running_for_reelection,
               candidate_name, candidate_party
@@ -121,7 +121,7 @@ export function buildBallotRowsForCategory(database, category, cycleYear) {
     )
     .all(category, cycleYear);
 
-  const dbCandidates = database
+  const dbCandidates = await database
     .prepare(
       `SELECT c.office_id, c.name, c.party, c.is_incumbent, c.withdrew
        FROM candidates c
@@ -167,11 +167,11 @@ export function buildBallotRowsForCategory(database, category, cycleYear) {
   });
 }
 
-export function buildBallotWorkbookBuffer(database, cycleYear) {
+export async function buildBallotWorkbookBuffer(database, cycleYear) {
   const workbook = XLSX.utils.book_new();
 
   for (const { category, sheetName } of EXPORT_CATEGORIES) {
-    const rows = buildBallotRowsForCategory(database, category, cycleYear);
+    const rows = await buildBallotRowsForCategory(database, category, cycleYear);
     const worksheet = XLSX.utils.json_to_sheet(rows, { header: HEADERS });
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
   }

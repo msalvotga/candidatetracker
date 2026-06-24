@@ -1,10 +1,11 @@
-import { getDb, closeDb } from "./db.mjs";
+import { getDb, closeDb, initDb } from "./db.mjs";
 import { ensureMetricsSchema } from "./lib/metricsImport.mjs";
 import { parseBenchmarkMargin } from "./lib/benchmarkMargin.mjs";
 import { HOUSE_BENCHMARKS } from "./data/house-benchmarks.mjs";
 
+await initDb();
 const db = getDb();
-ensureMetricsSchema(db);
+await ensureMetricsSchema(db);
 
 const upsert = db.prepare(
   `INSERT INTO office_metrics (office_id, trump_2024, cruz_2024, abbott_2022, leg_2024, leg_2022)
@@ -17,7 +18,7 @@ const upsert = db.prepare(
 
 let updated = 0;
 for (const row of HOUSE_BENCHMARKS) {
-  const office = db
+  const office = await db
     .prepare(`SELECT id FROM offices WHERE office_code = ?`)
     .get(`HD-${String(row.district).padStart(3, "0")}`);
   if (!office) {
@@ -25,7 +26,7 @@ for (const row of HOUSE_BENCHMARKS) {
     continue;
   }
 
-  upsert.run({
+  await upsert.run({
     officeId: office.id,
     trump: parseBenchmarkMargin(row.trump, { format: "margin" }),
     cruz: parseBenchmarkMargin(row.cruz, { format: "margin" }),
@@ -35,4 +36,4 @@ for (const row of HOUSE_BENCHMARKS) {
 }
 
 console.log(`Updated benchmark margins for ${updated} house districts.`);
-closeDb();
+await closeDb();

@@ -295,11 +295,11 @@ export async function fetchCapitolMetadata(year) {
   return file;
 }
 
-export function saveContestCandidates(database, officeCode, metricKey, contest) {
-  const office = database.prepare(`SELECT id FROM offices WHERE office_code = ?`).get(officeCode);
+export async function saveContestCandidates(database, officeCode, metricKey, contest) {
+  const office = await database.prepare(`SELECT id FROM offices WHERE office_code = ?`).get(officeCode);
   if (!office) return false;
 
-  database
+  await database
     .prepare(`DELETE FROM metric_contest_candidates WHERE office_id = ? AND metric_key = ?`)
     .run(office.id, metricKey);
 
@@ -311,8 +311,9 @@ export function saveContestCandidates(database, officeCode, metricKey, contest) 
      )`
   );
 
-  contest.candidates.forEach((candidate, index) => {
-    insert.run({
+  for (let index = 0; index < contest.candidates.length; index += 1) {
+    const candidate = contest.candidates[index];
+    await insert.run({
       officeId: office.id,
       metricKey,
       name: candidate.name,
@@ -323,18 +324,18 @@ export function saveContestCandidates(database, officeCode, metricKey, contest) 
       unopposed: contest.unopposed ? 1 : 0,
       contest_name: contest.contestName,
     });
-  });
+  }
 
   return true;
 }
 
-export function upsertLegMetric(database, officeCode, field, gopShare, contest = null) {
-  const office = database.prepare(`SELECT id FROM offices WHERE office_code = ?`).get(officeCode);
+export async function upsertLegMetric(database, officeCode, field, gopShare, contest = null) {
+  const office = await database.prepare(`SELECT id FROM offices WHERE office_code = ?`).get(officeCode);
   if (!office) return false;
 
   const margin = marginFromGopShare(gopShare);
 
-  database
+  await database
     .prepare(
       `INSERT INTO office_metrics (office_id, trump_2024, cruz_2024, abbott_2022, leg_2024, leg_2022)
        VALUES (@officeId, NULL, NULL, NULL, NULL, NULL)
@@ -342,13 +343,13 @@ export function upsertLegMetric(database, officeCode, field, gopShare, contest =
     )
     .run({ officeId: office.id });
 
-  database.prepare(`UPDATE office_metrics SET ${field} = @value WHERE office_id = @officeId`).run({
+  await database.prepare(`UPDATE office_metrics SET ${field} = @value WHERE office_id = @officeId`).run({
     officeId: office.id,
     value: margin,
   });
 
   if (contest) {
-    saveContestCandidates(database, officeCode, field, contest);
+    await saveContestCandidates(database, officeCode, field, contest);
   }
 
   return true;
@@ -372,7 +373,7 @@ export async function importTedElectionResults(database, options = {}) {
           summary.byYear[year].skipped += 1;
           return { job, ok: false, reason: "no votes" };
         }
-        const saved = upsertLegMetric(database, job.officeCode, job.field, contest.gopShare, contest);
+        const saved = await upsertLegMetric(database, job.officeCode, job.field, contest.gopShare, contest);
         if (!saved) {
           summary.skipped += 1;
           summary.byYear[year].skipped += 1;

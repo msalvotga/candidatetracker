@@ -1,6 +1,6 @@
 import path from "node:path";
 import XLSX from "xlsx";
-import { getDb, closeDb } from "./db.mjs";
+import { getDb, closeDb, initDb } from "./db.mjs";
 import { importCountySheets } from "./lib/countyImport.mjs";
 import {
   clearAllOfficeMetrics,
@@ -19,10 +19,11 @@ const defaultPath = path.resolve(
 const filePath = process.argv[2] ? path.resolve(process.argv[2]) : defaultPath;
 
 const workbook = XLSX.readFile(filePath);
+await initDb();
 const database = getDb();
 
-ensureMetricsSchema(database);
-clearAllOfficeMetrics(database);
+await ensureMetricsSchema(database);
+await clearAllOfficeMetrics(database);
 
 let totalRows = 0;
 
@@ -35,8 +36,8 @@ for (const config of SHEET_CONFIGS) {
 
   const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
   const parsed = parseSheetRows(rawRows, config);
-  const count = importParsedRows(database, config, parsed);
-  const metricCount = importSheetRowMetrics(database, rawRows, config);
+  const count = await importParsedRows(database, config, parsed);
+  const metricCount = await importSheetRowMetrics(database, rawRows, config);
   totalRows += count;
   console.log(`${config.sheetName}: ${count} rows, ${metricCount} offices with metrics`);
 }
@@ -44,16 +45,16 @@ for (const config of SHEET_CONFIGS) {
 const dataSheet = workbook.Sheets.Data;
 if (dataSheet) {
   const dataRows = XLSX.utils.sheet_to_json(dataSheet, { header: 1, defval: "" });
-  const n = importDataSheetMetrics(database, dataRows);
+  const n = await importDataSheetMetrics(database, dataRows);
   console.log(`Data sheet: ${n} office metric rows`);
 } else {
   console.warn("Data sheet not found");
 }
 
 console.log("\nImporting county results…");
-importCountySheets(database, workbook);
+await importCountySheets(database, workbook);
 
-const summary = database
+const summary = await database
   .prepare(
     `SELECT category, COUNT(*) AS n FROM race_sheet_rows WHERE cycle_year = 2026 GROUP BY category ORDER BY category`
   )
@@ -64,4 +65,4 @@ for (const row of summary) {
   console.log(`  ${row.category}: ${row.n}`);
 }
 
-closeDb();
+await closeDb();

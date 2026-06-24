@@ -1,6 +1,6 @@
 # Texas Candidate Lookup
 
-Separate app for looking up and editing GOP/Dem candidates by Texas race. Uses a local SQLite database — independent from the main election night tracker (PostgreSQL).
+App for looking up and editing GOP/Dem candidates by Texas race. Uses PostgreSQL.
 
 ## Data model
 
@@ -28,12 +28,23 @@ The importer reads all five tabs and maps:
 
 Finance is attached to the incumbent when col B is filled, otherwise to the challenger in col E.
 
+## Migrate from SQLite (one-time)
+
+If you have an existing `candidates.db` SQLite file:
+
+```bash
+export DATABASE_URL="postgresql://..."
+npm run db:migrate-from-sqlite -- path/to/candidates.db
+```
+
+Defaults to `data/candidates.db` if no path is given. This drops and recreates all tables in PostgreSQL, then copies every row.
+
 ## Run locally
 
 ```bash
-cd candidate-lookup
 npm install
-npm run db:init    # seed 244 Texas offices (first time)
+export DATABASE_URL="postgresql://..."   # required
+npm run db:init    # seed 244 Texas offices if the database is empty
 npm run dev        # API :3850, UI :5174
 ```
 
@@ -44,8 +55,6 @@ Edit GOP/Dem cells in the table; changes save on blur or Enter.
 - `GET /api/races?category=house&year=2026` — spreadsheet rows for a tab
 - `PUT /api/candidates` — upsert candidate name for office/year/party
 - `GET /api/offices/:id/history` — results + finance for one seat
-
-Database file: `data/candidates.db` locally (gitignored). On Render, set `CANDIDATE_LOOKUP_DB_PATH=/var/data/candidates.db` with a persistent disk mounted at `/var/data`.
 
 ## Deploy on Render
 
@@ -62,17 +71,10 @@ Database file: `data/candidates.db` locally (gitignored). On Render, set `CANDID
 | Variable | Value |
 |----------|--------|
 | `NODE_ENV` | `production` |
-| `CANDIDATE_LOOKUP_DB_PATH` | `/var/data/candidates.db` |
-
-**Persistent disk** (required — SQLite data survives redeploys):
-
-| Setting | Value |
-|--------|--------|
-| Mount path | `/var/data` |
-| Size | 1 GB (or more if needed) |
+| `DATABASE_URL` | Render Postgres internal or external connection string |
 
 Render sets `PORT` automatically; the server listens on that port and serves the built UI from `dist/`.
 
-First deploy seeds Texas offices automatically if the database is empty. To load spreadsheet data after deploy, run import scripts locally against a copy of the DB, or use the in-app admin UI.
+First deploy seeds Texas offices automatically if the database is empty. To load spreadsheet data after deploy, run import scripts locally (pointing at the same `DATABASE_URL`), or use the in-app admin UI.
 
 Alternatively, connect this repo with the included `render.yaml` blueprint.

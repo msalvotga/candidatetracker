@@ -7,8 +7,8 @@ function sheetRowsByOffice(sheetRows) {
   return map;
 }
 
-export function loadOfficeSeatHolders(db, category) {
-  const rows = db
+export async function loadOfficeSeatHolders(db, category) {
+  const rows = await db
     .prepare(
       `SELECT id AS office_id, seat_holder_name, seat_holder_party
        FROM offices
@@ -43,8 +43,8 @@ export function computeRaceIsOpen(officeSheetRows, race) {
   return !race.candidates.some((candidate) => candidate.is_incumbent);
 }
 
-export function attachSeatHoldersToRaces(db, races, sheetRows, category) {
-  const officeHolders = loadOfficeSeatHolders(db, category);
+export async function attachSeatHoldersToRaces(db, races, sheetRows, category) {
+  const officeHolders = await loadOfficeSeatHolders(db, category);
   const rowsByOffice = sheetRowsByOffice(sheetRows);
 
   return races.map((race) => ({

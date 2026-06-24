@@ -3,7 +3,8 @@ import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getDb } from "./db.mjs";
+import { getDb, initDb } from "./db.mjs";
+import { isConstraintError } from "./sql.mjs";
 import {
   adminQueryTable,
   bulkUpdateAdminTableRows,
@@ -17,7 +18,7 @@ import {
 import { listConsultants, loadCandidateConsultantsMap, attachConsultantsToRaces, addConsultant } from "./lib/consultants.mjs";
 import { syncRaceCandidates, updateCandidateVuid } from "./lib/candidates.mjs";
 import { addFinanceReport, attachFinanceHistoryToRaces, bulkImportFinanceReports, loadFinanceHistoryMap } from "./lib/financeReports.mjs";
-import { addFilingPeriod, listFilingPeriods } from "./lib/filingPeriods.mjs";
+import { addFilingPeriod, listFilingPeriods, seedFilingPeriods } from "./lib/filingPeriods.mjs";
 import { buildContestResponse, detectUncontested } from "./lib/metricContest.mjs";
 import { gopShareFromMargin, isLegMetricKey } from "./lib/benchmarkMargin.mjs";
 import { seedOfficesIfEmpty } from "./seed-offices.mjs";
@@ -49,18 +50,18 @@ function parseYear(value, fallback = new Date().getFullYear()) {
   return year;
 }
 
-app.get("/api/health", (_req, res) => {
+app.get("/api/health", async (_req, res) => {
   try {
-    getDb().prepare("SELECT 1 AS ok").get();
-    res.json({ ok: true, db: "sqlite" });
+    await getDb().prepare("SELECT 1 AS ok").get();
+    res.json({ ok: true, db: "postgres" });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
-app.get("/api/cycles", (_req, res) => {
+app.get("/api/cycles", async (_req, res) => {
   const db = getDb();
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT DISTINCT cycle_year AS year FROM race_sheet_rows
        UNION
@@ -111,8 +112,8 @@ function metricFieldsForCategory(category) {
   return fields;
 }
 
-function buildUncontestedMap(database, category) {
-  const rows = database
+async function buildUncontestedMap(database, category) {
+  const rows = await database
     .prepare(
       `SELECT c.office_id, c.metric_key, c.party, c.unopposed
        FROM metric_contest_candidates c
@@ -236,7 +237,7 @@ function buildRacesFromSheetRows(sheetRows, metricsByOffice, category, uncontest
     .filter((race) => race.candidates.length > 0);
 }
 
-app.get("/api/races", (req, res) => {
+app.get("/api/races", async (req, res) => {
   const category = String(req.query.category ?? "");
   if (!VALID_CATEGORIES.has(category)) {
     res.status(400).json({ error: "category must be house, senate, sboe, statewide, or congressional" });
@@ -246,7 +247,7 @@ app.get("/api/races", (req, res) => {
   const cycleYear = parseYear(req.query.year);
   const db = getDb();
 
-  const rows = db
+  const rows = await db
     .prepare(
       `
       SELECT
@@ -276,7 +277,7 @@ app.get("/api/races", (req, res) => {
     )
     .all({ category, cycleYear });
 
-  const metricsRows = db
+  const metricsRows = await db
     .prepare(
       `SELECT m.* FROM office_metrics m
        JOIN offices o ON o.id = m.office_id
@@ -284,46 +285,46 @@ app.get("/api/races", (req, res) => {
     )
     .all(category);
   const metricsByOffice = new Map(metricsRows.map((m) => [m.office_id, m]));
-  const uncontestedMap = buildUncontestedMap(db, category);
-  const financeMap = loadFinanceHistoryMap(db, category, cycleYear);
+  const uncontestedMap = await buildUncontestedMap(db, category);
+  const financeMap = await loadFinanceHistoryMap(db, category, cycleYear);
   let races = buildRacesFromSheetRows(rows, metricsByOffice, category, uncontestedMap);
-  syncRaceCandidates(db, races, cycleYear, category);
+  await syncRaceCandidates(db, races, cycleYear, category);
   races = attachFinanceHistoryToRaces(races, financeMap);
-  races = attachSeatHoldersToRaces(db, races, rows, category);
-  const targetsByOffice = loadOfficeTargetsByOffice(db, category, cycleYear);
+  races = await attachSeatHoldersToRaces(db, races, rows, category);
+  const targetsByOffice = await loadOfficeTargetsByOffice(db, category, cycleYear);
   races = attachTargetsToRaces(races, targetsByOffice);
-  const consultantsMap = loadCandidateConsultantsMap(db, category, cycleYear);
+  const consultantsMap = await loadCandidateConsultantsMap(db, category, cycleYear);
   races = attachConsultantsToRaces(races, consultantsMap);
 
   res.json({
     category,
     cycleYear,
     races,
-    filing_periods: listFilingPeriods(db),
-    targeting_organizations: listTargetingOrganizations(db),
-    consultants: listConsultants(db, { cycleYear, category }),
+    filing_periods: await listFilingPeriods(db),
+    targeting_organizations: await listTargetingOrganizations(db),
+    consultants: await listConsultants(db, { cycleYear, category }),
   });
 });
 
-app.get("/api/filing-periods", (_req, res) => {
+app.get("/api/filing-periods", async (_req, res) => {
   const db = getDb();
-  res.json({ periods: listFilingPeriods(db) });
+  res.json({ periods: await listFilingPeriods(db) });
 });
 
-app.post("/api/filing-periods", (req, res) => {
+app.post("/api/filing-periods", async (req, res) => {
   const db = getDb();
   try {
-    const period = addFilingPeriod(db, req.body ?? {});
+    const period = await addFilingPeriod(db, req.body ?? {});
     res.json({ period });
   } catch (err) {
-    const status = err.code === "SQLITE_CONSTRAINT" ? 409 : 400;
+    const status = isConstraintError(err) ? 409 : 400;
     res.status(status).json({ error: err.message ?? "failed to add filing period" });
   }
 });
 
 const VALID_ELECTIONS = new Set(["pres_2024", "cruz_2024", "abbott_2022"]);
 
-app.get("/api/counties", (req, res) => {
+app.get("/api/counties", async (req, res) => {
   const election = String(req.query.election ?? "");
   if (!VALID_ELECTIONS.has(election)) {
     res.status(400).json({ error: "election must be pres_2024, cruz_2024, or abbott_2022" });
@@ -331,7 +332,7 @@ app.get("/api/counties", (req, res) => {
   }
 
   const db = getDb();
-  const counties = db
+  const counties = await db
     .prepare(
       `SELECT county_name, county_key, margin, gop_pct, dem_pct, gop_votes, dem_votes
        FROM county_election_results
@@ -345,7 +346,7 @@ app.get("/api/counties", (req, res) => {
 
 const VALID_METRIC_KEYS = new Set(["trump_2024", "cruz_2024", "abbott_2022", "leg_2024", "leg_2022"]);
 
-app.get("/api/offices/:officeId/metrics/:metricKey/contest", (req, res) => {
+app.get("/api/offices/:officeId/metrics/:metricKey/contest", async (req, res) => {
   const officeId = Number(req.params.officeId);
   const metricKey = String(req.params.metricKey ?? "");
   if (!Number.isInteger(officeId) || officeId < 1) {
@@ -358,7 +359,7 @@ app.get("/api/offices/:officeId/metrics/:metricKey/contest", (req, res) => {
   }
 
   const db = getDb();
-  const office = db
+  const office = await db
     .prepare(`SELECT id, office_code, office_name, category FROM offices WHERE id = ?`)
     .get(officeId);
   if (!office) {
@@ -366,12 +367,12 @@ app.get("/api/offices/:officeId/metrics/:metricKey/contest", (req, res) => {
     return;
   }
 
-  const metrics = db.prepare(`SELECT * FROM office_metrics WHERE office_id = ?`).get(officeId);
+  const metrics = await db.prepare(`SELECT * FROM office_metrics WHERE office_id = ?`).get(officeId);
   const stored = metrics?.[metricKey] ?? null;
   const gopShare = isLegMetricKey(metricKey) ? gopShareFromMargin(stored) : stored;
   const label = metricFieldsForCategory(office.category).find((field) => field.key === metricKey)?.label ?? metricKey;
 
-  const rows = db
+  const rows = await db
     .prepare(
       `SELECT candidate_name, party, votes, vote_pct, unopposed, contest_name, source
        FROM metric_contest_candidates
@@ -396,7 +397,7 @@ function parseOptionalNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
-app.patch("/api/offices/:officeId/metrics", (req, res) => {
+app.patch("/api/offices/:officeId/metrics", async (req, res) => {
   const officeId = Number(req.params.officeId);
   const { key, value } = req.body ?? {};
   if (!Number.isInteger(officeId) || officeId < 1) {
@@ -413,7 +414,7 @@ app.patch("/api/offices/:officeId/metrics", (req, res) => {
   }
 
   const db = getDb();
-  const office = db.prepare(`SELECT id FROM offices WHERE id = ?`).get(officeId);
+  const office = await db.prepare(`SELECT id FROM offices WHERE id = ?`).get(officeId);
   if (!office) {
     res.status(404).json({ error: "office not found" });
     return;
@@ -429,17 +430,17 @@ app.patch("/api/offices/:officeId/metrics", (req, res) => {
   };
   columns[key] = parsed;
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO office_metrics (office_id, trump_2024, cruz_2024, abbott_2022, leg_2024, leg_2022)
      VALUES (@officeId, @trump_2024, @cruz_2024, @abbott_2022, @leg_2024, @leg_2022)
      ON CONFLICT(office_id) DO UPDATE SET ${key} = excluded.${key}`
   ).run({ officeId, ...columns });
 
-  const updated = db.prepare(`SELECT * FROM office_metrics WHERE office_id = ?`).get(officeId);
+  const updated = await db.prepare(`SELECT * FROM office_metrics WHERE office_id = ?`).get(officeId);
   res.json({ office_id: officeId, metrics: updated });
 });
 
-app.post("/api/races/finance-reports", (req, res) => {
+app.post("/api/races/finance-reports", async (req, res) => {
   const {
     candidate_id,
     office_id,
@@ -457,7 +458,7 @@ app.post("/api/races/finance-reports", (req, res) => {
 
   const db = getDb();
   try {
-    const entry = addFinanceReport(db, {
+    const entry = await addFinanceReport(db, {
       candidateId: candidate_id != null ? Number(candidate_id) : null,
       officeId: Number(office_id),
       cycleYear: Number(cycle_year),
@@ -477,36 +478,36 @@ app.post("/api/races/finance-reports", (req, res) => {
   }
 });
 
-app.get("/api/targeting/organizations", (_req, res) => {
+app.get("/api/targeting/organizations", async (_req, res) => {
   const db = getDb();
-  res.json({ organizations: listTargetingOrganizations(db) });
+  res.json({ organizations: await listTargetingOrganizations(db) });
 });
 
-app.post("/api/targeting/organizations", (req, res) => {
+app.post("/api/targeting/organizations", async (req, res) => {
   try {
     const db = getDb();
-    const org = addTargetingOrganization(db, req.body ?? {});
+    const org = await addTargetingOrganization(db, req.body ?? {});
     res.json(org);
   } catch (err) {
-    const status = err.code === "SQLITE_CONSTRAINT" ? 409 : 400;
+    const status = isConstraintError(err) ? 409 : 400;
     res.status(status).json({ error: err.message ?? "failed to create organization" });
   }
 });
 
-app.get("/api/consultants", (req, res) => {
+app.get("/api/consultants", async (req, res) => {
   const db = getDb();
   const cycleYear = req.query.cycle_year ? Number(req.query.cycle_year) : null;
   const category = req.query.category ? String(req.query.category) : null;
-  res.json({ consultants: listConsultants(db, { cycleYear, category }) });
+  res.json({ consultants: await listConsultants(db, { cycleYear, category }) });
 });
 
-app.post("/api/consultants", (req, res) => {
+app.post("/api/consultants", async (req, res) => {
   try {
     const db = getDb();
-    const consultant = addConsultant(db, req.body ?? {});
+    const consultant = await addConsultant(db, req.body ?? {});
     res.json(consultant);
   } catch (err) {
-    const status = err.code === "SQLITE_CONSTRAINT" ? 409 : 400;
+    const status = isConstraintError(err) ? 409 : 400;
     res.status(status).json({ error: err.message ?? "failed to create consultant" });
   }
 });
@@ -515,7 +516,7 @@ app.get("/api/admin/tables", (_req, res) => {
   res.json({ tables: listAdminTables() });
 });
 
-app.get("/api/admin/tables/:tableName", (req, res) => {
+app.get("/api/admin/tables/:tableName", async (req, res) => {
   const tableName = String(req.params.tableName ?? "");
   const cycleYear = req.query.cycle_year ? Number(req.query.cycle_year) : null;
   const category = req.query.category ? String(req.query.category) : null;
@@ -524,14 +525,14 @@ app.get("/api/admin/tables/:tableName", (req, res) => {
 
   try {
     const db = getDb();
-    const result = adminQueryTable(db, tableName, { cycleYear, category, limit, offset });
+    const result = await adminQueryTable(db, tableName, { cycleYear, category, limit, offset });
     res.json({ table: tableName, ...result, limit, offset });
   } catch (err) {
     res.status(400).json({ error: err.message ?? "invalid table" });
   }
 });
 
-app.patch("/api/admin/tables/:tableName", (req, res) => {
+app.patch("/api/admin/tables/:tableName", async (req, res) => {
   const tableName = String(req.params.tableName ?? "");
   const updates = req.body?.updates;
   const cycleYear = req.body?.cycle_year ? Number(req.body.cycle_year) : null;
@@ -542,28 +543,28 @@ app.patch("/api/admin/tables/:tableName", (req, res) => {
 
   try {
     const db = getDb();
-    const result = bulkUpdateAdminTableRows(db, tableName, updates, { cycleYear });
+    const result = await bulkUpdateAdminTableRows(db, tableName, updates, { cycleYear });
     res.json(result);
   } catch (err) {
-    const status = err.code === "SQLITE_CONSTRAINT" ? 409 : 400;
+    const status = isConstraintError(err) ? 409 : 400;
     res.status(status).json({ error: err.message ?? "update failed" });
   }
 });
 
-app.post("/api/admin/tables/:tableName/rows", (req, res) => {
+app.post("/api/admin/tables/:tableName/rows", async (req, res) => {
   const tableName = String(req.params.tableName ?? "");
   const fields = req.body?.fields ?? req.body ?? {};
   try {
     const db = getDb();
-    const row = insertAdminTableRow(db, tableName, fields);
+    const row = await insertAdminTableRow(db, tableName, fields);
     res.json({ row });
   } catch (err) {
-    const status = err.code === "SQLITE_CONSTRAINT" ? 409 : 400;
+    const status = isConstraintError(err) ? 409 : 400;
     res.status(status).json({ error: err.message ?? "insert failed" });
   }
 });
 
-app.delete("/api/admin/tables/:tableName/rows", (req, res) => {
+app.delete("/api/admin/tables/:tableName/rows", async (req, res) => {
   const tableName = String(req.params.tableName ?? "");
   const rowId = req.body?.id ?? req.query?.id;
   if (rowId == null || String(rowId).trim() === "") {
@@ -572,34 +573,34 @@ app.delete("/api/admin/tables/:tableName/rows", (req, res) => {
   }
   try {
     const db = getDb();
-    const result = deleteAdminTableRow(db, tableName, rowId);
+    const result = await deleteAdminTableRow(db, tableName, rowId);
     res.json(result);
   } catch (err) {
-    const status = err.code === "SQLITE_CONSTRAINT" ? 409 : 400;
+    const status = isConstraintError(err) ? 409 : 400;
     res.status(status).json({ error: err.message ?? "delete failed" });
   }
 });
 
-app.get("/api/admin/multi-select/:refTable", (req, res) => {
+app.get("/api/admin/multi-select/:refTable", async (req, res) => {
   const refTable = String(req.params.refTable ?? "");
   const cycleYear = req.query.cycle_year ? Number(req.query.cycle_year) : null;
   const category = req.query.category ? String(req.query.category) : null;
   try {
     const db = getDb();
-    res.json({ options: loadAdminMultiSelectOptions(db, refTable, { cycleYear, category }) });
+    res.json({ options: await loadAdminMultiSelectOptions(db, refTable, { cycleYear, category }) });
   } catch (err) {
     res.status(400).json({ error: err.message ?? "invalid reference table" });
   }
 });
 
-app.get("/api/admin/export/:tableName.csv", (req, res) => {
+app.get("/api/admin/export/:tableName.csv", async (req, res) => {
   const tableName = String(req.params.tableName ?? "").replace(/\.csv$/i, "");
   const cycleYear = req.query.cycle_year ? Number(req.query.cycle_year) : null;
   const category = req.query.category ? String(req.query.category) : null;
 
   try {
     const db = getDb();
-    const csv = exportTableCsv(db, tableName, { cycleYear, category });
+    const csv = await exportTableCsv(db, tableName, { cycleYear, category });
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${tableName}.csv"`);
     res.send(csv);
@@ -614,38 +615,38 @@ app.get("/api/admin/finance/template.csv", (_req, res) => {
   res.send(`${FINANCE_BULK_TEMPLATE}\n`);
 });
 
-app.post("/api/admin/finance/bulk", (req, res) => {
+app.post("/api/admin/finance/bulk", async (req, res) => {
   const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
   if (!rows?.length) {
     res.status(400).json({ error: "body.rows must be a non-empty array" });
     return;
   }
   const db = getDb();
-  const result = bulkImportFinanceReports(db, rows);
+  const result = await bulkImportFinanceReports(db, rows);
   res.json(result);
 });
 
-app.patch("/api/admin/candidates/:candidateId/vuid", (req, res) => {
+app.patch("/api/admin/candidates/:candidateId/vuid", async (req, res) => {
   const candidateId = Number(req.params.candidateId);
   if (!Number.isInteger(candidateId) || candidateId < 1) {
     res.status(400).json({ error: "invalid candidate id" });
     return;
   }
   const db = getDb();
-  const exists = db.prepare(`SELECT id FROM candidates WHERE id = ?`).get(candidateId);
+  const exists = await db.prepare(`SELECT id FROM candidates WHERE id = ?`).get(candidateId);
   if (!exists) {
     res.status(404).json({ error: "candidate not found" });
     return;
   }
   try {
-    const vuid = updateCandidateVuid(db, candidateId, req.body?.vuid);
+    const vuid = await updateCandidateVuid(db, candidateId, req.body?.vuid);
     res.json({ id: candidateId, vuid });
   } catch (err) {
     res.status(409).json({ error: err.message ?? "failed to update vuid" });
   }
 });
 
-app.patch("/api/counties/:countyKey", (req, res) => {
+app.patch("/api/counties/:countyKey", async (req, res) => {
   const countyKey = String(req.params.countyKey ?? "").trim();
   const { election, margin, gop_pct, dem_pct, gop_votes, dem_votes } = req.body ?? {};
   if (!countyKey || !VALID_ELECTIONS.has(election)) {
@@ -654,7 +655,7 @@ app.patch("/api/counties/:countyKey", (req, res) => {
   }
 
   const db = getDb();
-  const existing = db
+  const existing = await db
     .prepare(`SELECT * FROM county_election_results WHERE election_key = ? AND county_key = ?`)
     .get(election, countyKey);
   if (!existing) {
@@ -683,7 +684,7 @@ app.patch("/api/counties/:countyKey", (req, res) => {
         : Math.round(Number(dem_votes))
       : existing.dem_votes;
 
-  db.prepare(
+  await db.prepare(
     `UPDATE county_election_results
      SET margin = @margin, gop_pct = @gop_pct, dem_pct = @dem_pct, gop_votes = @gop_votes, dem_votes = @dem_votes
      WHERE election_key = @election AND county_key = @countyKey`
@@ -697,7 +698,7 @@ app.patch("/api/counties/:countyKey", (req, res) => {
     dem_votes: Number.isFinite(nextDemVotes) ? nextDemVotes : null,
   });
 
-  const updated = db
+  const updated = await db
     .prepare(
       `SELECT county_name, county_key, margin, gop_pct, dem_pct, gop_votes, dem_votes
        FROM county_election_results WHERE election_key = ? AND county_key = ?`
@@ -707,7 +708,7 @@ app.patch("/api/counties/:countyKey", (req, res) => {
   res.json({ county: updated });
 });
 
-app.get("/api/offices/:officeId/history", (req, res) => {
+app.get("/api/offices/:officeId/history", async (req, res) => {
   const officeId = Number(req.params.officeId);
   if (!Number.isInteger(officeId) || officeId < 1) {
     res.status(400).json({ error: "invalid officeId" });
@@ -715,7 +716,7 @@ app.get("/api/offices/:officeId/history", (req, res) => {
   }
 
   const db = getDb();
-  const office = db
+  const office = await db
     .prepare(`SELECT id, category, district, office_code, office_name FROM offices WHERE id = ?`)
     .get(officeId);
   if (!office) {
@@ -723,7 +724,7 @@ app.get("/api/offices/:officeId/history", (req, res) => {
     return;
   }
 
-  const results = db
+  const results = await db
     .prepare(
       `SELECT cycle_year, election_type, candidate_name, party, votes, vote_pct, won, source
        FROM election_results
@@ -732,7 +733,7 @@ app.get("/api/offices/:officeId/history", (req, res) => {
     )
     .all(officeId);
 
-  const finance = db
+  const finance = await db
     .prepare(
       `
       SELECT
@@ -758,8 +759,6 @@ app.get("/api/offices/:officeId/history", (req, res) => {
   res.json({ office, results, finance });
 });
 
-seedOfficesIfEmpty(getDb());
-
 const distIndex = path.join(distDir, "index.html");
 if (fs.existsSync(distIndex)) {
   app.use(express.static(distDir, { index: false, maxAge: "1h" }));
@@ -768,7 +767,18 @@ if (fs.existsSync(distIndex)) {
   });
 }
 
-app.listen(PORT, () => {
-  const mode = fs.existsSync(distIndex) ? "production (API + static UI)" : "API only";
-  console.log(`Candidate tracker listening on port ${PORT} — ${mode}`);
+async function start() {
+  await initDb();
+  const db = getDb();
+  await seedOfficesIfEmpty(db);
+  await seedFilingPeriods(db);
+  app.listen(PORT, () => {
+    const mode = fs.existsSync(distIndex) ? "production (API + static UI)" : "API only";
+    console.log(`Candidate tracker listening on port ${PORT} — ${mode}`);
+  });
+}
+
+start().catch((err) => {
+  console.error("Failed to start server:", err);
+  process.exit(1);
 });

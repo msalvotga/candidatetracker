@@ -1,4 +1,4 @@
-export function listConsultants(db, { cycleYear, category } = {}) {
+export async function listConsultants(db, { cycleYear, category } = {}) {
   const params = {};
   let countFilter = "";
   if (cycleYear) {
@@ -24,8 +24,8 @@ export function listConsultants(db, { cycleYear, category } = {}) {
     .all(params);
 }
 
-export function loadCandidateConsultantsMap(db, category, cycleYear) {
-  const rows = db
+export async function loadCandidateConsultantsMap(db, category, cycleYear) {
+  const rows = await db
     .prepare(
       `SELECT c.id AS candidate_id, c.office_id, c.name, c.party, c.is_incumbent,
               cc.consultant_key, con.name
@@ -67,39 +67,39 @@ export function attachConsultantsToRaces(races, consultantsMap) {
   }));
 }
 
-export function syncCandidateConsultants(db, candidateId, consultantKeys) {
+export async function syncCandidateConsultants(db, candidateId, consultantKeys) {
   const keys = [...new Set(consultantKeys.map((key) => String(key).trim()).filter(Boolean))];
-  const apply = db.transaction(() => {
-    db.prepare(`DELETE FROM candidate_consultants WHERE candidate_id = ?`).run(candidateId);
+  const apply = db.transaction(async () => {
+    await db.prepare(`DELETE FROM candidate_consultants WHERE candidate_id = ?`).run(candidateId);
     const insert = db.prepare(
       `INSERT INTO candidate_consultants (candidate_id, consultant_key) VALUES (?, ?)`
     );
     for (const consultantKey of keys) {
-      insert.run(candidateId, consultantKey);
+      await insert.run(candidateId, consultantKey);
     }
     const names = keys.length
-      ? db
+      ? (await db
           .prepare(
             `SELECT name FROM consultants WHERE consultant_key IN (${keys.map(() => "?").join(", ")}) ORDER BY name COLLATE NOCASE`
           )
-          .all(...keys)
+          .all(...keys))
           .map((row) => row.name)
           .join(", ")
       : null;
-    db.prepare(`UPDATE candidates SET consultant = ? WHERE id = ?`).run(names, candidateId);
+    await db.prepare(`UPDATE candidates SET consultant = ? WHERE id = ?`).run(names, candidateId);
   });
-  apply();
+  await apply();
   return keys;
 }
 
-export function addConsultant(db, { consultant_key, name }) {
+export async function addConsultant(db, { consultant_key, name }) {
   const key = String(consultant_key ?? "").trim();
   const consultantName = String(name ?? "").trim();
   if (!key || !consultantName) throw new Error("consultant_key and name required");
   if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(key)) {
     throw new Error("consultant_key must start with a letter and contain only letters, numbers, _ or -");
   }
-  db.prepare(`INSERT INTO consultants (consultant_key, name) VALUES (?, ?)`).run(key, consultantName);
+  await db.prepare(`INSERT INTO consultants (consultant_key, name) VALUES (?, ?)`).run(key, consultantName);
   return { consultant_key: key, name: consultantName };
 }
 
