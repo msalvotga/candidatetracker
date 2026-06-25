@@ -1,19 +1,25 @@
-/** R% − D% margins for TX Senate districts (2024 Cruz/Trump, 2022 Abbott). */
-export const SENATE_BENCHMARKS = [
-  { district: 1, trump: 54.09, cruz: 51.22, abbott: 57.97 },
-  { district: 2, trump: 20.32, cruz: 14.41, abbott: 19.97 },
-  { district: 3, trump: 52.81, cruz: 49.27, abbott: 55.6 },
-  { district: 4, trump: 34.23, cruz: 29.7, abbott: 36.22 },
-  { district: 5, trump: 23.24, cruz: 18.35, abbott: 22.83 },
-  { district: 9, trump: 17.4, cruz: 11.92, abbott: 16.4 },
-  { district: 11, trump: 20.38, cruz: 15.07, abbott: 18.9 },
-  { district: 13, trump: -47.64, cruz: -52.54, abbott: -55.78 },
-  { district: 18, trump: 27.31, cruz: 22.46, abbott: 28.36 },
-  { district: 19, trump: -1.29, cruz: -9.4, abbott: -10.91 },
-  { district: 21, trump: -2.17, cruz: -11.24, abbott: -17.15 },
-  { district: 22, trump: 27.99, cruz: 23.05, abbott: 29.81 },
-  { district: 24, trump: 25.05, cruz: 20.84, abbott: 26.23 },
-  { district: 26, trump: 22.48, cruz: 20.31, abbott: 31.01 },
-  { district: 28, trump: 51.53, cruz: 48.08, abbott: 55.01 },
-  { district: 31, trump: 61.5, cruz: 57.94, abbott: 64.92 },
+/** TX Senate district benchmark margins (percentage points, R+ / D−). */
+const ABBOTT_2022 = [
+  57.97, 19.86, 55.56, 36.22, 22.93, -34.76, 21.38, 18.05, 16.4, 21.81,
+  18.9, 18.09, -56.78, -53.84, -30.87, -25.12, 24.22, 28.46, -10.81, -8.96,
+  -17.15, 29.61, -54.3, 26.28, 21.53, -31.91, -0.67, 55.01, -25.17, 27.76, 64.92,
 ];
+
+const TRUMP_2024 = [
+  54.09, 20.32, 52.61, 34.23, 23.24, -18.56, 20.95, 18.53, 17.4, 21.4,
+  20.36, 18.37, -47.64, -46.2, -25.36, -18.4, 22.8, 27.31, -1.39, 4.24,
+  -3.17, 27.99, -46.22, 25.05, 21.83, -22.49, 12.15, 51.63, -12.65, 27.54, 61.5,
+];
+
+const CRUZ_2024 = [
+  51.22, 14.41, 49.27, 29.79, 19.35, -28.31, 15.34, 12.93, 11.92, 16.23,
+  15.07, 13.62, -52.54, -50.25, -30.46, -25.57, 18.21, 21.94, -9.48, -3.47,
+  -11.24, 23.05, -52, 20.84, 17.77, -29.34, 2.73, 48.06, -17.51, 22.67, 57.94,
+];
+
+export const SENATE_BENCHMARKS = ABBOTT_2022.map((abbott, index) => ({
+  district: index + 1,
+  trump: TRUMP_2024[index],
+  cruz: CRUZ_2024[index],
+  abbott,
+}));

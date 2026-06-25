@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { marginFromGopShare } from "./benchmarkMargin.mjs";
+import { computeContestStats, storedMarginForMetricKey } from "./electionMargin.mjs";
+import { recomputeOfficeMetric } from "./contestMetrics.mjs";
+import { buildLegVoteLookup, enrichContestVotesFromLookup } from "./legVoteBackfill.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "..", "data");
@@ -27,7 +30,7 @@ export const STATEWIDE_TED_MAP = {
     "Justice Of The Supreme Court Place 2": "SCOTX-PL2",
     "Justice Of The Supreme Court Place 4": "SCOTX-PL4",
     "Justice Of The Supreme Court Place 6": "SCOTX-PL6",
-    "Court Of Criminal Appeals Presiding": "CCA-PL3",
+    "Court Of Criminal Appeals Presiding": "CCA-PRES",
     "Court Of Criminal Appeals Place 7": "CCA-PL7",
     "Court Of Criminal Appeals Place 8": "CCA-PL8",
   },
@@ -329,8 +332,14 @@ export async function upsertLegMetric(database, officeCode, field, gopShare, con
   const office = await database.prepare(`SELECT id FROM offices WHERE office_code = ?`).get(officeCode);
   if (!office) return false;
 
-  const margin = marginFromGopShare(gopShare);
+  if (contest) {
+    await saveContestCandidates(database, officeCode, field, contest);
+    await recomputeOfficeMetric(database, office.id, field);
+    return true;
+  }
 
+  if (gopShare == null) return false;
+  const margin = marginFromGopShare(gopShare);
   await database
     .prepare(
       `INSERT INTO office_metrics (office_id, trump_2024, cruz_2024, abbott_2022, leg_2024, leg_2022)
@@ -344,10 +353,6 @@ export async function upsertLegMetric(database, officeCode, field, gopShare, con
     value: margin,
   });
 
-  if (contest) {
-    await saveContestCandidates(database, officeCode, field, contest);
-  }
-
   return true;
 }
 
@@ -359,11 +364,15 @@ export async function importTedElectionResults(database, options = {}) {
   for (const year of years) {
     const jobs = buildDistrictJobs(year);
     summary.byYear[year] = { jobs: jobs.length, imported: 0, skipped: 0 };
+    const voteLookup = year === 2022 ? await buildLegVoteLookup() : null;
 
     const results = await mapWithConcurrency(jobs, concurrency, async (job) => {
       try {
         const csv = await fetchTedCsv(job.url);
-        const contest = parseTedContest(csv);
+        let contest = parseTedContest(csv);
+        if (contest && voteLookup) {
+          contest = enrichContestVotesFromLookup(contest, job.officeCode, voteLookup);
+        }
         if (contest?.gopShare == null) {
           summary.skipped += 1;
           summary.byYear[year].skipped += 1;

@@ -1,6 +1,7 @@
 import { getDb, closeDb, initDb } from "./db.mjs";
 import { ensureMetricsSchema } from "./lib/metricsImport.mjs";
 import { parseBenchmarkMargin } from "./lib/benchmarkMargin.mjs";
+import { seedBenchmarkContestsForOffice } from "./lib/contestMetrics.mjs";
 import { HOUSE_BENCHMARKS } from "./data/house-benchmarks.mjs";
 
 await initDb();
@@ -17,23 +18,30 @@ const upsert = db.prepare(
 );
 
 let updated = 0;
+let contests = 0;
 for (const row of HOUSE_BENCHMARKS) {
-  const office = await db
-    .prepare(`SELECT id FROM offices WHERE office_code = ?`)
-    .get(`HD-${String(row.district).padStart(3, "0")}`);
+  const officeCode = `HD-${String(row.district).padStart(3, "0")}`;
+  const office = await db.prepare(`SELECT id FROM offices WHERE office_code = ?`).get(officeCode);
   if (!office) {
-    console.warn(`Missing office HD-${row.district}`);
+    console.warn(`Missing office ${officeCode}`);
     continue;
   }
 
+  const margins = {
+    trump_2024: parseBenchmarkMargin(row.trump, { format: "margin" }),
+    cruz_2024: row.cruz != null ? parseBenchmarkMargin(row.cruz, { format: "margin" }) : null,
+    abbott_2022: row.abbott != null ? parseBenchmarkMargin(row.abbott, { format: "margin" }) : null,
+  };
+
   await upsert.run({
     officeId: office.id,
-    trump: parseBenchmarkMargin(row.trump, { format: "margin" }),
-    cruz: parseBenchmarkMargin(row.cruz, { format: "margin" }),
-    abbott: parseBenchmarkMargin(row.abbott, { format: "margin" }),
+    trump: margins.trump_2024,
+    cruz: margins.cruz_2024,
+    abbott: margins.abbott_2022,
   });
   updated += 1;
+  contests += await seedBenchmarkContestsForOffice(db, officeCode, margins);
 }
 
-console.log(`Updated benchmark margins for ${updated} house districts.`);
+console.log(`Updated benchmark margins for ${updated} house districts (${contests} trump contests seeded).`);
 await closeDb();

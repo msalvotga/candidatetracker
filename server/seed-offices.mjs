@@ -1,15 +1,7 @@
 import { getDb, closeDb, initDb } from "./db.mjs";
 import { SENATE_DISTRICTS } from "./data/senate-districts.mjs";
 import { SBOE_DISTRICTS } from "./data/sboe-districts.mjs";
-
-const STATEWIDE_OFFICES = [
-  { code: "GOV", name: "Governor" },
-  { code: "LTGOV", name: "Lieutenant Governor" },
-  { code: "AG", name: "Attorney General" },
-  { code: "COMPT", name: "Comptroller of Public Accounts" },
-  { code: "GLO", name: "Commissioner of the General Land Office" },
-  { code: "AGRI", name: "Commissioner of Agriculture" },
-];
+import { STATEWIDE_OFFICES } from "./data/statewide-offices.mjs";
 
 function padDistrict(n, width = 3) {
   return String(n).padStart(width, "0");
@@ -48,13 +40,13 @@ function buildOfficeRows() {
     });
   }
 
-  STATEWIDE_OFFICES.forEach((office, index) => {
+  STATEWIDE_OFFICES.forEach((office) => {
     rows.push({
       category: "statewide",
       district: null,
       office_code: office.code,
       office_name: office.name,
-      sort_order: index + 1,
+      sort_order: office.sort_order,
     });
   });
 

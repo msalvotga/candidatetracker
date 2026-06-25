@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { addFinanceReport, fetchCounties, fetchCycles, fetchMetricContest, fetchRaces, saveCandidateConsultants } from "./api";
 import { AdminDataPanel } from "./components/AdminData";
+import { AdminUsersPanel } from "./components/AdminUsers";
 import { CandidateDetailModal, CandidateSummary } from "./components/CandidateDetailModal";
 import { CandidateConsultantEditor, FinanceHistoryEditor, LatestFinanceDisplay } from "./components/CandidateFinance";
 import { CountyHeatmap, RaceMetrics } from "./components/CountyHeatmap";
@@ -24,6 +25,7 @@ import {
   HOUSE_TARGET_FILTER_OPTIONS,
   type SeatHolderFilter,
 } from "./lib/raceFilters";
+import { useAuth } from "./lib/auth";
 import type {
   AppTab,
   Consultant,
@@ -134,6 +136,7 @@ function updateCandidateFinanceHistory(
 }
 
 export default function App() {
+  const { permissions, user, logout } = useAuth();
   const currentYear = new Date().getFullYear();
   const [tab, setTab] = useState<AppTab>("house");
   const [countyElection, setCountyElection] = useState<CountyElection>("pres_2024");
@@ -150,6 +153,7 @@ export default function App() {
   const [organizationFilter, setOrganizationFilter] = useState<string[]>([]);
   const [consultantFilter, setConsultantFilter] = useState<string[]>([]);
   const [showMoreFilters, setShowMoreFilters] = useState(false);
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [consultants, setConsultants] = useState<Consultant[]>([]);
   const [showCoh, setShowCoh] = useState(true);
   const [editMode, setEditMode] = useState(false);
@@ -165,8 +169,19 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const effectiveEditMode = editMode && permissions.canEdit;
+
+  useEffect(() => {
+    if (tab === "data" && !permissions.canAccessData) setTab("house");
+    if (tab === "admin" && !permissions.canManageUsers) setTab("house");
+  }, [tab, permissions.canAccessData, permissions.canManageUsers]);
+
+  useEffect(() => {
+    if (!permissions.canEdit && editMode) setEditMode(false);
+  }, [permissions.canEdit, editMode]);
+
   const loadRaces = useCallback(async () => {
-    if (tab === "counties" || tab === "data") return;
+    if (tab === "counties" || tab === "data" || tab === "admin") return;
     setLoading(true);
     setError("");
     try {
@@ -222,7 +237,7 @@ export default function App() {
     setShowMoreFilters(false);
     if (tab === "counties") {
       void loadCounties();
-    } else if (tab === "data") {
+    } else if (tab === "data" || tab === "admin") {
       setLoading(false);
     } else {
       setRaces([]);
@@ -230,18 +245,12 @@ export default function App() {
     }
   }, [loadRaces, loadCounties, tab, cycleYear]);
 
-  const handleUpForReelectionOnlyChange = useCallback(
-    (upOnly: boolean) => {
-      setUpForReelectionOnly(upOnly);
-      if (upOnly && isUpForReelectionRelevant(tab as OfficeCategory)) {
-        void loadRaces();
-      }
-    },
-    [loadRaces, tab]
-  );
+  const handleUpForReelectionOnlyChange = useCallback((upOnly: boolean) => {
+    setUpForReelectionOnly(upOnly);
+  }, []);
 
   const filteredRaces = useMemo(() => {
-    if (tab === "counties" || tab === "data") return [];
+    if (tab === "counties" || tab === "data" || tab === "admin") return [];
     return races.filter((race) => {
       const query = filter.trim().toLowerCase();
       if (query) {
@@ -265,8 +274,20 @@ export default function App() {
     });
   }, [races, filter, tab, seatHolderFilter, trumpSwingFilter, openSeatFilter, upForReelectionOnly, organizationFilter, consultantFilter]);
 
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (filter.trim()) count += 1;
+    if (seatHolderFilter !== "all") count += 1;
+    if (trumpSwingFilter) count += 1;
+    if (openSeatFilter) count += 1;
+    if (isUpForReelectionRelevant(tab as OfficeCategory) && upForReelectionOnly) count += 1;
+    if (organizationFilter.length > 0) count += 1;
+    if (consultantFilter.length > 0) count += 1;
+    return count;
+  }, [filter, seatHolderFilter, trumpSwingFilter, openSeatFilter, tab, upForReelectionOnly, organizationFilter, consultantFilter]);
+
   useEffect(() => {
-    if (tab === "counties" || tab === "data") return;
+    if (tab === "counties" || tab === "data" || tab === "admin") return;
     if (filteredRaces.length === 0) {
       setSelectedOfficeId(null);
       return;
@@ -278,7 +299,7 @@ export default function App() {
 
   const selectedRace = filteredRaces.find((race) => race.office_id === selectedOfficeId) ?? null;
   const selectedMetrics =
-    selectedRace && tab !== "counties" && tab !== "data"
+    selectedRace && tab !== "counties" && tab !== "data" && tab !== "admin"
       ? mergeRaceMetrics(selectedRace, tab as OfficeCategory)
       : [];
   const countyTitle = COUNTY_ELECTIONS.find((e) => e.id === countyElection)?.label ?? "County results";
@@ -288,7 +309,7 @@ export default function App() {
     setPendingCohAdds([]);
     setRaceSaved(false);
     setSaveError("");
-  }, [selectedOfficeId, editMode, cycleYear, tab]);
+  }, [selectedOfficeId, effectiveEditMode, cycleYear, tab]);
 
   useEffect(() => {
     if (!raceSaved) return;
@@ -409,7 +430,7 @@ export default function App() {
   }, []);
 
   const handleMetricClick = useCallback(async (metric: RaceMetric) => {
-    if (!selectedOfficeId || editMode || isBenchmarkMetricKey(metric.key)) return;
+    if (!selectedOfficeId || effectiveEditMode || isBenchmarkMetricKey(metric.key)) return;
     setContestModal(null);
     setContestError("");
     setContestLoading(true);
@@ -421,7 +442,7 @@ export default function App() {
     } finally {
       setContestLoading(false);
     }
-  }, [selectedOfficeId, editMode]);
+  }, [selectedOfficeId, effectiveEditMode]);
 
   function closeContestModal() {
     setContestModal(null);
@@ -437,17 +458,19 @@ export default function App() {
           <p className="subtitle">Select a race to view candidates, results, and campaign finance</p>
         </div>
         <div className="header-controls">
-          <label className="toggle">
-            <input type="checkbox" checked={editMode} onChange={(e) => setEditMode(e.target.checked)} />
-            Edit mode
-          </label>
-          {tab !== "counties" && tab !== "data" ? (
+          {permissions.canEdit ? (
+            <label className="toggle">
+              <input type="checkbox" checked={editMode} onChange={(e) => setEditMode(e.target.checked)} />
+              Edit mode
+            </label>
+          ) : null}
+          {tab !== "counties" && tab !== "data" && tab !== "admin" ? (
             <label className="toggle">
               <input type="checkbox" checked={showCoh} onChange={(e) => setShowCoh(e.target.checked)} />
               Show finance
             </label>
           ) : null}
-          {tab !== "counties" ? (
+          {tab !== "counties" && tab !== "admin" ? (
             <label className="year-picker">
               Cycle year
               <select value={cycleYear} onChange={(e) => setCycleYear(Number(e.target.value))}>
@@ -458,6 +481,14 @@ export default function App() {
                 ))}
               </select>
             </label>
+          ) : null}
+          {user ? (
+            <div className="header-user-row">
+              <span className="header-user">{user.display_name}</span>
+              <button type="button" className="header-logout" onClick={() => void logout()}>
+                Log out
+              </button>
+            </div>
           ) : null}
         </div>
       </header>
@@ -480,22 +511,35 @@ export default function App() {
         >
           Counties
         </button>
-        <button
-          type="button"
-          className={tab === "data" ? "tab active" : "tab"}
-          onClick={() => setTab("data")}
-        >
-          Data
-        </button>
+        {permissions.canAccessData ? (
+          <button
+            type="button"
+            className={tab === "data" ? "tab active" : "tab"}
+            onClick={() => setTab("data")}
+          >
+            Data
+          </button>
+        ) : null}
+        {permissions.canManageUsers ? (
+          <button
+            type="button"
+            className={tab === "admin" ? "tab active" : "tab"}
+            onClick={() => setTab("admin")}
+          >
+            Admin
+          </button>
+        ) : null}
       </nav>
 
       {error ? <div className="banner error">{error}</div> : null}
       {saveError ? <div className="banner error">{saveError}</div> : null}
 
-      {loading && tab !== "data" ? (
+      {loading && tab !== "data" && tab !== "admin" ? (
         <p className="loading">Loading…</p>
       ) : tab === "data" ? (
-        <AdminDataPanel cycleYear={cycleYear} editMode={editMode} />
+        <AdminDataPanel cycleYear={cycleYear} editMode={effectiveEditMode} />
+      ) : tab === "admin" ? (
+        <AdminUsersPanel />
       ) : tab === "counties" ? (
         <div className="counties-panel">
           <div className="county-election-tabs">
@@ -513,7 +557,7 @@ export default function App() {
           <CountyHeatmap
             counties={counties}
             title={countyTitle}
-            editMode={editMode}
+            editMode={effectiveEditMode}
             election={countyElection}
             onCountySaved={handleCountySaved}
           />
@@ -532,6 +576,18 @@ export default function App() {
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />
+            <button
+              type="button"
+              className="race-filters-toggle"
+              aria-expanded={filtersExpanded}
+              onClick={() => setFiltersExpanded((open) => !open)}
+            >
+              <span>{filtersExpanded ? "Hide filters" : "Show filters"}</span>
+              {activeFilterCount > 0 ? (
+                <span className="race-filters-toggle-count">{activeFilterCount} active</span>
+              ) : null}
+            </button>
+            {filtersExpanded ? (
             <div className="race-filters-scroll">
               <div className="race-filters">
                 <div className="filter-group">
@@ -701,6 +757,7 @@ export default function App() {
                 ) : null}
               </div>
             </div>
+            ) : null}
             <ul className="race-list" role="listbox" aria-label="Races">
               {filteredRaces.map((race) => {
                 const selected = race.office_id === selectedOfficeId;
@@ -767,11 +824,11 @@ export default function App() {
                 <RaceMetrics
                   metrics={selectedMetrics}
                   category={tab}
-                  editMode={editMode}
+                  editMode={effectiveEditMode}
                   onMetricClick={(metric) => void handleMetricClick(metric)}
                 />
 
-                {editMode && (hasPendingRaceEdits || raceSaved) ? (
+                {effectiveEditMode && (hasPendingRaceEdits || raceSaved) ? (
                   <PendingSaveBar
                     visible={hasPendingRaceEdits}
                     saving={raceSaving}
@@ -783,14 +840,17 @@ export default function App() {
                 ) : null}
 
                 <ul className="candidate-list">
+                  {selectedRace.candidates.length === 0 ? (
+                    <li className="candidate-list-empty">No candidates filed for this office yet.</li>
+                  ) : null}
                   {selectedRace.candidates.map((candidate) => {
                     const key = candidateKey(candidate);
                     return (
                       <li
                         key={key}
-                        className={`candidate-item party-${candidate.party.toLowerCase()}${editMode ? "" : " candidate-item-clickable"}`}
+                        className={`candidate-item party-${candidate.party.toLowerCase()}${effectiveEditMode ? "" : " candidate-item-clickable"}`}
                       >
-                        {editMode ? (
+                        {effectiveEditMode ? (
                           <>
                             <div className="candidate-main">
                               <span className="candidate-name-row">

@@ -1,6 +1,9 @@
 import { canonicalReportEndForPeriod, loadFilingPeriodMaps } from "./filingPeriods.mjs";
 import { syncCandidateConsultants, parseKeyList, formatKeyList, listConsultants } from "./consultants.mjs";
 import { syncOfficeTargets } from "./targeting.mjs";
+import { listTexasCountyOptions } from "../data/texas-counties.mjs";
+import { parseLegMargin } from "./benchmarkMargin.mjs";
+import { enrichElectionResultRows, syncContestMargin } from "./contestMetrics.mjs";
 
 const ADMIN_TABLES = {
   filing_periods: {
@@ -129,7 +132,7 @@ const ADMIN_TABLES = {
       const rows = await db
         .prepare(
           `SELECT o.id, o.category, o.district, o.office_code, o.office_name, o.sort_order,
-                  o.seat_holder_name, o.seat_holder_party, o.up_for_reelection,
+                  o.seat_holder_name, o.seat_holder_party, o.up_for_reelection, o.county_name,
                   COALESCE((
                     SELECT GROUP_CONCAT(ot.org_key)
                     FROM office_targets ot
@@ -209,6 +212,84 @@ const ADMIN_TABLES = {
     exportQuery: async (db, filters) =>
       (await adminQueryTable(db, "consultants", { ...filters, limit: 100000, offset: 0 })).rows,
   },
+  tga_staffers: {
+    label: "TGA staffers",
+    query: async (db, { limit, offset }) => {
+      const rows = await db
+        .prepare(
+          `SELECT s.id, s.name, s.office_id,
+                  o.office_code, o.office_name, o.category, o.district
+           FROM tga_staffers s
+           LEFT JOIN offices o ON o.id = s.office_id
+           ORDER BY s.name COLLATE NOCASE, s.id
+           LIMIT @limit OFFSET @offset`
+        )
+        .all({ limit, offset });
+      const total = (await db.prepare(`SELECT COUNT(*) AS count FROM tga_staffers`).get()).count;
+      return { rows, total };
+    },
+    exportQuery: async (db) =>
+      (await adminQueryTable(db, "tga_staffers", { limit: 100000, offset: 0 })).rows,
+  },
+  metric_contest_candidates: {
+    label: "Election results",
+    query: async (db, { category, limit, offset }) => {
+      const params = { limit, offset };
+      let where = "WHERE 1=1";
+      if (category) {
+        where += " AND o.category = @category";
+        params.category = category;
+      }
+      const rows = await db
+        .prepare(
+          `SELECT c.id, c.office_id, o.office_code, o.office_name, o.category, c.metric_key,
+                  c.candidate_name, c.party, c.votes, c.vote_pct, c.contest_margin,
+                  c.unopposed, c.contest_name, c.source
+           FROM metric_contest_candidates c
+           JOIN offices o ON o.id = c.office_id
+           ${where}
+           ORDER BY o.category, o.sort_order, c.metric_key, c.sort_order, c.votes DESC NULLS LAST
+           LIMIT @limit OFFSET @offset`
+        )
+        .all(params);
+      enrichElectionResultRows(rows);
+      const total = (await db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM metric_contest_candidates c
+           JOIN offices o ON o.id = c.office_id ${where}`
+        )
+        .get(params)).count;
+      return { rows, total };
+    },
+    exportQuery: async (db, filters) =>
+      (await adminQueryTable(db, "metric_contest_candidates", { ...filters, limit: 100000, offset: 0 })).rows,
+  },
+  office_metrics: {
+    label: "Benchmark margins",
+    query: async (db, { category, limit, offset }) => {
+      const params = { limit, offset };
+      let where = "WHERE 1=1";
+      if (category) {
+        where += " AND o.category = @category";
+        params.category = category;
+      }
+      const rows = await db
+        .prepare(
+          `SELECT o.id, o.office_code, o.office_name, o.category, o.district,
+                  m.trump_2024, m.cruz_2024, m.abbott_2022
+           FROM offices o
+           LEFT JOIN office_metrics m ON m.office_id = o.id
+           ${where}
+           ORDER BY o.category, o.sort_order, o.district, o.office_code
+           LIMIT @limit OFFSET @offset`
+        )
+        .all(params);
+      const total = (await db.prepare(`SELECT COUNT(*) AS count FROM offices o ${where}`).get(params)).count;
+      return { rows, total };
+    },
+    exportQuery: async (db, filters) =>
+      (await adminQueryTable(db, "office_metrics", { ...filters, limit: 100000, offset: 0 })).rows,
+  },
 };
 
 const ADMIN_TABLE_NAMES = new Set(Object.keys(ADMIN_TABLES));
@@ -217,7 +298,7 @@ export const EDITABLE_COLUMNS = {
   filing_periods: ["label", "sort_order", "default_report_period_end"],
   candidates: ["vuid", "name", "party", "is_incumbent", "tec_filer_id", "filed", "consultant_keys", "notes"],
   finance_reports: ["period_key", "report_period_end", "total_raised", "total_spent", "cash_on_hand"],
-  offices: ["office_name", "district", "sort_order", "seat_holder_name", "seat_holder_party", "up_for_reelection", "target_org_keys"],
+  offices: ["office_name", "district", "county_name", "sort_order", "seat_holder_name", "seat_holder_party", "up_for_reelection", "target_org_keys"],
   race_sheet_rows: [
     "incumbent_name",
     "incumbent_party",
@@ -230,6 +311,18 @@ export const EDITABLE_COLUMNS = {
   ],
   targeting_organizations: ["name"],
   consultants: ["name"],
+  tga_staffers: ["name", "office_id"],
+  metric_contest_candidates: ["candidate_name", "party", "votes", "contest_margin", "unopposed", "contest_name"],
+};
+
+export const SELECT_COLUMNS = {
+  offices: { county_name: "texas_counties" },
+  tga_staffers: { office_id: "offices" },
+  metric_contest_candidates: { office_id: "offices", metric_key: "metric_keys" },
+};
+
+export const SELECT_VALUE_KIND = {
+  office_id: "number",
 };
 
 export const MULTI_SELECT_COLUMNS = {
@@ -242,6 +335,8 @@ export const INSERTABLE_TABLES = {
   targeting_organizations: ["org_key", "name"],
   consultants: ["consultant_key", "name"],
   filing_periods: ["period_key", "label", "sort_order", "default_report_period_end"],
+  tga_staffers: ["name", "office_id"],
+  metric_contest_candidates: ["office_id", "metric_key", "candidate_name", "party", "votes"],
 };
 
 /** Tables that support row deletion in the Data tab. */
@@ -253,6 +348,8 @@ export const DELETABLE_TABLES = {
   race_sheet_rows: { keyColumn: "id", stringKey: false },
   targeting_organizations: { keyColumn: "org_key", stringKey: true },
   consultants: { keyColumn: "consultant_key", stringKey: true },
+  tga_staffers: { keyColumn: "id", stringKey: false },
+  metric_contest_candidates: { keyColumn: "id", stringKey: false },
 };
 
 const INTEGER_COLUMNS = new Set([
@@ -264,6 +361,7 @@ const INTEGER_COLUMNS = new Set([
   "row_order",
   "cycle_year",
   "office_id",
+  "votes",
 ]);
 const REAL_COLUMNS = new Set(["total_raised", "total_spent", "cash_on_hand"]);
 
@@ -284,6 +382,9 @@ function coerceAdminValue(column, value) {
     const num = Number(value);
     if (!Number.isInteger(num)) throw new Error(`invalid integer for ${column}`);
     return num;
+  }
+  if (column === "contest_margin") {
+    return parseLegMargin(value);
   }
   if (REAL_COLUMNS.has(column)) {
     const num = Number(String(value).replace(/[$,%\s]/g, ""));
@@ -386,6 +487,17 @@ export async function bulkUpdateAdminTableRows(db, tableName, updates, { cycleYe
         );
       }
 
+      let contestMarginOverride = null;
+      let contestHasVoteEdit = false;
+      if (tableName === "metric_contest_candidates") {
+        const voteFieldKeys = ["candidate_name", "party", "votes", "unopposed", "contest_name"];
+        contestHasVoteEdit = voteFieldKeys.some((key) => fields[key] !== undefined);
+        if (fields.contest_margin !== undefined) {
+          contestMarginOverride = coerceAdminValue("contest_margin", fields.contest_margin);
+          delete fields.contest_margin;
+        }
+      }
+
       const setParts = [];
       const params = { id: rowId };
       for (const [key, raw] of Object.entries(fields)) {
@@ -395,11 +507,32 @@ export async function bulkUpdateAdminTableRows(db, tableName, updates, { cycleYe
         params[paramKey] = coerceAdminValue(key, raw);
       }
       if (setParts.length === 0) {
+        if (tableName === "metric_contest_candidates" && contestMarginOverride != null && !contestHasVoteEdit) {
+          const meta = await db
+            .prepare(`SELECT office_id, metric_key FROM metric_contest_candidates WHERE id = ?`)
+            .get(rowId);
+          if (!meta) throw new Error(`row ${rowId} not found`);
+          await syncContestMargin(db, meta.office_id, meta.metric_key, { marginOverride: contestMarginOverride });
+          updated += 1;
+          continue;
+        }
         if (tableName === "offices" || tableName === "candidates") updated += 1;
         continue;
       }
       const result = await db.prepare(`UPDATE ${tableName} SET ${setParts.join(", ")} WHERE id = @id`).run(params);
       if (result.changes === 0) throw new Error(`row ${rowId} not found`);
+      if (tableName === "metric_contest_candidates") {
+        const meta = await db
+          .prepare(`SELECT office_id, metric_key FROM metric_contest_candidates WHERE id = ?`)
+          .get(rowId);
+        if (meta) {
+          if (contestMarginOverride != null && !contestHasVoteEdit) {
+            await syncContestMargin(db, meta.office_id, meta.metric_key, { marginOverride: contestMarginOverride });
+          } else {
+            await syncContestMargin(db, meta.office_id, meta.metric_key);
+          }
+        }
+      }
       updated += 1;
     }
     return { updated };
@@ -465,6 +598,62 @@ export async function insertAdminTableRow(db, tableName, fields) {
       .get(id);
   }
 
+  if (tableName === "tga_staffers") {
+    const office = await db.prepare(`SELECT id FROM offices WHERE id = ?`).get(params.office_id);
+    if (!office) throw new Error("office not found");
+
+    const result = await db.prepare(
+      `INSERT INTO tga_staffers (name, office_id) VALUES (@name, @office_id) RETURNING id`
+    ).run(params);
+
+    const id = result.lastInsertRowid;
+    return await db
+      .prepare(
+        `SELECT s.id, s.name, s.office_id, o.office_code, o.office_name, o.category, o.district
+         FROM tga_staffers s
+         LEFT JOIN offices o ON o.id = s.office_id
+         WHERE s.id = ?`
+      )
+      .get(id);
+  }
+
+  if (tableName === "metric_contest_candidates") {
+    const office = await db.prepare(`SELECT id FROM offices WHERE id = ?`).get(params.office_id);
+    if (!office) throw new Error("office not found");
+    const metricKey = String(params.metric_key).trim();
+    if (!metricKey) throw new Error("metric_key is required");
+    const nextSort =
+      (
+        await db
+          .prepare(
+            `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_sort
+             FROM metric_contest_candidates WHERE office_id = ? AND metric_key = ?`
+          )
+          .get(params.office_id, metricKey)
+      )?.next_sort ?? 0;
+
+    const result = await db.prepare(
+      `INSERT INTO metric_contest_candidates (
+         office_id, metric_key, candidate_name, party, votes, sort_order, source
+       ) VALUES (
+         @office_id, @metric_key, @candidate_name, @party, @votes, @sort_order, 'manual'
+       ) RETURNING id`
+    ).run({ ...params, metric_key: metricKey, sort_order: nextSort });
+
+    const id = result.lastInsertRowid;
+    await syncContestMargin(db, params.office_id, metricKey);
+    return await db
+      .prepare(
+        `SELECT c.id, c.office_id, o.office_code, o.office_name, o.category, c.metric_key,
+                c.candidate_name, c.party, c.votes, c.vote_pct, c.contest_margin,
+                c.unopposed, c.contest_name, c.source
+         FROM metric_contest_candidates c
+         JOIN offices o ON o.id = c.office_id
+         WHERE c.id = ?`
+      )
+      .get(id);
+  }
+
   throw new Error("unsupported insert table");
 }
 
@@ -479,8 +668,20 @@ export async function deleteAdminTableRow(db, tableName, rowId) {
     throw new Error("invalid row id");
   }
 
+  let recomputeTarget = null;
+  if (tableName === "metric_contest_candidates") {
+    recomputeTarget = await db
+      .prepare(`SELECT office_id, metric_key FROM metric_contest_candidates WHERE id = ?`)
+      .get(key);
+  }
+
   const result = await db.prepare(`DELETE FROM ${tableName} WHERE ${config.keyColumn} = ?`).run(key);
   if (result.changes === 0) throw new Error("row not found");
+
+  if (recomputeTarget) {
+    await syncContestMargin(db, recomputeTarget.office_id, recomputeTarget.metric_key);
+  }
+
   return { deleted: result.changes };
 }
 
@@ -509,9 +710,21 @@ export async function loadAdminMultiSelectOptions(db, refTable, { cycleYear, cat
         `SELECT id AS value, office_code || ' — ' || office_name AS label
          FROM offices
          ${where}
-         ORDER BY sort_order, district, office_code`
+         ORDER BY category, sort_order, district, office_code`
       )
       .all(params);
+  }
+  if (refTable === "texas_counties") {
+    return listTexasCountyOptions();
+  }
+  if (refTable === "metric_keys") {
+    return [
+      { value: "trump_2024", label: "2024 President (Trump/Harris)" },
+      { value: "cruz_2024", label: "2024 U.S. Senate (Cruz/Allred)" },
+      { value: "abbott_2022", label: "2022 Governor (Abbott/O'Rourke)" },
+      { value: "leg_2024", label: "2024 district race" },
+      { value: "leg_2022", label: "2022 district race" },
+    ];
   }
   return [];
 }
@@ -522,6 +735,8 @@ export function listAdminTables() {
     label: table.label,
     editableColumns: EDITABLE_COLUMNS[id] ?? [],
     multiSelectColumns: MULTI_SELECT_COLUMNS[id] ?? {},
+    selectColumns: SELECT_COLUMNS[id] ?? {},
+    selectValueKind: SELECT_VALUE_KIND,
     insertableColumns: INSERTABLE_TABLES[id] ?? [],
     deletable: Boolean(DELETABLE_TABLES[id]),
   }));

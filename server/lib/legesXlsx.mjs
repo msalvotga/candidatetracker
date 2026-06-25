@@ -19,6 +19,7 @@ const STATEWIDE_OFFICE_MAP = {
   "SCOTX Pl 7": { code: "SCOTX-PL7", name: "Supreme Court, Place 7" },
   "SCOTX Pl 8": { code: "SCOTX-PL8", name: "Supreme Court, Place 8" },
   "CCA, Pl 3": { code: "CCA-PL3", name: "Court of Criminal Appeals, Place 3" },
+  "CCA Presiding": { code: "CCA-PRES", name: "Court of Criminal Appeals, Presiding Judge" },
   "CCA, Pl 4": { code: "CCA-PL4", name: "Court of Criminal Appeals, Place 4" },
   "CCA, Pl 9": { code: "CCA-PL9", name: "Court of Criminal Appeals, Place 9" },
   "15th Court, Chief": { code: "15TH-CHIEF", name: "15th Court of Appeals, Chief" },

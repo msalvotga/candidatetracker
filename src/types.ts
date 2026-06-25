@@ -1,5 +1,29 @@
 export type OfficeCategory = "house" | "senate" | "sboe" | "statewide" | "congressional";
-export type AppTab = OfficeCategory | "counties" | "data";
+export type AppTab = OfficeCategory | "counties" | "data" | "admin";
+export type UserRole = "admin" | "viewer";
+
+export interface AppUser {
+  id: number;
+  username: string;
+  display_name: string;
+  role: UserRole;
+  active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AppPermissions {
+  isAdmin: boolean;
+  canAccessData: boolean;
+  canEdit: boolean;
+  canManageUsers: boolean;
+}
+
+export interface AuthMeResponse {
+  user: AppUser | null;
+  permissions: AppPermissions;
+  authenticated: boolean;
+}
 export type CountyElection = "pres_2024" | "cruz_2024" | "abbott_2022";
 
 export interface FinanceReportEntry {
@@ -153,6 +177,7 @@ export interface MetricContest {
   label: string;
   contest_name: string;
   gop_share: number | null;
+  total_votes?: number | null;
   uncontested?: boolean;
   winning_party?: string | null;
   derived?: boolean;

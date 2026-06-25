@@ -1,4 +1,6 @@
 import type {
+  AppUser,
+  AuthMeResponse,
   CountiesResponse,
   CountyElection,
   CountyResult,
@@ -11,9 +13,13 @@ import type {
   TargetingOrganization,
 } from "./types";
 
+function apiFetch(input: RequestInfo | URL, init?: RequestInit) {
+  return fetch(input, { ...init, credentials: "include" });
+}
+
 export async function fetchRaces(category: OfficeCategory, year: number): Promise<RacesResponse> {
   const params = new URLSearchParams({ category, year: String(year) });
-  const res = await fetch(`/api/races?${params}`);
+  const res = await apiFetch(`/api/races?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Failed to load races (${res.status})`);
@@ -22,7 +28,7 @@ export async function fetchRaces(category: OfficeCategory, year: number): Promis
 }
 
 export async function createTargetingOrganization(org_key: string, name: string) {
-  const res = await fetch("/api/targeting/organizations", {
+  const res = await apiFetch("/api/targeting/organizations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ org_key, name }),
@@ -35,7 +41,7 @@ export async function createTargetingOrganization(org_key: string, name: string)
 }
 
 export async function createConsultant(consultant_key: string, name: string) {
-  const res = await fetch("/api/consultants", {
+  const res = await apiFetch("/api/consultants", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ consultant_key, name }),
@@ -48,14 +54,14 @@ export async function createConsultant(consultant_key: string, name: string) {
 }
 
 export async function fetchFilingPeriods(): Promise<FilingPeriodDef[]> {
-  const res = await fetch("/api/filing-periods");
+  const res = await apiFetch("/api/filing-periods");
   if (!res.ok) return [];
   const body = await res.json();
   return body.periods ?? [];
 }
 
 export async function fetchCycles(): Promise<number[]> {
-  const res = await fetch("/api/cycles");
+  const res = await apiFetch("/api/cycles");
   if (!res.ok) return [new Date().getFullYear()];
   const body = await res.json();
   return body.years ?? [new Date().getFullYear()];
@@ -63,7 +69,7 @@ export async function fetchCycles(): Promise<number[]> {
 
 export async function fetchCounties(election: CountyElection): Promise<CountiesResponse> {
   const params = new URLSearchParams({ election });
-  const res = await fetch(`/api/counties?${params}`);
+  const res = await apiFetch(`/api/counties?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Failed to load counties (${res.status})`);
@@ -72,7 +78,7 @@ export async function fetchCounties(election: CountyElection): Promise<CountiesR
 }
 
 export async function saveOfficeMetric(officeId: number, key: string, value: number | null) {
-  const res = await fetch(`/api/offices/${officeId}/metrics`, {
+  const res = await apiFetch(`/api/offices/${officeId}/metrics`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ key, value }),
@@ -98,7 +104,7 @@ export async function addFinanceReport(options: {
   expenditures?: number | null;
   cash_on_hand?: number | null;
 }) {
-  const res = await fetch("/api/races/finance-reports", {
+  const res = await apiFetch("/api/races/finance-reports", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -131,7 +137,7 @@ function adminApiError(res: Response, fallback: string) {
 }
 
 export async function fetchAdminTables() {
-  const res = await fetch("/api/admin/tables");
+  const res = await apiFetch("/api/admin/tables");
   if (!res.ok) throw new Error(adminApiError(res, "Failed to load admin tables"));
   const body = await res.json();
   return body.tables as {
@@ -139,6 +145,8 @@ export async function fetchAdminTables() {
     label: string;
     editableColumns: string[];
     multiSelectColumns?: Record<string, string>;
+    selectColumns?: Record<string, string>;
+    selectValueKind?: Record<string, string>;
     insertableColumns?: string[];
     deletable?: boolean;
   }[];
@@ -151,7 +159,7 @@ export async function fetchMultiSelectOptions(
   const params = new URLSearchParams();
   if (options.cycleYear) params.set("cycle_year", String(options.cycleYear));
   if (options.category) params.set("category", options.category);
-  const res = await fetch(`/api/admin/multi-select/${encodeURIComponent(refTable)}?${params}`);
+  const res = await apiFetch(`/api/admin/multi-select/${encodeURIComponent(refTable)}?${params}`);
   if (!res.ok) return [];
   const body = await res.json();
   return (body.options ?? []) as { value: string; label: string; count?: number }[];
@@ -162,7 +170,7 @@ export async function saveAdminTableRows(
   updates: { id: number | string; fields: Record<string, unknown> }[],
   cycleYear?: number
 ) {
-  const res = await fetch(`/api/admin/tables/${encodeURIComponent(tableName)}`, {
+  const res = await apiFetch(`/api/admin/tables/${encodeURIComponent(tableName)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ updates, cycle_year: cycleYear }),
@@ -175,7 +183,7 @@ export async function saveAdminTableRows(
 }
 
 export async function insertAdminTableRow(tableName: string, fields: Record<string, unknown>) {
-  const res = await fetch(`/api/admin/tables/${encodeURIComponent(tableName)}/rows`, {
+  const res = await apiFetch(`/api/admin/tables/${encodeURIComponent(tableName)}/rows`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ fields }),
@@ -188,7 +196,7 @@ export async function insertAdminTableRow(tableName: string, fields: Record<stri
 }
 
 export async function deleteAdminTableRow(tableName: string, id: string | number) {
-  const res = await fetch(`/api/admin/tables/${encodeURIComponent(tableName)}/rows`, {
+  const res = await apiFetch(`/api/admin/tables/${encodeURIComponent(tableName)}/rows`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id }),
@@ -216,7 +224,7 @@ export async function fetchAdminTable(
   if (options.limit) params.set("limit", String(options.limit));
   if (options.offset) params.set("offset", String(options.offset));
   if (options.singleCandidateRaces) params.set("single_candidate_races", "1");
-  const res = await fetch(`/api/admin/tables/${encodeURIComponent(tableName)}?${params}`);
+  const res = await apiFetch(`/api/admin/tables/${encodeURIComponent(tableName)}?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? adminApiError(res, `Failed to load ${tableName}`));
@@ -239,7 +247,7 @@ export function exportBallotSummaryXlsx(cycleYear: number) {
 }
 
 export async function bulkImportFinance(rows: Record<string, string>[]) {
-  const res = await fetch("/api/admin/finance/bulk", {
+  const res = await apiFetch("/api/admin/finance/bulk", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ rows }),
@@ -252,7 +260,7 @@ export async function bulkImportFinance(rows: Record<string, string>[]) {
 }
 
 export async function saveCandidateConsultants(candidateId: number, consultant_keys: string[]) {
-  const res = await fetch(`/api/candidates/${candidateId}/consultants`, {
+  const res = await apiFetch(`/api/candidates/${candidateId}/consultants`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ consultant_keys }),
@@ -269,7 +277,7 @@ export async function saveCandidateConsultants(candidateId: number, consultant_k
 }
 
 export async function updateCandidateVuid(candidateId: number, vuid: string | null) {
-  const res = await fetch(`/api/admin/candidates/${candidateId}/vuid`, {
+  const res = await apiFetch(`/api/admin/candidates/${candidateId}/vuid`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ vuid }),
@@ -286,7 +294,7 @@ export async function saveCountyResult(
   countyKey: string,
   patch: Partial<Pick<CountyResult, "margin" | "gop_pct" | "dem_pct" | "gop_votes" | "dem_votes">>
 ) {
-  const res = await fetch(`/api/counties/${encodeURIComponent(countyKey)}`, {
+  const res = await apiFetch(`/api/counties/${encodeURIComponent(countyKey)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ election, ...patch }),
@@ -300,10 +308,96 @@ export async function saveCountyResult(
 }
 
 export async function fetchMetricContest(officeId: number, metricKey: string): Promise<MetricContest> {
-  const res = await fetch(`/api/offices/${officeId}/metrics/${encodeURIComponent(metricKey)}/contest`);
+  const res = await apiFetch(`/api/offices/${officeId}/metrics/${encodeURIComponent(metricKey)}/contest`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Failed to load contest (${res.status})`);
   }
   return res.json();
+}
+
+export async function fetchAuthMe(): Promise<AuthMeResponse> {
+  const res = await apiFetch("/api/auth/me");
+  if (!res.ok) {
+    throw new Error("Failed to load auth status");
+  }
+  return res.json();
+}
+
+export async function fetchAdminUsers() {
+  const res = await apiFetch("/api/admin/users");
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "Failed to load users");
+  }
+  const body = await res.json();
+  return body.users as AppUser[];
+}
+
+export async function createAdminUser(fields: {
+  username: string;
+  display_name?: string;
+  role: AppUser["role"];
+  password: string;
+  active?: boolean;
+}) {
+  const res = await apiFetch("/api/admin/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "Failed to create user");
+  }
+  const body = await res.json();
+  return body.user as AppUser;
+}
+
+export async function updateAdminUser(
+  userId: number,
+  fields: Partial<Pick<AppUser, "display_name" | "role" | "active">> & { password?: string }
+) {
+  const res = await apiFetch(`/api/admin/users/${userId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "Failed to update user");
+  }
+  const body = await res.json();
+  return body.user as AppUser;
+}
+
+export async function deleteAdminUser(userId: number) {
+  const res = await apiFetch(`/api/admin/users/${userId}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "Failed to delete user");
+  }
+  return res.json() as Promise<{ deleted: number }>;
+}
+
+export async function loginUser(email: string, password: string, rememberMe: boolean) {
+  const res = await apiFetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, remember_me: rememberMe }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "Login failed");
+  }
+  return res.json() as Promise<AuthMeResponse & { remember_me?: boolean; expires_at?: string }>;
+}
+
+export async function logoutUser() {
+  const res = await apiFetch("/api/auth/logout", { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "Logout failed");
+  }
+  return res.json() as Promise<{ ok: boolean }>;
 }

@@ -10,3 +10,14 @@ data/*.db-wal
 data/*.db-shm
 data/*.db-journal
 *.tsbuildinfo
+candidates.db
+candidates.db-wal
+candidates.db-shm
+# Downloaded election data (fetched by import scripts)
+data/2022-general-vtds.zip
+data/2022_General_Election_Returns.csv
+data/oe-2022-general.csv
+data/sos-*.html
+server/data/2022-general-vtds.zip
+server/data/2022_General_Election_Returns.csv
+server/data/oe-2022-general.csv

@@ -37,12 +37,9 @@ export function marginFromGopShare(gopShare: number | null) {
   return 2 * (gopShare - 0.5);
 }
 
-/** Normalize metric DB / API values to R−D margin for display. */
-export function metricAsMargin(value: number | null, metricKey?: string) {
+/** Normalize metric DB / API values to R−D margin decimal. */
+export function metricAsMargin(value: number | null, _metricKey?: string) {
   if (value == null || Number.isNaN(value)) return null;
-  if (metricKey && isLegMetricKey(metricKey) && value > 0.25 && value < 0.75) {
-    return marginFromGopShare(value);
-  }
   return value;
 }
 
@@ -53,9 +50,7 @@ export function formatMetricDisplay(
   if (options?.uncontested) return "Uncontested";
   if (value == null || Number.isNaN(value)) return "—";
 
-  const margin = usesMarginStorage(options?.metricKey)
-    ? metricAsMargin(value, options?.metricKey)
-    : marginFromGopShare(value);
+  const margin = metricAsMargin(value, options?.metricKey);
   if (margin == null) return "—";
 
   const pts = Math.abs(margin * 100);
@@ -75,12 +70,9 @@ export function metricDisplayClass(
     if (options.winningParty === "R") return "metric-rep";
     if (options.winningParty === "D") return "metric-dem";
   }
-  if (usesMarginStorage(options?.metricKey)) {
-    const margin = metricAsMargin(value, options?.metricKey);
-    if (margin == null || Number.isNaN(margin)) return "metric-neutral";
-    return margin >= 0 ? "metric-rep" : "metric-dem";
-  }
-  return metricPartyClass(value);
+  const margin = metricAsMargin(value, options?.metricKey);
+  if (margin == null || Number.isNaN(margin)) return "metric-neutral";
+  return margin >= 0 ? "metric-rep" : "metric-dem";
 }
 
 export function metricDisplayOptions(metric: {

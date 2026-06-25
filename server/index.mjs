@@ -20,7 +20,8 @@ import { syncRaceCandidates, updateCandidateVuid } from "./lib/candidates.mjs";
 import { addFinanceReport, attachFinanceHistoryToRaces, bulkImportFinanceReports, loadFinanceHistoryMap } from "./lib/financeReports.mjs";
 import { addFilingPeriod, listFilingPeriods, seedFilingPeriods } from "./lib/filingPeriods.mjs";
 import { buildContestResponse, detectUncontested } from "./lib/metricContest.mjs";
-import { gopShareFromMargin, isLegMetricKey } from "./lib/benchmarkMargin.mjs";
+import { metricValueFromContests } from "./lib/contestMetrics.mjs";
+import { computeContestStats, storedMarginForMetricKey, isBenchmarkMetricKey, contestMarginFromRows } from "./lib/electionMargin.mjs";
 import { seedOfficesIfEmpty } from "./seed-offices.mjs";
 import {
   attachSeatHoldersToRaces,
@@ -31,6 +32,9 @@ import {
   listTargetingOrganizations,
   loadOfficeTargetsByOffice,
 } from "./lib/targeting.mjs";
+import { resolveAuth, requireAdmin, requireAuth, loginUser, logoutUser, initAuth } from "./lib/auth.mjs";
+import { ensureBootstrapAdmin } from "./lib/bootstrapAdmin.mjs";
+import { createAppUser, deleteAppUser, listAppUsers, updateAppUser } from "./lib/users.mjs";
 
 const PORT = Number(process.env.PORT || process.env.CANDIDATE_LOOKUP_PORT || 3850);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -39,6 +43,55 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+app.use(async (req, _res, next) => {
+  try {
+    req.auth = await resolveAuth(req, getDb());
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/api/auth/me", (req, res) => {
+  res.json({
+    user: req.auth.user,
+    permissions: req.auth.permissions,
+    authenticated: req.auth.authenticated,
+  });
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const db = getDb();
+    const body = await loginUser(db, res, req.body ?? {});
+    res.json(body);
+  } catch (err) {
+    res.status(401).json({ error: err.message ?? "login failed" });
+  }
+});
+
+app.post("/api/auth/logout", async (req, res) => {
+  try {
+    const db = getDb();
+    res.json(await logoutUser(db, req, res));
+  } catch (err) {
+    res.status(500).json({ error: err.message ?? "logout failed" });
+  }
+});
+
+const PUBLIC_API_PATHS = new Set([
+  "/api/health",
+  "/api/auth/me",
+  "/api/auth/login",
+  "/api/auth/logout",
+]);
+
+app.use((req, res, next) => {
+  if (!req.path.startsWith("/api/")) return next();
+  if (PUBLIC_API_PATHS.has(req.path)) return next();
+  return requireAuth(req, res, next);
+});
 
 const VALID_CATEGORIES = new Set(["house", "senate", "sboe", "statewide", "congressional"]);
 
@@ -237,6 +290,48 @@ function buildRacesFromSheetRows(sheetRows, metricsByOffice, category, uncontest
     .filter((race) => race.candidates.length > 0);
 }
 
+const FULL_OFFICE_LIST_CATEGORIES = new Set(["senate", "sboe", "statewide"]);
+
+async function expandRacesWithAllOffices(db, races, metricsByOffice, category, uncontestedMap) {
+  if (!FULL_OFFICE_LIST_CATEGORIES.has(category)) return races;
+
+  const offices = await db
+    .prepare(
+      `SELECT id AS office_id, office_code, office_name, district
+       FROM offices
+       WHERE category = ?
+       ORDER BY sort_order, district, office_code`
+    )
+    .all(category);
+
+  const byOfficeId = new Map(races.map((race) => [race.office_id, race]));
+  const metricFields = metricFieldsForCategory(category);
+
+  return offices.map((office) => {
+    const existing = byOfficeId.get(office.office_id);
+    if (existing) return existing;
+
+    const metrics = metricsByOffice.get(office.office_id) ?? {};
+    return {
+      office_id: office.office_id,
+      office_code: office.office_code,
+      office_name: office.office_name,
+      district: office.district,
+      metrics: metricFields.map((field) => {
+        const winningParty = uncontestedMap.get(`${office.office_id}|${field.key}`) ?? null;
+        return {
+          key: field.key,
+          label: field.label,
+          value: metrics[field.key] ?? null,
+          uncontested: winningParty != null,
+          winning_party: winningParty,
+        };
+      }),
+      candidates: [],
+    };
+  });
+}
+
 app.get("/api/races", async (req, res) => {
   const category = String(req.query.category ?? "");
   if (!VALID_CATEGORIES.has(category)) {
@@ -284,10 +379,50 @@ app.get("/api/races", async (req, res) => {
        WHERE o.category = ?`
     )
     .all(category);
-  const metricsByOffice = new Map(metricsRows.map((m) => [m.office_id, m]));
+
+  const contestRows = await db
+    .prepare(
+      `SELECT c.office_id, c.metric_key, c.candidate_name, c.party, c.votes, c.vote_pct,
+              c.contest_margin, c.unopposed
+       FROM metric_contest_candidates c
+       JOIN offices o ON o.id = c.office_id
+       WHERE o.category = ?`
+    )
+    .all(category);
+
+  const contestsByOfficeMetric = new Map();
+  for (const row of contestRows) {
+    const key = `${row.office_id}|${row.metric_key}`;
+    if (!contestsByOfficeMetric.has(key)) contestsByOfficeMetric.set(key, []);
+    contestsByOfficeMetric.get(key).push(row);
+  }
+
+  const metricsByOffice = new Map();
+  for (const m of metricsRows) {
+    metricsByOffice.set(m.office_id, {
+      office_id: m.office_id,
+      trump_2024: m.trump_2024,
+      cruz_2024: m.cruz_2024,
+      abbott_2022: m.abbott_2022,
+      leg_2024: m.leg_2024,
+      leg_2022: m.leg_2022,
+    });
+  }
+
+  for (const [key, rows] of contestsByOfficeMetric) {
+    const [officeId, metricKey] = key.split("|");
+    const id = Number(officeId);
+    const existing = metricsByOffice.get(id) ?? { office_id: id };
+    const computed = contestMarginFromRows(rows, metricKey);
+    if (computed != null) {
+      existing[metricKey] = computed;
+    }
+    metricsByOffice.set(id, existing);
+  }
   const uncontestedMap = await buildUncontestedMap(db, category);
   const financeMap = await loadFinanceHistoryMap(db, category, cycleYear);
   let races = buildRacesFromSheetRows(rows, metricsByOffice, category, uncontestedMap);
+  races = await expandRacesWithAllOffices(db, races, metricsByOffice, category, uncontestedMap);
   await syncRaceCandidates(db, races, cycleYear, category);
   races = attachFinanceHistoryToRaces(races, financeMap);
   races = await attachSeatHoldersToRaces(db, races, rows, category);
@@ -311,7 +446,7 @@ app.get("/api/filing-periods", async (_req, res) => {
   res.json({ periods: await listFilingPeriods(db) });
 });
 
-app.post("/api/filing-periods", async (req, res) => {
+app.post("/api/filing-periods", requireAdmin, async (req, res) => {
   const db = getDb();
   try {
     const period = await addFilingPeriod(db, req.body ?? {});
@@ -368,20 +503,23 @@ app.get("/api/offices/:officeId/metrics/:metricKey/contest", async (req, res) =>
   }
 
   const metrics = await db.prepare(`SELECT * FROM office_metrics WHERE office_id = ?`).get(officeId);
-  const stored = metrics?.[metricKey] ?? null;
-  const gopShare = isLegMetricKey(metricKey) ? gopShareFromMargin(stored) : stored;
-  const label = metricFieldsForCategory(office.category).find((field) => field.key === metricKey)?.label ?? metricKey;
+  const stored =
+    isBenchmarkMetricKey(metricKey) ? (metrics?.[metricKey] ?? null) : null;
 
   const rows = await db
     .prepare(
-      `SELECT candidate_name, party, votes, vote_pct, unopposed, contest_name, source
+      `SELECT candidate_name, party, votes, vote_pct, contest_margin, unopposed, contest_name, source
        FROM metric_contest_candidates
        WHERE office_id = ? AND metric_key = ?
-       ORDER BY sort_order, votes DESC`
+       ORDER BY sort_order, votes DESC NULLS LAST, candidate_name`
     )
     .all(officeId, metricKey);
 
-  const contest = buildContestResponse(office, metricKey, label, gopShare, rows);
+  const computed =
+    rows.length > 0 ? await metricValueFromContests(db, officeId, metricKey, null) : stored;
+  const label = metricFieldsForCategory(office.category).find((field) => field.key === metricKey)?.label ?? metricKey;
+
+  const contest = buildContestResponse(office, metricKey, label, computed, rows);
   if (!contest) {
     res.status(404).json({ error: "no contest data for this metric" });
     return;
@@ -397,7 +535,7 @@ function parseOptionalNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
-app.patch("/api/offices/:officeId/metrics", async (req, res) => {
+app.patch("/api/offices/:officeId/metrics", requireAdmin, async (req, res) => {
   const officeId = Number(req.params.officeId);
   const { key, value } = req.body ?? {};
   if (!Number.isInteger(officeId) || officeId < 1) {
@@ -440,7 +578,7 @@ app.patch("/api/offices/:officeId/metrics", async (req, res) => {
   res.json({ office_id: officeId, metrics: updated });
 });
 
-app.post("/api/races/finance-reports", async (req, res) => {
+app.post("/api/races/finance-reports", requireAdmin, async (req, res) => {
   const {
     candidate_id,
     office_id,
@@ -483,7 +621,7 @@ app.get("/api/targeting/organizations", async (_req, res) => {
   res.json({ organizations: await listTargetingOrganizations(db) });
 });
 
-app.post("/api/targeting/organizations", async (req, res) => {
+app.post("/api/targeting/organizations", requireAdmin, async (req, res) => {
   try {
     const db = getDb();
     const org = await addTargetingOrganization(db, req.body ?? {});
@@ -501,7 +639,7 @@ app.get("/api/consultants", async (req, res) => {
   res.json({ consultants: await listConsultants(db, { cycleYear, category }) });
 });
 
-app.post("/api/consultants", async (req, res) => {
+app.post("/api/consultants", requireAdmin, async (req, res) => {
   try {
     const db = getDb();
     const consultant = await addConsultant(db, req.body ?? {});
@@ -509,6 +647,50 @@ app.post("/api/consultants", async (req, res) => {
   } catch (err) {
     const status = isConstraintError(err) ? 409 : 400;
     res.status(status).json({ error: err.message ?? "failed to create consultant" });
+  }
+});
+
+app.use("/api/admin", requireAdmin);
+
+app.get("/api/admin/users", async (_req, res) => {
+  try {
+    const db = getDb();
+    res.json({ users: await listAppUsers(db) });
+  } catch (err) {
+    res.status(500).json({ error: err.message ?? "failed to list users" });
+  }
+});
+
+app.post("/api/admin/users", async (req, res) => {
+  try {
+    const db = getDb();
+    const user = await createAppUser(db, req.body ?? {});
+    res.json({ user });
+  } catch (err) {
+    const status = isConstraintError(err) ? 409 : 400;
+    res.status(status).json({ error: err.message ?? "failed to create user" });
+  }
+});
+
+app.patch("/api/admin/users/:userId", async (req, res) => {
+  try {
+    const db = getDb();
+    const user = await updateAppUser(db, req.params.userId, req.body ?? {});
+    res.json({ user });
+  } catch (err) {
+    const status = err.message === "user not found" ? 404 : 400;
+    res.status(status).json({ error: err.message ?? "failed to update user" });
+  }
+});
+
+app.delete("/api/admin/users/:userId", async (req, res) => {
+  try {
+    const db = getDb();
+    const result = await deleteAppUser(db, req.params.userId);
+    res.json(result);
+  } catch (err) {
+    const status = err.message === "user not found" ? 404 : 400;
+    res.status(status).json({ error: err.message ?? "failed to delete user" });
   }
 });
 
@@ -646,7 +828,7 @@ app.patch("/api/admin/candidates/:candidateId/vuid", async (req, res) => {
   }
 });
 
-app.patch("/api/candidates/:candidateId/consultants", async (req, res) => {
+app.patch("/api/candidates/:candidateId/consultants", requireAdmin, async (req, res) => {
   const candidateId = Number(req.params.candidateId);
   if (!Number.isInteger(candidateId) || candidateId < 1) {
     res.status(400).json({ error: "invalid candidate id" });
@@ -676,7 +858,7 @@ app.patch("/api/candidates/:candidateId/consultants", async (req, res) => {
   }
 });
 
-app.patch("/api/counties/:countyKey", async (req, res) => {
+app.patch("/api/counties/:countyKey", requireAdmin, async (req, res) => {
   const countyKey = String(req.params.countyKey ?? "").trim();
   const { election, margin, gop_pct, dem_pct, gop_votes, dem_votes } = req.body ?? {};
   if (!countyKey || !VALID_ELECTIONS.has(election)) {
@@ -800,6 +982,11 @@ if (fs.existsSync(distIndex)) {
 async function start() {
   await initDb();
   const db = getDb();
+  await initAuth(db);
+  const bootstrap = await ensureBootstrapAdmin(db);
+  if (bootstrap.created) {
+    console.log(`Bootstrap admin created: ${bootstrap.email}`);
+  }
   await seedOfficesIfEmpty(db);
   await seedFilingPeriods(db);
   app.listen(PORT, () => {

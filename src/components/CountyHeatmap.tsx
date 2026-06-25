@@ -352,7 +352,7 @@ export function RaceMetrics({
       });
       const visible =
         group.id === "prior_elections"
-          ? groupMetrics.filter((metric) => metric.value != null)
+          ? groupMetrics.filter((metric) => metric.value != null || metric.uncontested)
           : editMode
             ? groupMetrics
             : groupMetrics.filter((metric) => metric.value != null);

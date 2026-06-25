@@ -2,7 +2,7 @@ import { getDb, closeDb, initDb } from "./db.mjs";
 import { ensureMetricsSchema } from "./lib/metricsImport.mjs";
 import { parseBenchmarkMargin } from "./lib/benchmarkMargin.mjs";
 import { seedBenchmarkContestsForOffice } from "./lib/contestMetrics.mjs";
-import { SENATE_BENCHMARKS } from "./data/senate-benchmarks.mjs";
+import { SBOE_BENCHMARKS } from "./data/sboe-benchmarks.mjs";
 
 await initDb();
 const db = getDb();
@@ -19,8 +19,8 @@ const upsert = db.prepare(
 
 let updated = 0;
 let contests = 0;
-for (const row of SENATE_BENCHMARKS) {
-  const officeCode = `SD-${String(row.district).padStart(2, "0")}`;
+for (const row of SBOE_BENCHMARKS) {
+  const officeCode = `SBOE-${String(row.district).padStart(2, "0")}`;
   const office = await db.prepare(`SELECT id FROM offices WHERE office_code = ?`).get(officeCode);
   if (!office) {
     console.warn(`Missing office ${officeCode}`);
@@ -43,5 +43,5 @@ for (const row of SENATE_BENCHMARKS) {
   contests += await seedBenchmarkContestsForOffice(db, officeCode, margins);
 }
 
-console.log(`Updated benchmark margins for ${updated} senate districts (${contests} benchmark contests seeded).`);
+console.log(`Updated benchmark margins for ${updated} SBOE districts (${contests} benchmark contests seeded).`);
 await closeDb();

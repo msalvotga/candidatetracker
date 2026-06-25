@@ -1,5 +1,7 @@
 /** Canonical statewide contests for district-composite metrics (no per-district vote breakdown stored). */
 
+import { computeContestStats, contestMarginFromRows } from "./electionMargin.mjs";
+
 export const METRIC_LABELS = {
   trump_2024: "2024 President",
   cruz_2024: "2024 U.S. Senate",
@@ -71,7 +73,7 @@ export function buildDerivedContest(metricKey, marginOrShare, label) {
     contest_name: canonical.contestName,
     gop_share: marginOrShare,
     derived: true,
-    note: "Two-party share for this district. Vote totals are not stored for this benchmark.",
+    note: "Benchmark margin from district composite data. Import election results for vote totals.",
     candidates: canonical.candidates.map((candidate) => ({
       candidate_name: candidate.name,
       party: candidate.party,
@@ -82,10 +84,15 @@ export function buildDerivedContest(metricKey, marginOrShare, label) {
   };
 }
 
-export function buildContestResponse(office, metricKey, label, gopShare, rows) {
+export function buildContestResponse(office, metricKey, label, storedMargin, rows) {
+  const stats = rows.length > 0 ? computeContestStats(rows) : null;
+  const margin =
+    rows.length > 0 ? contestMarginFromRows(rows, metricKey) : storedMargin;
+
   if (rows.length > 0) {
     const contestName = rows.find((r) => r.contest_name)?.contest_name ?? label;
-    const { uncontested, winning_party } = detectUncontested(rows, gopShare);
+    const { uncontested, winning_party } = detectUncontested(rows, margin);
+    const totalVotes = stats?.totalVotes ?? 0;
     return {
       office_id: office.id,
       office_code: office.office_code,
@@ -93,7 +100,9 @@ export function buildContestResponse(office, metricKey, label, gopShare, rows) {
       metric_key: metricKey,
       label,
       contest_name: contestName,
-      gop_share: gopShare,
+      gop_share: margin,
+      total_votes: totalVotes,
+      party_totals: stats?.partyTotals ?? null,
       uncontested,
       winning_party,
       derived: false,
@@ -102,13 +111,16 @@ export function buildContestResponse(office, metricKey, label, gopShare, rows) {
         candidate_name: row.candidate_name,
         party: row.party,
         votes: row.votes,
-        vote_pct: row.vote_pct,
+        vote_pct:
+          row.votes != null && totalVotes > 0
+            ? row.votes / totalVotes
+            : row.vote_pct,
         unopposed: Boolean(row.unopposed),
       })),
     };
   }
 
-  const derived = buildDerivedContest(metricKey, gopShare, label);
+  const derived = buildDerivedContest(metricKey, storedMargin, label);
   if (!derived) return null;
 
   return {

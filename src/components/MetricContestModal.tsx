@@ -116,6 +116,12 @@ export function MetricContestModal({
               {contest.uncontested ? (
                 <>
                   Result: <strong>Uncontested</strong>
+                  {contest.total_votes != null && contest.total_votes > 0 ? (
+                    <>
+                      {" "}
+                      — <strong>{formatVotes(contest.total_votes)}</strong> votes
+                    </>
+                  ) : null}
                 </>
               ) : (
                 <>
@@ -170,6 +176,13 @@ export function MetricContestModal({
               <p className="metric-modal-note">{contest.note}</p>
             ) : null}
             {contest.source ? <p className="metric-modal-source">Source: {contest.source}</p> : null}
+            {contest.uncontested &&
+            contest.candidates.every((candidate) => candidate.votes == null) ? (
+              <p className="metric-modal-note">
+                Vote totals were not published for this unopposed race in the official Texas election data
+                we import.
+              </p>
+            ) : null}
           </div>
         ) : null}
       </div>
