@@ -1,5 +1,7 @@
 import type { OfficeCategory } from "../types";
 
+export { canonicalCountyKey, normalizeCountyKey } from "./countyKeys";
+
 export const BENCHMARK_METRIC_KEYS = new Set(["trump_2024", "cruz_2024", "abbott_2022"]);
 export const LEG_METRIC_KEYS = new Set(["leg_2024", "leg_2022"]);
 
@@ -13,15 +15,6 @@ export function isLegMetricKey(key?: string) {
 
 export function usesMarginStorage(metricKey?: string) {
   return metricKey != null && (isBenchmarkMetricKey(metricKey) || isLegMetricKey(metricKey));
-}
-
-export function normalizeCountyKey(name: string) {
-  return String(name ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+county$/i, "")
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
 }
 
 export function parseMetricValue(value: unknown) {

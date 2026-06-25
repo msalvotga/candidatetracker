@@ -111,7 +111,38 @@ async function runMigrations(pool) {
     )
   `);
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_tga_staffers_office ON tga_staffers(office_id)
+    CREATE TABLE IF NOT EXISTS tga_staffer_offices (
+      staffer_id INTEGER NOT NULL REFERENCES tga_staffers(id) ON DELETE CASCADE,
+      office_id INTEGER NOT NULL REFERENCES offices(id) ON DELETE CASCADE,
+      PRIMARY KEY (staffer_id, office_id)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tga_staffer_offices_office ON tga_staffer_offices(office_id)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tga_staffer_counties (
+      staffer_id INTEGER NOT NULL REFERENCES tga_staffers(id) ON DELETE CASCADE,
+      county_name TEXT NOT NULL,
+      PRIMARY KEY (staffer_id, county_name)
+    )
+  `);
+  await pool.query(`
+    INSERT INTO tga_staffer_offices (staffer_id, office_id)
+    SELECT id, office_id
+    FROM tga_staffers
+    WHERE office_id IS NOT NULL
+    ON CONFLICT DO NOTHING
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS office_counties (
+      office_id INTEGER NOT NULL REFERENCES offices(id) ON DELETE CASCADE,
+      county_name TEXT NOT NULL,
+      PRIMARY KEY (office_id, county_name)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_office_counties_county ON office_counties(county_name)
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS app_users (
@@ -147,6 +178,26 @@ async function runMigrations(pool) {
   await pool.query(`
     ALTER TABLE metric_contest_candidates
     ADD COLUMN IF NOT EXISTS contest_margin DOUBLE PRECISION
+  `);
+  await pool.query(`
+    UPDATE county_election_results
+    SET county_key = 'la_salle', county_name = 'La Salle'
+    WHERE county_key = 'lasalle'
+  `);
+  await pool.query(`
+    UPDATE county_election_results
+    SET gop_pct = gop_pct / 100
+    WHERE gop_pct IS NOT NULL AND ABS(gop_pct) > 1
+  `);
+  await pool.query(`
+    UPDATE county_election_results
+    SET dem_pct = dem_pct / 100
+    WHERE dem_pct IS NOT NULL AND ABS(dem_pct) > 1
+  `);
+  await pool.query(`
+    UPDATE county_election_results
+    SET margin = margin / 100
+    WHERE margin IS NOT NULL AND ABS(margin) > 1
   `);
 }
 

@@ -43,6 +43,8 @@ const COLUMN_LABELS: Record<string, string> = {
   up_for_reelection: "Up for reelection",
   county_name: "County",
   office_id: "District",
+  office_ids: "Districts",
+  county_names: "Counties",
   metric_key: "Election",
   vote_pct: "Vote share",
   contest_margin: "Margin",
@@ -58,8 +60,8 @@ const COLUMN_LABELS: Record<string, string> = {
 const TABLE_COLUMNS: Record<string, string[]> = {
   consultants: ["consultant_key", "name", "candidate_count"],
   targeting_organizations: ["org_key", "name"],
-  offices: ["office_code", "office_name", "district", "county_name", "seat_holder_name", "seat_holder_party", "up_for_reelection", "target_org_keys"],
-  tga_staffers: ["name", "office_id"],
+  offices: ["office_code", "office_name", "district", "county_name", "county_names", "seat_holder_name", "seat_holder_party", "up_for_reelection", "target_org_keys"],
+  tga_staffers: ["name", "office_ids", "county_names"],
   metric_contest_candidates: [
     "office_code",
     "metric_key",
@@ -128,7 +130,7 @@ function normalizeCellValue(value: unknown) {
   return String(value).trim();
 }
 
-const MULTI_SELECT_FIELDS = new Set(["target_org_keys", "consultant_keys"]);
+const MULTI_SELECT_FIELDS = new Set(["target_org_keys", "consultant_keys", "office_ids", "county_names"]);
 
 function normalizeKeyListValue(value: unknown) {
   if (value == null || value === "") return "";
@@ -149,7 +151,12 @@ function normalizeKeyListValue(value: unknown) {
 }
 
 function cellValuesEqual(a: unknown, b: unknown, column?: string) {
-  if (column === "target_org_keys" || column === "consultant_keys") {
+  if (
+    column === "target_org_keys" ||
+    column === "consultant_keys" ||
+    column === "office_ids" ||
+    column === "county_names"
+  ) {
     return normalizeKeyListValue(a) === normalizeKeyListValue(b);
   }
   if (a == null && b == null) return true;
@@ -254,15 +261,13 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
   );
   const visibleTotal = singleCandidateFilterActive ? visibleRows.length : total;
 
-  const columns = useMemo(
-    () =>
-      visibleRows[0]
-        ? visibleColumns(selectedTable, visibleRows[0] as Record<string, unknown>)
-        : rows[0]
-          ? visibleColumns(selectedTable, rows[0] as Record<string, unknown>)
-          : [],
-    [visibleRows, rows, selectedTable]
-  );
+  const columns = useMemo(() => {
+    return visibleRows[0]
+      ? visibleColumns(selectedTable, visibleRows[0] as Record<string, unknown>)
+      : rows[0]
+        ? visibleColumns(selectedTable, rows[0] as Record<string, unknown>)
+        : TABLE_COLUMNS[selectedTable] ?? [];
+  }, [visibleRows, rows, selectedTable]);
 
   const pendingUpdates = useMemo(() => buildPendingUpdates(rows, edits), [rows, edits]);
   const hasPendingEdits = pendingUpdates.length > 0;
@@ -314,7 +319,14 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
       return;
     }
     void Promise.all(
-      refs.map(async (ref) => [ref, await fetchMultiSelectOptions(ref, { cycleYear, category: filterCategory || undefined })] as const)
+      refs.map(async (ref) => {
+        const category =
+          ref === "offices_non_statewide" || (selectedTable === "tga_staffers" && ref === "offices")
+            ? undefined
+            : filterCategory || undefined;
+        const optionRef = ref === "offices" && selectedTable === "tga_staffers" ? "offices_non_statewide" : ref;
+        return [ref, await fetchMultiSelectOptions(optionRef, { cycleYear, category })] as const;
+      })
     ).then((entries) => {
       setMultiSelectOptions(Object.fromEntries(entries));
     });
@@ -347,14 +359,12 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
 
   useEffect(() => {
     const needsOfficeSelect =
-      (selectedTable === "candidates" || selectedTable === "tga_staffers") &&
-      insertableColumns.includes("office_id");
+      selectedTable === "candidates" && insertableColumns.includes("office_id");
     if (!needsOfficeSelect) {
       setOfficeOptions([]);
       return;
     }
-    const category = selectedTable === "tga_staffers" ? undefined : filterCategory || undefined;
-    void fetchMultiSelectOptions("offices", { category }).then(setOfficeOptions);
+    void fetchMultiSelectOptions("offices", { category: filterCategory || undefined }).then(setOfficeOptions);
   }, [selectedTable, insertableColumns, filterCategory]);
 
   useEffect(() => {
@@ -656,8 +666,9 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
 
       {editMode && selectedTable === "tga_staffers" ? (
         <p className="admin-add-hint">
-          Track TGA staff assignments by name and district. The district list includes every office defined in the{" "}
-          <strong>Offices</strong> table.
+          Track TGA staff by name, assign multiple districts (House, Senate, SBOE, and Congressional — not statewide),
+          and select counties they cover. Staff appear on race breakdowns when linked to that office or a county in that
+          district (assign counties on the Offices table).
         </p>
       ) : null}
 
@@ -712,9 +723,13 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
                             selectOptions={selectColumns[col] ? selectOptions[selectColumns[col]] ?? [] : undefined}
                             selectValueKind={selectValueKind[col]}
                             displayValue={
-                              col === "office_id"
-                                ? officeDisplayLabel(row)
-                                : undefined
+                              col === "office_ids"
+                                ? String(row.office_labels ?? row.office_codes ?? "")
+                                : col === "county_names"
+                                  ? String(row.county_labels ?? row.county_names ?? "")
+                                  : col === "office_id"
+                                    ? officeDisplayLabel(row)
+                                    : undefined
                             }
                             onChange={(value) => updateCell(rowId, col, value)}
                           />
@@ -821,8 +836,9 @@ function AdminTableCell({
     const optionKeys = new Set(multiSelectOptions.map((option) => option.value));
     const selected = new Set(parseKeyList(value).filter((key) => optionKeys.has(key)));
     const orphanKeys = parseKeyList(value).filter((key) => !optionKeys.has(key));
+    const compact = multiSelectRef === "offices_non_statewide";
     return (
-      <div className={`admin-multi-select${changed ? " admin-multi-select-changed" : ""}`}>
+      <div className={`admin-multi-select${changed ? " admin-multi-select-changed" : ""}${compact ? " admin-multi-select-compact" : ""}`}>
         {orphanKeys.length > 0 ? (
           <span className="admin-add-hint">Unlisted: {orphanKeys.join(", ")}</span>
         ) : null}

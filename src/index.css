@@ -496,6 +496,66 @@ h2 {
   z-index: 1;
 }
 
+.admin-table-scroll-staffers {
+  max-height: min(70vh, 900px);
+}
+
+.admin-table-staffers th.admin-sticky-col,
+.admin-table-staffers td.admin-sticky-col {
+  position: sticky;
+  background: var(--bg);
+  z-index: 2;
+}
+
+.admin-table-staffers th.admin-sticky-col-name,
+.admin-table-staffers td.admin-sticky-col-name {
+  left: 0;
+  min-width: 9rem;
+}
+
+.admin-table-staffers th.admin-sticky-col-districts,
+.admin-table-staffers td.admin-sticky-col-districts {
+  left: 9rem;
+  min-width: 14rem;
+  max-width: 18rem;
+  white-space: normal;
+}
+
+.admin-table-staffers th.admin-county-col,
+.admin-table-staffers td.admin-county-col {
+  min-width: 2.4rem;
+  max-width: 2.4rem;
+  text-align: center;
+  padding: 0.35rem 0.2rem;
+  white-space: normal;
+}
+
+.admin-table-staffers th.admin-county-col {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  max-height: 7rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+}
+
+.admin-county-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.admin-county-check-changed input {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.admin-multi-select-compact {
+  max-height: 12rem;
+  overflow: auto;
+  min-width: 14rem;
+}
+
 .admin-vuid-cell {
   display: flex;
   gap: 0.35rem;
@@ -793,6 +853,17 @@ h2 {
   margin-bottom: 0.75rem;
   padding-bottom: 0.75rem;
   border-bottom: 1px solid var(--border);
+}
+
+.race-tga-staffer-block {
+  margin-bottom: 1rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.race-tga-staffer-name {
+  font-size: 1.05rem;
+  font-weight: 600;
 }
 
 .race-seat-holder-block {

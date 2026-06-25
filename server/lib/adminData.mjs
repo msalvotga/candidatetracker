@@ -4,6 +4,14 @@ import { syncOfficeTargets } from "./targeting.mjs";
 import { listTexasCountyOptions } from "../data/texas-counties.mjs";
 import { parseLegMargin } from "./benchmarkMargin.mjs";
 import { enrichElectionResultRows, syncContestMargin } from "./contestMetrics.mjs";
+import { enrichOfficeRowsWithCounties, syncOfficeCounties } from "./officeCounties.mjs";
+import {
+  enrichTgaStafferRows,
+  fetchTgaStafferRow,
+  syncStafferCounties,
+  syncStafferOffices,
+  TGA_STAFFER_EDITABLE_COLUMNS,
+} from "./tgaStaffers.mjs";
 
 const ADMIN_TABLES = {
   filing_periods: {
@@ -129,21 +137,24 @@ const ADMIN_TABLES = {
         where += " AND o.category = @category";
         params.category = category;
       }
-      const rows = await db
-        .prepare(
-          `SELECT o.id, o.category, o.district, o.office_code, o.office_name, o.sort_order,
-                  o.seat_holder_name, o.seat_holder_party, o.up_for_reelection, o.county_name,
-                  COALESCE((
-                    SELECT GROUP_CONCAT(ot.org_key)
-                    FROM office_targets ot
-                    WHERE ot.office_id = o.id AND ot.cycle_year = @cycleYear
-                  ), '') AS target_org_keys
-           FROM offices o
-           ${where}
-           ORDER BY o.category, o.sort_order, o.district
-           LIMIT @limit OFFSET @offset`
-        )
-        .all(params);
+      const rows = await enrichOfficeRowsWithCounties(
+        db,
+        await db
+          .prepare(
+            `SELECT o.id, o.category, o.district, o.office_code, o.office_name, o.sort_order,
+                    o.seat_holder_name, o.seat_holder_party, o.up_for_reelection, o.county_name,
+                    COALESCE((
+                      SELECT GROUP_CONCAT(ot.org_key)
+                      FROM office_targets ot
+                      WHERE ot.office_id = o.id AND ot.cycle_year = @cycleYear
+                    ), '') AS target_org_keys
+             FROM offices o
+             ${where}
+             ORDER BY o.category, o.sort_order, o.district
+             LIMIT @limit OFFSET @offset`
+          )
+          .all(params)
+      );
       const total = (await db.prepare(`SELECT COUNT(*) AS count FROM offices o ${where}`).get(params)).count;
       return { rows, total };
     },
@@ -217,16 +228,14 @@ const ADMIN_TABLES = {
     query: async (db, { limit, offset }) => {
       const rows = await db
         .prepare(
-          `SELECT s.id, s.name, s.office_id,
-                  o.office_code, o.office_name, o.category, o.district
+          `SELECT s.id, s.name
            FROM tga_staffers s
-           LEFT JOIN offices o ON o.id = s.office_id
            ORDER BY s.name COLLATE NOCASE, s.id
            LIMIT @limit OFFSET @offset`
         )
         .all({ limit, offset });
       const total = (await db.prepare(`SELECT COUNT(*) AS count FROM tga_staffers`).get()).count;
-      return { rows, total };
+      return { rows: await enrichTgaStafferRows(db, rows), total };
     },
     exportQuery: async (db) =>
       (await adminQueryTable(db, "tga_staffers", { limit: 100000, offset: 0 })).rows,
@@ -298,7 +307,17 @@ export const EDITABLE_COLUMNS = {
   filing_periods: ["label", "sort_order", "default_report_period_end"],
   candidates: ["vuid", "name", "party", "is_incumbent", "tec_filer_id", "filed", "consultant_keys", "notes"],
   finance_reports: ["period_key", "report_period_end", "total_raised", "total_spent", "cash_on_hand"],
-  offices: ["office_name", "district", "county_name", "sort_order", "seat_holder_name", "seat_holder_party", "up_for_reelection", "target_org_keys"],
+  offices: [
+    "office_name",
+    "district",
+    "county_name",
+    "county_names",
+    "sort_order",
+    "seat_holder_name",
+    "seat_holder_party",
+    "up_for_reelection",
+    "target_org_keys",
+  ],
   race_sheet_rows: [
     "incumbent_name",
     "incumbent_party",
@@ -311,13 +330,12 @@ export const EDITABLE_COLUMNS = {
   ],
   targeting_organizations: ["name"],
   consultants: ["name"],
-  tga_staffers: ["name", "office_id"],
+  tga_staffers: TGA_STAFFER_EDITABLE_COLUMNS,
   metric_contest_candidates: ["candidate_name", "party", "votes", "contest_margin", "unopposed", "contest_name"],
 };
 
 export const SELECT_COLUMNS = {
   offices: { county_name: "texas_counties" },
-  tga_staffers: { office_id: "offices" },
   metric_contest_candidates: { office_id: "offices", metric_key: "metric_keys" },
 };
 
@@ -326,8 +344,9 @@ export const SELECT_VALUE_KIND = {
 };
 
 export const MULTI_SELECT_COLUMNS = {
-  offices: { target_org_keys: "targeting_organizations" },
+  offices: { target_org_keys: "targeting_organizations", county_names: "texas_counties" },
   candidates: { consultant_keys: "consultants" },
+  tga_staffers: { office_ids: "offices_non_statewide", county_names: "texas_counties" },
 };
 
 export const INSERTABLE_TABLES = {
@@ -335,7 +354,7 @@ export const INSERTABLE_TABLES = {
   targeting_organizations: ["org_key", "name"],
   consultants: ["consultant_key", "name"],
   filing_periods: ["period_key", "label", "sort_order", "default_report_period_end"],
-  tga_staffers: ["name", "office_id"],
+  tga_staffers: ["name"],
   metric_contest_candidates: ["office_id", "metric_key", "candidate_name", "party", "votes"],
 };
 
@@ -467,14 +486,31 @@ export async function bulkUpdateAdminTableRows(db, tableName, updates, { cycleYe
       const rowId = Number(item?.id);
       if (!Number.isInteger(rowId) || rowId < 1) throw new Error("invalid row id");
 
-      if (tableName === "offices" && Object.prototype.hasOwnProperty.call(fields, "target_org_keys")) {
-        await syncOfficeTargets(db, rowId, cycleYear ?? 2026, parseKeyList(fields.target_org_keys));
-        delete fields.target_org_keys;
+      if (tableName === "offices") {
+        if (Object.prototype.hasOwnProperty.call(fields, "target_org_keys")) {
+          await syncOfficeTargets(db, rowId, cycleYear ?? 2026, parseKeyList(fields.target_org_keys));
+          delete fields.target_org_keys;
+        }
+        if (Object.prototype.hasOwnProperty.call(fields, "county_names")) {
+          await syncOfficeCounties(db, rowId, parseKeyList(fields.county_names));
+          delete fields.county_names;
+        }
       }
 
       if (tableName === "candidates" && Object.prototype.hasOwnProperty.call(fields, "consultant_keys")) {
         await syncCandidateConsultants(db, rowId, parseKeyList(fields.consultant_keys));
         delete fields.consultant_keys;
+      }
+
+      if (tableName === "tga_staffers") {
+        if (Object.prototype.hasOwnProperty.call(fields, "office_ids")) {
+          await syncStafferOffices(db, rowId, parseKeyList(fields.office_ids));
+          delete fields.office_ids;
+        }
+        if (Object.prototype.hasOwnProperty.call(fields, "county_names")) {
+          await syncStafferCounties(db, rowId, parseKeyList(fields.county_names));
+          delete fields.county_names;
+        }
       }
 
       if (tableName === "finance_reports" && fields.period_key != null) {
@@ -516,7 +552,7 @@ export async function bulkUpdateAdminTableRows(db, tableName, updates, { cycleYe
           updated += 1;
           continue;
         }
-        if (tableName === "offices" || tableName === "candidates") updated += 1;
+        if (tableName === "offices" || tableName === "candidates" || tableName === "tga_staffers") updated += 1;
         continue;
       }
       const result = await db.prepare(`UPDATE ${tableName} SET ${setParts.join(", ")} WHERE id = @id`).run(params);
@@ -599,22 +635,15 @@ export async function insertAdminTableRow(db, tableName, fields) {
   }
 
   if (tableName === "tga_staffers") {
-    const office = await db.prepare(`SELECT id FROM offices WHERE id = ?`).get(params.office_id);
-    if (!office) throw new Error("office not found");
-
-    const result = await db.prepare(
-      `INSERT INTO tga_staffers (name, office_id) VALUES (@name, @office_id) RETURNING id`
-    ).run(params);
-
+    const result = await db.prepare(`INSERT INTO tga_staffers (name) VALUES (@name) RETURNING id`).run(params);
     const id = result.lastInsertRowid;
-    return await db
-      .prepare(
-        `SELECT s.id, s.name, s.office_id, o.office_code, o.office_name, o.category, o.district
-         FROM tga_staffers s
-         LEFT JOIN offices o ON o.id = s.office_id
-         WHERE s.id = ?`
-      )
-      .get(id);
+    if (fields.office_ids != null && String(fields.office_ids).trim() !== "") {
+      await syncStafferOffices(db, id, parseKeyList(fields.office_ids));
+    }
+    if (fields.county_names != null && String(fields.county_names).trim() !== "") {
+      await syncStafferCounties(db, id, parseKeyList(fields.county_names));
+    }
+    return await fetchTgaStafferRow(db, id);
   }
 
   if (tableName === "metric_contest_candidates") {
@@ -698,9 +727,12 @@ export async function loadAdminMultiSelectOptions(db, refTable, { cycleYear, cat
       count: row.candidate_count ?? 0,
     }));
   }
-  if (refTable === "offices") {
+  if (refTable === "offices" || refTable === "offices_non_statewide") {
     const params = {};
     let where = "WHERE 1=1";
+    if (refTable === "offices_non_statewide") {
+      where += " AND category != 'statewide'";
+    }
     if (category) {
       where += " AND category = @category";
       params.category = category;

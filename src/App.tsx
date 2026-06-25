@@ -228,6 +228,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (tab !== "counties") return;
+    void loadCounties();
+  }, [tab, countyElection, loadCounties]);
+
+  useEffect(() => {
     setFilter("");
     setSeatHolderFilter("all");
     setTrumpSwingFilter(false);
@@ -235,15 +240,13 @@ export default function App() {
     setOrganizationFilter([]);
     setConsultantFilter([]);
     setShowMoreFilters(false);
-    if (tab === "counties") {
-      void loadCounties();
-    } else if (tab === "data" || tab === "admin") {
+    if (tab === "data" || tab === "admin") {
       setLoading(false);
-    } else {
+    } else if (tab !== "counties") {
       setRaces([]);
       void loadRaces();
     }
-  }, [loadRaces, loadCounties, tab, cycleYear]);
+  }, [loadRaces, tab, cycleYear]);
 
   const handleUpForReelectionOnlyChange = useCallback((upOnly: boolean) => {
     setUpForReelectionOnly(upOnly);
@@ -255,10 +258,12 @@ export default function App() {
       const query = filter.trim().toLowerCase();
       if (query) {
         const label = raceListLabel(race, tab as OfficeCategory).toLowerCase();
+        const incumbentName = raceSeatHolder(race)?.name?.toLowerCase() ?? "";
         const matchesSearch =
           label.includes(query) ||
           race.office_code.toLowerCase().includes(query) ||
           race.office_name.toLowerCase().includes(query) ||
+          incumbentName.includes(query) ||
           race.candidates.some((c) => c.name.toLowerCase().includes(query));
         if (!matchesSearch) return false;
       }
@@ -554,13 +559,20 @@ export default function App() {
               </button>
             ))}
           </div>
-          <CountyHeatmap
-            counties={counties}
-            title={countyTitle}
-            editMode={effectiveEditMode}
-            election={countyElection}
-            onCountySaved={handleCountySaved}
-          />
+          {counties.length === 0 ? (
+            <p className="loading">
+              No county results for this election. Run <code>npm run db:import</code> with your lege Excel file, or{" "}
+              <code>npm run db:sync-county-results</code> to copy from SQLite.
+            </p>
+          ) : (
+            <CountyHeatmap
+              counties={counties}
+              title={countyTitle}
+              editMode={effectiveEditMode}
+              election={countyElection}
+              onCountySaved={handleCountySaved}
+            />
+          )}
         </div>
       ) : races.length === 0 ? (
         <p className="loading">
@@ -572,7 +584,7 @@ export default function App() {
             <input
               className="race-search"
               type="search"
-              placeholder="Search district, office, or candidate…"
+              placeholder="Search district, office, incumbent, or candidate…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />
@@ -802,22 +814,31 @@ export default function App() {
                   const holder = raceSeatHolder(selectedRace);
                   const holderParty = holder?.party ?? null;
                   const holderPartyBadge = holderParty ? partyBadgeClass(holderParty) : null;
+                  const tgaStaffers = selectedRace.tga_staffer_names ?? [];
                   return (
-                    <div className="race-seat-holder-block">
-                      <h3 className="race-seat-holder-heading">Current office holder</h3>
-                      <div className="race-seat-holder-row">
-                        <span className="race-seat-holder-name">{raceCurrentHolderLabel(selectedRace)}</span>
-                        {holderPartyBadge && holderParty ? (
-                          <span className={holderPartyBadge}>{partyLabel(holderParty)}</span>
-                        ) : null}
-                        <span className="race-seat-holder-reelection">
-                          <span className="race-seat-holder-reelection-label">Running for re-election</span>
-                          <span className="race-seat-holder-reelection-value">
-                            {raceRunningForReelectionLabel(selectedRace)}
+                    <>
+                      <div className="race-seat-holder-block">
+                        <h3 className="race-seat-holder-heading">Current office holder</h3>
+                        <div className="race-seat-holder-row">
+                          <span className="race-seat-holder-name">{raceCurrentHolderLabel(selectedRace)}</span>
+                          {holderPartyBadge && holderParty ? (
+                            <span className={holderPartyBadge}>{partyLabel(holderParty)}</span>
+                          ) : null}
+                          <span className="race-seat-holder-reelection">
+                            <span className="race-seat-holder-reelection-label">Running for re-election</span>
+                            <span className="race-seat-holder-reelection-value">
+                              {raceRunningForReelectionLabel(selectedRace)}
+                            </span>
                           </span>
-                        </span>
+                        </div>
                       </div>
-                    </div>
+                      {tgaStaffers.length > 0 ? (
+                        <div className="race-tga-staffer-block">
+                          <h3 className="race-seat-holder-heading">Abbott staffer</h3>
+                          <span className="race-tga-staffer-name">{tgaStaffers.join(", ")}</span>
+                        </div>
+                      ) : null}
+                    </>
                   );
                 })()}
 
