@@ -29,9 +29,6 @@ export function CandidateSummary({ candidate }: { candidate: RaceCandidate }) {
       <span className="candidate-summary-detail">
         <strong>Consultant</strong> {consultant ?? "—"}
       </span>
-      {candidate.running_for_reelection ? (
-        <span className="candidate-summary-detail">{candidate.running_for_reelection}</span>
-      ) : null}
     </div>
   );
 }
@@ -102,12 +99,6 @@ export function CandidateDetailModal({
                 <dt>TEC filer ID</dt>
                 <dd>{displayValue(candidate.tec_filer_id)}</dd>
               </div>
-              {candidate.is_incumbent && candidate.running_for_reelection ? (
-                <div>
-                  <dt>Running for reelection</dt>
-                  <dd>{candidate.running_for_reelection}</dd>
-                </div>
-              ) : null}
               <div>
                 <dt>Endorsements</dt>
                 <dd>{displayValue(candidate.endorsements)}</dd>

@@ -71,9 +71,6 @@ export function CandidateConsultantEditor({
           ))}
         </div>
       )}
-      {candidate.running_for_reelection ? (
-        <span className="candidate-summary-detail">{candidate.running_for_reelection}</span>
-      ) : null}
     </div>
   );
 }

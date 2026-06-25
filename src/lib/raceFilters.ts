@@ -43,6 +43,17 @@ export function raceGopCandidateLabel(race: Race) {
   return raceGopCandidateName(race) || "none";
 }
 
+export function raceRunningForReelectionLabel(race: Race) {
+  return race.is_open ? "No" : "Yes";
+}
+
+export const HOUSE_TARGET_FILTER_OPTIONS = [
+  { orgKey: "TGA", label: "TGA" },
+  { orgKey: "SPEAKER", label: "Speaker" },
+  { orgKey: "AFC", label: "AFC" },
+  { orgKey: "TLR", label: "TLR" },
+] as const;
+
 export function raceMetricValue(race: Race, key: string) {
   return race.metrics?.find((metric) => metric.key === key)?.value ?? null;
 }
@@ -89,8 +100,22 @@ export function matchesUpForReelectionFilter(race: Race, category: OfficeCategor
 
 export function matchesOrganizationFilter(race: Race, selectedOrgKeys: string[]) {
   if (selectedOrgKeys.length === 0) return true;
-  const raceKeys = race.targeting_organization_keys ?? [];
-  return selectedOrgKeys.some((key) => raceKeys.includes(key));
+
+  const targets = race.targeting_organizations ?? [];
+  const raceKeys = race.targeting_organization_keys ?? targets.map((target) => target.org_key);
+
+  return selectedOrgKeys.some((selectedKey) => {
+    const option = HOUSE_TARGET_FILTER_OPTIONS.find((item) => item.orgKey === selectedKey);
+    const label = option?.label.trim().toLowerCase();
+
+    if (raceKeys.includes(selectedKey)) return true;
+
+    return targets.some((target) => {
+      if (target.org_key === selectedKey || target.org_key.toUpperCase() === selectedKey) return true;
+      if (label && target.name.trim().toLowerCase() === label) return true;
+      return false;
+    });
+  });
 }
 
 export function matchesConsultantFilter(race: Race, selectedConsultantKeys: string[]) {

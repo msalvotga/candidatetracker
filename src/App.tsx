@@ -17,10 +17,11 @@ import {
   isOfficeFlagTrue,
   matchesSeatHolderFilter,
   matchesTrumpSwingFilter,
-  raceHasSeatHolder,
   raceSeatHolder,
   raceCurrentHolderLabel,
   raceGopCandidateLabel,
+  raceRunningForReelectionLabel,
+  HOUSE_TARGET_FILTER_OPTIONS,
   type SeatHolderFilter,
 } from "./lib/raceFilters";
 import type {
@@ -35,7 +36,6 @@ import type {
   Race,
   RaceCandidate,
   RaceMetric,
-  TargetingOrganization,
 } from "./types";
 
 const RACE_TABS: { id: OfficeCategory; label: string }[] = [
@@ -72,10 +72,6 @@ function raceListLabel(race: Race, tab: OfficeCategory) {
 
 function raceDetailTitle(race: Race) {
   return `${race.office_code} — ${race.office_name}`;
-}
-
-function raceHasIncumbent(race: Race) {
-  return raceHasSeatHolder(race);
 }
 
 function mergeRaceMetrics(race: Race, tab: OfficeCategory): RaceMetric[] {
@@ -147,7 +143,6 @@ export default function App() {
   const [counties, setCounties] = useState<Awaited<ReturnType<typeof fetchCounties>>["counties"]>([]);
   const [selectedOfficeId, setSelectedOfficeId] = useState<number | null>(null);
   const [filter, setFilter] = useState("");
-  const [incumbentFilter, setIncumbentFilter] = useState<"all" | "incumbent" | "non-incumbent">("all");
   const [seatHolderFilter, setSeatHolderFilter] = useState<SeatHolderFilter>("all");
   const [trumpSwingFilter, setTrumpSwingFilter] = useState(false);
   const [openSeatFilter, setOpenSeatFilter] = useState(false);
@@ -155,7 +150,6 @@ export default function App() {
   const [organizationFilter, setOrganizationFilter] = useState<string[]>([]);
   const [consultantFilter, setConsultantFilter] = useState<string[]>([]);
   const [showMoreFilters, setShowMoreFilters] = useState(false);
-  const [targetingOrgs, setTargetingOrgs] = useState<TargetingOrganization[]>([]);
   const [consultants, setConsultants] = useState<Consultant[]>([]);
   const [showCoh, setShowCoh] = useState(true);
   const [editMode, setEditMode] = useState(false);
@@ -183,7 +177,6 @@ export default function App() {
         up_for_reelection: isOfficeFlagTrue(race.up_for_reelection),
       }));
       setRaces(nextRaces);
-      setTargetingOrgs(data.targeting_organizations ?? []);
       setConsultants(data.consultants ?? []);
       setSelectedOfficeId((prev) => {
         if (prev && nextRaces.some((race) => race.office_id === prev)) return prev;
@@ -221,7 +214,6 @@ export default function App() {
 
   useEffect(() => {
     setFilter("");
-    setIncumbentFilter("all");
     setSeatHolderFilter("all");
     setTrumpSwingFilter(false);
     setOpenSeatFilter(false);
@@ -262,8 +254,6 @@ export default function App() {
         if (!matchesSearch) return false;
       }
 
-      if (incumbentFilter === "incumbent" && !raceHasIncumbent(race)) return false;
-      if (incumbentFilter === "non-incumbent" && raceHasIncumbent(race)) return false;
       if (!matchesSeatHolderFilter(race, seatHolderFilter)) return false;
       if (!matchesTrumpSwingFilter(race, trumpSwingFilter)) return false;
       if (!matchesOpenSeatFilter(race, openSeatFilter)) return false;
@@ -273,7 +263,7 @@ export default function App() {
 
       return true;
     });
-  }, [races, filter, tab, incumbentFilter, seatHolderFilter, trumpSwingFilter, openSeatFilter, upForReelectionOnly, organizationFilter, consultantFilter]);
+  }, [races, filter, tab, seatHolderFilter, trumpSwingFilter, openSeatFilter, upForReelectionOnly, organizationFilter, consultantFilter]);
 
   useEffect(() => {
     if (tab === "counties" || tab === "data") return;
@@ -567,28 +557,6 @@ export default function App() {
                 </div>
 
                 <div className="filter-group">
-                  <span className="filter-label">Current seat holder</span>
-                  <div className="filter-chips">
-                    {(
-                      [
-                        { id: "all", label: "All" },
-                        { id: "incumbent", label: "Listed" },
-                        { id: "non-incumbent", label: "Not listed" },
-                      ] as const
-                    ).map((option) => (
-                      <button
-                        key={option.id}
-                        type="button"
-                        className={incumbentFilter === option.id ? "filter-chip active" : "filter-chip"}
-                        onClick={() => setIncumbentFilter(option.id)}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="filter-group">
                   <span className="filter-label">Open seat</span>
                   <div className="filter-chips">
                     <button
@@ -653,6 +621,33 @@ export default function App() {
                   </div>
                 </div>
 
+                {tab === "house" ? (
+                  <div className="filter-group">
+                    <span className="filter-label">Targets</span>
+                    <div className="filter-chips">
+                      <button
+                        type="button"
+                        className={organizationFilter.length === 0 ? "filter-chip active" : "filter-chip"}
+                        onClick={() => setOrganizationFilter([])}
+                      >
+                        All
+                      </button>
+                      {HOUSE_TARGET_FILTER_OPTIONS.map((option) => (
+                        <button
+                          key={option.orgKey}
+                          type="button"
+                          className={
+                            organizationFilter.includes(option.orgKey) ? "filter-chip active" : "filter-chip"
+                          }
+                          onClick={() => toggleOrganizationFilter(option.orgKey)}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="filter-group">
                   <button
                     type="button"
@@ -665,41 +660,6 @@ export default function App() {
 
                 {showMoreFilters ? (
                   <>
-                    {targetingOrgs.length > 0 ? (
-                      <div className="filter-group">
-                        <span className="filter-label">Targets</span>
-                        <div className="filter-checklist">
-                          {targetingOrgs.map((org) => {
-                            const checked = organizationFilter.includes(org.org_key);
-                            return (
-                              <label key={org.org_key} className="filter-check-item">
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => toggleOrganizationFilter(org.org_key)}
-                                />
-                                <span>{org.name}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                        {organizationFilter.length > 0 ? (
-                          <button
-                            type="button"
-                            className="filter-clear-link"
-                            onClick={() => setOrganizationFilter([])}
-                          >
-                            Clear targets
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <p className="filter-hint">
-                        Add targeting organizations in the <strong>Data</strong> tab, then assign them on the{" "}
-                        <strong>Offices</strong> table.
-                      </p>
-                    )}
-
                     {consultants.length > 0 ? (
                       <div className="filter-group">
                         <span className="filter-label">Consultant</span>
@@ -762,7 +722,7 @@ export default function App() {
                         ) : null}
                       </span>
                       <span className="race-item-meta">
-                        Current: {raceCurrentHolderLabel(race)} | GOP Candidate: {raceGopCandidateLabel(race)}
+                        Incumbent: {raceCurrentHolderLabel(race)} | GOP Candidate: {raceGopCandidateLabel(race)}
                       </span>
                     </button>
                   </li>
@@ -793,6 +753,12 @@ export default function App() {
                         {holderPartyBadge && holderParty ? (
                           <span className={holderPartyBadge}>{partyLabel(holderParty)}</span>
                         ) : null}
+                        <span className="race-seat-holder-reelection">
+                          <span className="race-seat-holder-reelection-label">Running for re-election</span>
+                          <span className="race-seat-holder-reelection-value">
+                            {raceRunningForReelectionLabel(selectedRace)}
+                          </span>
+                        </span>
                       </div>
                     </div>
                   );

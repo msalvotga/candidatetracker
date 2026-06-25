@@ -652,6 +652,22 @@ h2 {
   font-weight: 600;
 }
 
+.race-seat-holder-reelection {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 0.88rem;
+}
+
+.race-seat-holder-reelection-label {
+  color: var(--muted);
+}
+
+.race-seat-holder-reelection-value {
+  font-weight: 600;
+}
+
 .race-category {
   font-size: 0.82rem;
   color: var(--muted);
