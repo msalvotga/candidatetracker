@@ -1,10 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseBenchmarkMargin, parseLegMargin } from "./benchmarkMargin.mjs";
 import { parseMetricValue, resolveOfficeCode } from "./legesXlsx.mjs";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function mergeMetrics(target, source) {
   for (const [key, value] of Object.entries(source)) {
@@ -12,11 +7,11 @@ function mergeMetrics(target, source) {
   }
 }
 
-function upsertOfficeMetrics(database, officeCode, metrics) {
-  const office = database.prepare(`SELECT id FROM offices WHERE office_code = ?`).get(officeCode);
+async function upsertOfficeMetrics(database, officeCode, metrics) {
+  const office = await database.prepare(`SELECT id FROM offices WHERE office_code = ?`).get(officeCode);
   if (!office) return;
 
-  database
+  await database
     .prepare(
       `INSERT INTO office_metrics (office_id, trump_2024, cruz_2024, abbott_2022, leg_2024, leg_2022)
        VALUES (@officeId, @trump_2024, @cruz_2024, @abbott_2022, @leg_2024, @leg_2022)
@@ -37,12 +32,11 @@ function upsertOfficeMetrics(database, officeCode, metrics) {
     });
 }
 
-export function ensureMetricsSchema(database) {
-  const schemaPath = path.join(__dirname, "..", "..", "schema-metrics.sql");
-  database.exec(fs.readFileSync(schemaPath, "utf8"));
+export async function ensureMetricsSchema(_database) {
+  // Metric tables are created by schema-postgres.sql during initDb().
 }
 
-export function importDataSheetMetrics(database, rows) {
+export async function importDataSheetMetrics(database, rows) {
   const byOffice = new Map();
 
   for (let i = 1; i < rows.length; i += 1) {
@@ -71,13 +65,13 @@ export function importDataSheetMetrics(database, rows) {
   }
 
   for (const [code, metrics] of byOffice) {
-    upsertOfficeMetrics(database, code, metrics);
+    await upsertOfficeMetrics(database, code, metrics);
   }
 
   return byOffice.size;
 }
 
-export function importSheetRowMetrics(database, sheetRows, config) {
+export async function importSheetRowMetrics(database, sheetRows, config) {
   const byOffice = new Map();
 
   for (let i = 1; i < sheetRows.length; i += 1) {
@@ -110,12 +104,12 @@ export function importSheetRowMetrics(database, sheetRows, config) {
   }
 
   for (const [code, metrics] of byOffice) {
-    upsertOfficeMetrics(database, code, metrics);
+    await upsertOfficeMetrics(database, code, metrics);
   }
 
   return byOffice.size;
 }
 
-export function clearAllOfficeMetrics(database) {
-  database.prepare(`DELETE FROM office_metrics`).run();
+export async function clearAllOfficeMetrics(database) {
+  await database.prepare(`DELETE FROM office_metrics`).run();
 }

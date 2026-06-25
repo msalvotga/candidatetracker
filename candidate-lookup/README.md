@@ -1,6 +1,6 @@
 # Texas Candidate Lookup
 
-Separate app for looking up and editing GOP/Dem candidates by Texas race. Uses a local SQLite database — independent from the main election night tracker (PostgreSQL).
+App for looking up and editing GOP/Dem candidates by Texas race. Uses PostgreSQL.
 
 ## Data model
 
@@ -28,12 +28,34 @@ The importer reads all five tabs and maps:
 
 Finance is attached to the incumbent when col B is filled, otherwise to the challenger in col E.
 
+## Migrate from SQLite (one-time)
+
+If you have an existing `candidates.db` SQLite file:
+
+```bash
+export DATABASE_URL="postgresql://..."
+npm run db:migrate-from-sqlite -- path/to/candidates.db
+```
+
+Defaults to `data/candidates.db` (or pass a path). This drops and recreates all tables in PostgreSQL, then copies every row.
+
+## Sync missing SQLite data into Postgres
+
+If Postgres is missing fields (e.g. `seat_holder_name` on `offices`) but your SQLite file has them:
+
+```bash
+export DATABASE_URL="postgresql://..."
+npm run db:sync-from-sqlite -- data/candidates.db
+```
+
+Use **`data/candidates.db`** — the copy at the repo root (`candidates.db`) is often an older schema without seat-holder columns.
+
 ## Run locally
 
 ```bash
-cd candidate-lookup
 npm install
-npm run db:init    # seed 244 Texas offices (first time)
+export DATABASE_URL="postgresql://..."   # required
+npm run db:init    # seed 244 Texas offices if the database is empty
 npm run dev        # API :3850, UI :5174
 ```
 
@@ -45,4 +67,25 @@ Edit GOP/Dem cells in the table; changes save on blur or Enter.
 - `PUT /api/candidates` — upsert candidate name for office/year/party
 - `GET /api/offices/:id/history` — results + finance for one seat
 
-Database file: `candidate-lookup/data/candidates.db` (gitignored).
+## Deploy on Render
+
+| Setting | Value |
+|--------|--------|
+| **Root directory** | `.` (repo root) |
+| **Runtime** | Node |
+| **Build command** | `npm install --include=dev && npm run build` |
+| **Start command** | `npm start` |
+| **Health check path** | `/api/health` |
+
+**Environment variables**
+
+| Variable | Value |
+|----------|--------|
+| `NODE_ENV` | `production` |
+| `DATABASE_URL` | Render Postgres internal or external connection string |
+
+Render sets `PORT` automatically; the server listens on that port and serves the built UI from `dist/`.
+
+First deploy seeds Texas offices automatically if the database is empty. To load spreadsheet data after deploy, run import scripts locally (pointing at the same `DATABASE_URL`), or use the in-app admin UI.
+
+Alternatively, connect this repo with the included `render.yaml` blueprint.

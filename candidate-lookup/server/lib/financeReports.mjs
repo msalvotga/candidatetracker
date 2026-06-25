@@ -15,9 +15,9 @@ function periodLabelForRow(row, maps) {
   return end;
 }
 
-export function loadFinanceHistoryMap(db, category, cycleYear) {
-  const maps = loadFilingPeriodMaps(db);
-  const rows = db
+export async function loadFinanceHistoryMap(db, category, cycleYear) {
+  const maps = await loadFilingPeriodMaps(db);
+  const rows = await db
     .prepare(
       `SELECT f.id, c.office_id, c.name, c.party, c.is_incumbent,
               f.period_key, f.report_period_end, f.total_raised, f.total_spent, f.cash_on_hand,
@@ -73,12 +73,12 @@ export function attachFinanceHistoryToRaces(races, financeMap) {
   }));
 }
 
-export function addFinanceReport(db, input) {
-  const maps = loadFilingPeriodMaps(db);
+export async function addFinanceReport(db, input) {
+  const maps = await loadFilingPeriodMaps(db);
   const candidate =
     input.candidateId != null
-      ? db.prepare(`SELECT id, office_id, cycle_year, name, party, is_incumbent FROM candidates WHERE id = ?`).get(input.candidateId)
-      : ensureCandidate(db, {
+      ? await db.prepare(`SELECT id, office_id, cycle_year, name, party, is_incumbent FROM candidates WHERE id = ?`).get(input.candidateId)
+      : await ensureCandidate(db, {
           officeId: input.officeId,
           cycleYear: input.cycleYear,
           name: input.candidateName,
@@ -93,7 +93,7 @@ export function addFinanceReport(db, input) {
   const periodKey = periodKeyInput || resolvePeriodKey(label, input.report_period_end, maps);
   const reportEnd = canonicalReportEndForPeriod(periodKey ?? label, maps, input.report_period_end);
 
-  const row = db
+  const row = await db
     .prepare(
       `INSERT INTO finance_reports (candidate_id, period_key, report_period_end, report_type, total_raised, total_spent, cash_on_hand)
        VALUES (?, ?, ?, 'TEC', ?, ?, ?)
@@ -131,9 +131,9 @@ function parseOptionalNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
-function resolveCandidateForImport(db, row) {
+async function resolveCandidateForImport(db, row) {
   if (row.candidate_id != null) {
-    const candidate = db
+    const candidate = await db
       .prepare(
         `SELECT c.id, c.office_id, c.cycle_year, c.name, c.party, c.is_incumbent, o.office_code
          FROM candidates c JOIN offices o ON o.id = c.office_id WHERE c.id = ?`
@@ -151,11 +151,11 @@ function resolveCandidateForImport(db, row) {
     throw new Error("row must include candidate_id or office_code, cycle_year, candidate_name, party");
   }
 
-  const office = db.prepare(`SELECT id FROM offices WHERE office_code = ?`).get(officeCode);
+  const office = await db.prepare(`SELECT id FROM offices WHERE office_code = ?`).get(officeCode);
   if (!office) throw new Error(`office_code ${officeCode} not found`);
 
   const isIncumbent = ["1", "true", "yes", "y"].includes(String(row.is_incumbent ?? "0").toLowerCase());
-  const meta = ensureCandidate(db, {
+  const meta = await ensureCandidate(db, {
     officeId: office.id,
     cycleYear: year,
     name,
@@ -164,7 +164,7 @@ function resolveCandidateForImport(db, row) {
   });
   if (!meta) throw new Error(`could not create candidate for ${name}`);
 
-  return db
+  return await db
     .prepare(
       `SELECT c.id, c.office_id, c.cycle_year, c.name, c.party, c.is_incumbent, o.office_code
        FROM candidates c JOIN offices o ON o.id = c.office_id WHERE c.id = ?`
@@ -172,13 +172,13 @@ function resolveCandidateForImport(db, row) {
     .get(meta.id);
 }
 
-export function bulkImportFinanceReports(db, rows) {
+export async function bulkImportFinanceReports(db, rows) {
   const results = { imported: 0, errors: [] };
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index];
     try {
-      const candidate = resolveCandidateForImport(db, row);
-      addFinanceReport(db, {
+      const candidate = await resolveCandidateForImport(db, row);
+      await addFinanceReport(db, {
         candidateId: candidate.id,
         period_key: row.period_key ? String(row.period_key).trim() : null,
         period_label: String(row.period_label ?? "").trim(),

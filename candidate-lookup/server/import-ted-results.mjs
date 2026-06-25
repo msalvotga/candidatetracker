@@ -1,6 +1,7 @@
-import { getDb, closeDb } from "./db.mjs";
+import { getDb, closeDb, initDb } from "./db.mjs";
 import { ensureMetricsSchema } from "./lib/metricsImport.mjs";
 import { fetchCapitolMetadata, importTedElectionResults } from "./lib/tedElectionResults.mjs";
+import { recomputeAllOfficeMetrics } from "./lib/contestMetrics.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,8 +19,9 @@ async function ensureMetadata() {
   }
 }
 
+await initDb();
 const db = getDb();
-ensureMetricsSchema(db);
+await ensureMetricsSchema(db);
 
 await ensureMetadata();
 
@@ -36,4 +38,7 @@ if (summary.errors.length > 0) {
   summary.errors.slice(0, 5).forEach((e) => console.log(`    - ${e.job}: ${e.error}`));
 }
 
-closeDb();
+const synced = await recomputeAllOfficeMetrics(db);
+console.log(`Recomputed ${synced.updated} leg/benchmark margins from stored candidate votes.`);
+
+await closeDb();

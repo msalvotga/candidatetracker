@@ -1,11 +1,11 @@
-export function listTargetingOrganizations(db) {
+export async function listTargetingOrganizations(db) {
   return db
     .prepare(`SELECT org_key, name FROM targeting_organizations ORDER BY name COLLATE NOCASE`)
     .all();
 }
 
-export function loadOfficeTargetsByOffice(db, category, cycleYear) {
-  const rows = db
+export async function loadOfficeTargetsByOffice(db, category, cycleYear) {
+  const rows = await db
     .prepare(
       `SELECT t.office_id, t.org_key, org.name
        FROM office_targets t
@@ -38,28 +38,28 @@ export function attachTargetsToRaces(races, targetsByOffice) {
   });
 }
 
-export function syncOfficeTargets(db, officeId, cycleYear, orgKeys) {
+export async function syncOfficeTargets(db, officeId, cycleYear, orgKeys) {
   const keys = [...new Set(orgKeys.map((key) => String(key).trim()).filter(Boolean))];
-  const apply = db.transaction(() => {
-    db.prepare(`DELETE FROM office_targets WHERE office_id = ? AND cycle_year = ?`).run(officeId, cycleYear);
+  const apply = db.transaction(async () => {
+    await db.prepare(`DELETE FROM office_targets WHERE office_id = ? AND cycle_year = ?`).run(officeId, cycleYear);
     const insert = db.prepare(
       `INSERT INTO office_targets (office_id, cycle_year, org_key) VALUES (?, ?, ?)`
     );
     for (const orgKey of keys) {
-      insert.run(officeId, cycleYear, orgKey);
+      await insert.run(officeId, cycleYear, orgKey);
     }
   });
-  apply();
+  await apply();
   return keys;
 }
 
-export function addTargetingOrganization(db, { org_key, name }) {
+export async function addTargetingOrganization(db, { org_key, name }) {
   const key = String(org_key ?? "").trim();
   const orgName = String(name ?? "").trim();
   if (!key || !orgName) throw new Error("org_key and name required");
   if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(key)) {
     throw new Error("org_key must start with a letter and contain only letters, numbers, _ or -");
   }
-  db.prepare(`INSERT INTO targeting_organizations (org_key, name) VALUES (?, ?)`).run(key, orgName);
+  await db.prepare(`INSERT INTO targeting_organizations (org_key, name) VALUES (?, ?)`).run(key, orgName);
   return { org_key: key, name: orgName };
 }

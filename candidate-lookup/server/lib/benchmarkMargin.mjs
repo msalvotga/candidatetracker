@@ -66,8 +66,8 @@ export function gopShareFromBenchmarkMargin(margin) {
   return 0.5 + margin / 2;
 }
 
-export function migrateGopShareToBenchmarkMargin(database) {
-  const rows = database
+export async function migrateGopShareToBenchmarkMargin(database) {
+  const rows = await database
     .prepare(
       `SELECT m.office_id, m.trump_2024, m.cruz_2024, m.abbott_2022, o.category
        FROM office_metrics m
@@ -96,7 +96,7 @@ export function migrateGopShareToBenchmarkMargin(database) {
     const abbott = convert(row.abbott_2022);
 
     if (trump !== row.trump_2024 || cruz !== row.cruz_2024 || abbott !== row.abbott_2022) {
-      update.run({ officeId: row.office_id, trump_2024: trump, cruz_2024: cruz, abbott_2022: abbott });
+      await update.run({ officeId: row.office_id, trump_2024: trump, cruz_2024: cruz, abbott_2022: abbott });
       changed += 1;
     }
   }
@@ -104,8 +104,8 @@ export function migrateGopShareToBenchmarkMargin(database) {
   return changed;
 }
 
-export function migrateLegShareToMargin(database) {
-  const rows = database.prepare(`SELECT office_id, leg_2024, leg_2022 FROM office_metrics`).all();
+export async function migrateLegShareToMargin(database) {
+  const rows = await database.prepare(`SELECT office_id, leg_2024, leg_2022 FROM office_metrics`).all();
   const update = database.prepare(
     `UPDATE office_metrics SET leg_2024 = @leg_2024, leg_2022 = @leg_2022 WHERE office_id = @officeId`
   );
@@ -122,7 +122,7 @@ export function migrateLegShareToMargin(database) {
     const leg2024 = convert(row.leg_2024);
     const leg2022 = convert(row.leg_2022);
     if (leg2024 !== row.leg_2024 || leg2022 !== row.leg_2022) {
-      update.run({ officeId: row.office_id, leg_2024: leg2024, leg_2022: leg2022 });
+      await update.run({ officeId: row.office_id, leg_2024: leg2024, leg_2022: leg2022 });
       changed += 1;
     }
   }

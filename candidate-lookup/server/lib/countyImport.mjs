@@ -169,9 +169,9 @@ const COUNTY_SHEETS = [
   { sheetName: "2022 Gov Results by Cnty", electionKey: "abbott_2022", parse: parseAbbott2022 },
 ];
 
-export function importCountySheets(database, workbook) {
+export async function importCountySheets(database, workbook) {
   const schemaPath = path.join(__dirname, "..", "..", "schema-metrics.sql");
-  database.exec(fs.readFileSync(schemaPath, "utf8"));
+  await database.exec(fs.readFileSync(schemaPath, "utf8"));
 
   const insert = database.prepare(`
     INSERT INTO county_election_results (
@@ -197,17 +197,17 @@ export function importCountySheets(database, workbook) {
       continue;
     }
 
-    database.prepare(`DELETE FROM county_election_results WHERE election_key = ?`).run(config.electionKey);
+    await database.prepare(`DELETE FROM county_election_results WHERE election_key = ?`).run(config.electionKey);
 
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
     const parsed = config.parse(rows);
 
-    const importMany = database.transaction((items) => {
+    const importMany = database.transaction(async (items) => {
       for (const item of items) {
-        insert.run({ electionKey: config.electionKey, ...item });
+        await insert.run({ electionKey: config.electionKey, ...item });
       }
     });
-    importMany(parsed);
+    await importMany(parsed);
     summary[config.electionKey] = parsed.length;
     console.log(`${config.sheetName}: ${parsed.length} counties`);
   }

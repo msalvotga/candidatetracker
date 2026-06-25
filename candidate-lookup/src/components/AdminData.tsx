@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   bulkImportFinance,
   exportAdminTableCsv,
+  exportBallotSummaryXlsx,
   fetchAdminTable,
   fetchAdminTables,
   fetchMultiSelectOptions,
@@ -22,7 +23,7 @@ const CATEGORY_OPTIONS: { id: OfficeCategory | ""; label: string }[] = [
 ];
 
 const PARTY_OPTIONS = ["R", "D", "I", "L", "G", "O"];
-const BOOLEAN_COLUMNS = new Set(["is_incumbent", "filed"]);
+const BOOLEAN_COLUMNS = new Set(["is_incumbent", "filed", "up_for_reelection"]);
 const NUMERIC_COLUMNS = new Set([
   "total_raised",
   "total_spent",
@@ -39,12 +40,38 @@ const COLUMN_LABELS: Record<string, string> = {
   target_org_keys: "Target orgs",
   seat_holder_name: "Seat holder",
   seat_holder_party: "Seat holder party",
+  up_for_reelection: "Up for reelection",
+  county_name: "County",
+  office_id: "District",
+  metric_key: "Election",
+  vote_pct: "Vote share",
+  contest_margin: "Margin",
+  trump_2024: "2024 Trump margin",
+  cruz_2024: "2024 Cruz margin",
+  abbott_2022: "2022 Abbott margin",
+  leg_2024: "2024 race margin",
+  leg_2022: "2022 race margin",
+  cycle_year: "Cycle year",
+  is_incumbent: "Incumbent",
 };
 
 const TABLE_COLUMNS: Record<string, string[]> = {
   consultants: ["consultant_key", "name", "candidate_count"],
   targeting_organizations: ["org_key", "name"],
-  offices: ["office_code", "office_name", "district", "seat_holder_name", "seat_holder_party", "target_org_keys"],
+  offices: ["office_code", "office_name", "district", "county_name", "seat_holder_name", "seat_holder_party", "up_for_reelection", "target_org_keys"],
+  tga_staffers: ["name", "office_id"],
+  metric_contest_candidates: [
+    "office_code",
+    "metric_key",
+    "candidate_name",
+    "party",
+    "votes",
+    "vote_pct",
+    "contest_margin",
+    "unopposed",
+    "source",
+  ],
+  office_metrics: ["office_code", "office_name", "trump_2024", "cruz_2024", "abbott_2022"],
 };
 
 function visibleColumns(tableId: string, row: Record<string, unknown>) {
@@ -167,14 +194,30 @@ function rowDisplayLabel(row: Record<string, unknown>, rowKey: string) {
   return String(row.name ?? row.consultant_key ?? row.org_key ?? row.period_key ?? row.id ?? rowKey);
 }
 
+function filterSingleCandidateRaces(rows: Record<string, unknown>[]) {
+  const counts = new Map<number, number>();
+  for (const row of rows) {
+    const officeId = Number(row.office_id);
+    if (!Number.isFinite(officeId)) continue;
+    counts.set(officeId, (counts.get(officeId) ?? 0) + 1);
+  }
+  const singleOfficeIds = new Set(
+    [...counts.entries()].filter(([, count]) => count === 1).map(([officeId]) => officeId)
+  );
+  return rows.filter((row) => singleOfficeIds.has(Number(row.office_id)));
+}
+
 export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; editMode: boolean }) {
   const [filterCategory, setFilterCategory] = useState<OfficeCategory | "">("house");
+  const [singleCandidateRacesOnly, setSingleCandidateRacesOnly] = useState(false);
   const [tables, setTables] = useState<
     {
       id: string;
       label: string;
       editableColumns: string[];
       multiSelectColumns?: Record<string, string>;
+      selectColumns?: Record<string, string>;
+      selectValueKind?: Record<string, string>;
       insertableColumns?: string[];
       deletable?: boolean;
     }[]
@@ -189,20 +232,36 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const [newRowFields, setNewRowFields] = useState<Record<string, string>>({});
+  const [newRowFields, setNewRowFields] = useState<Record<string, unknown>>({});
   const [multiSelectOptions, setMultiSelectOptions] = useState<Record<string, { value: string; label: string }[]>>({});
+  const [selectOptions, setSelectOptions] = useState<Record<string, { value: string; label: string }[]>>({});
+  const [officeOptions, setOfficeOptions] = useState<{ value: string; label: string }[]>([]);
   const [addingRow, setAddingRow] = useState(false);
   const [deletingRowId, setDeletingRowId] = useState<string | null>(null);
 
   const selectedTableMeta = useMemo(() => tables.find((table) => table.id === selectedTable), [tables, selectedTable]);
   const editableColumns = useMemo(() => new Set(selectedTableMeta?.editableColumns ?? []), [selectedTableMeta]);
   const multiSelectColumns = selectedTableMeta?.multiSelectColumns ?? {};
+  const selectColumns = selectedTableMeta?.selectColumns ?? {};
+  const selectValueKind = selectedTableMeta?.selectValueKind ?? {};
   const insertableColumns = selectedTableMeta?.insertableColumns ?? [];
   const deletable = selectedTableMeta?.deletable ?? false;
 
+  const singleCandidateFilterActive = singleCandidateRacesOnly && selectedTable === "candidates";
+  const visibleRows = useMemo(
+    () => (singleCandidateFilterActive ? filterSingleCandidateRaces(rows) : rows),
+    [rows, singleCandidateFilterActive]
+  );
+  const visibleTotal = singleCandidateFilterActive ? visibleRows.length : total;
+
   const columns = useMemo(
-    () => (rows[0] ? visibleColumns(selectedTable, rows[0] as Record<string, unknown>) : []),
-    [rows, selectedTable]
+    () =>
+      visibleRows[0]
+        ? visibleColumns(selectedTable, visibleRows[0] as Record<string, unknown>)
+        : rows[0]
+          ? visibleColumns(selectedTable, rows[0] as Record<string, unknown>)
+          : [],
+    [visibleRows, rows, selectedTable]
   );
 
   const pendingUpdates = useMemo(() => buildPendingUpdates(rows, edits), [rows, edits]);
@@ -216,6 +275,7 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
         cycleYear,
         category: filterCategory || undefined,
         limit: 500,
+        singleCandidateRaces: selectedTable === "candidates" && singleCandidateRacesOnly,
       });
       setRows(data.rows as Record<string, unknown>[]);
       setTotal(data.total);
@@ -229,7 +289,7 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
     } finally {
       setLoading(false);
     }
-  }, [selectedTable, cycleYear, filterCategory]);
+  }, [selectedTable, cycleYear, filterCategory, singleCandidateRacesOnly]);
 
   useEffect(() => {
     void fetchAdminTables()
@@ -261,8 +321,41 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
   }, [multiSelectColumns, selectedTable, rows.length, cycleYear, filterCategory]);
 
   useEffect(() => {
-    setNewRowFields({});
-  }, [selectedTable]);
+    const refs = [...new Set(Object.values(selectColumns))];
+    if (refs.length === 0) {
+      setSelectOptions({});
+      return;
+    }
+    void Promise.all(
+      refs.map(async (ref) => {
+        const useCategory =
+          ref === "offices" && selectedTable !== "tga_staffers" ? filterCategory || undefined : undefined;
+        return [ref, await fetchMultiSelectOptions(ref, { cycleYear, category: useCategory })] as const;
+      })
+    ).then((entries) => {
+      setSelectOptions(Object.fromEntries(entries));
+    });
+  }, [selectColumns, selectedTable, rows.length, cycleYear, filterCategory]);
+
+  useEffect(() => {
+    setNewRowFields(
+      selectedTable === "candidates"
+        ? { cycle_year: cycleYear, is_incumbent: 0, party: "R" }
+        : {}
+    );
+  }, [selectedTable, cycleYear]);
+
+  useEffect(() => {
+    const needsOfficeSelect =
+      (selectedTable === "candidates" || selectedTable === "tga_staffers") &&
+      insertableColumns.includes("office_id");
+    if (!needsOfficeSelect) {
+      setOfficeOptions([]);
+      return;
+    }
+    const category = selectedTable === "tga_staffers" ? undefined : filterCategory || undefined;
+    void fetchMultiSelectOptions("offices", { category }).then(setOfficeOptions);
+  }, [selectedTable, insertableColumns, filterCategory]);
 
   useEffect(() => {
     if (!editMode) {
@@ -327,15 +420,19 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
     try {
       const fields: Record<string, unknown> = {};
       for (const column of insertableColumns) {
-        const value = newRowFields[column]?.trim();
-        if (!value) {
-          setError(`${column} is required`);
+        const value = newRowFields[column];
+        if (value == null || String(value).trim() === "") {
+          setError(`${COLUMN_LABELS[column] ?? column} is required`);
           return;
         }
         fields[column] = value;
       }
       await insertAdminTableRow(selectedTable, fields);
-      setNewRowFields({});
+      setNewRowFields(
+        selectedTable === "candidates"
+          ? { cycle_year: cycleYear, is_incumbent: 0, party: "R" }
+          : {}
+      );
       await loadTable();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add row");
@@ -376,6 +473,14 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
     window.open("/api/admin/finance/template.csv", "_blank");
   }
 
+  function handleBallotExport() {
+    const url = exportBallotSummaryXlsx(cycleYear);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `ballot-summary-${cycleYear}.xlsx`;
+    link.click();
+  }
+
   async function handleCsvImport(file: File) {
     setImportResult("");
     setError("");
@@ -409,6 +514,9 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
           </p>
         </div>
         <div className="admin-data-actions">
+          <button type="button" className="filter-chip" onClick={handleBallotExport}>
+            Ballot summary (Excel)
+          </button>
           <button type="button" className="filter-chip" onClick={() => void handleExport()}>
             Export CSV
           </button>
@@ -445,6 +553,16 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
             ))}
           </select>
         </label>
+        {selectedTable === "candidates" ? (
+          <label className="filter-check-item admin-data-filter-check">
+            <input
+              type="checkbox"
+              checked={singleCandidateRacesOnly}
+              onChange={(e) => setSingleCandidateRacesOnly(e.target.checked)}
+            />
+            <span>Single-candidate races only</span>
+          </label>
+        ) : null}
       </div>
 
       <div className="admin-table-tabs">
@@ -469,19 +587,38 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
       {editMode && insertableColumns.length > 0 ? (
         <div className="admin-add-row">
           {insertableColumns.map((column) => (
-            <input
-              key={column}
-              className="edit-input edit-input-sm"
-              type="text"
-              placeholder={column}
-              value={newRowFields[column] ?? ""}
-              onChange={(e) => setNewRowFields((prev) => ({ ...prev, [column]: e.target.value }))}
-            />
+            <label key={column} className="admin-add-field">
+              <span className="admin-add-label">{COLUMN_LABELS[column] ?? column}</span>
+              <AdminTableCell
+                column={column}
+                value={newRowFields[column] ?? ""}
+                editable
+                changed={false}
+                selectOptions={
+                  column === "office_id"
+                    ? officeOptions
+                    : selectColumns[column]
+                      ? selectOptions[selectColumns[column]] ?? []
+                      : undefined
+                }
+                selectValueKind={selectValueKind[column]}
+                multiSelectRef={undefined}
+                multiSelectOptions={[]}
+                onChange={(value) => setNewRowFields((prev) => ({ ...prev, [column]: value }))}
+              />
+            </label>
           ))}
           <button type="button" className="coh-add-button" disabled={addingRow} onClick={() => void handleAddRow()}>
             Add row
           </button>
         </div>
+      ) : null}
+
+      {editMode && selectedTable === "candidates" ? (
+        <p className="admin-add-hint">
+          Add a candidate by office, cycle year, name, party, and whether they are the incumbent. Use the category
+          filter above to narrow the office list.
+        </p>
       ) : null}
 
       {editMode && selectedTable === "consultants" ? (
@@ -495,7 +632,32 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
       {editMode && selectedTable === "offices" ? (
         <p className="admin-add-hint">
           Edit <strong>seat_holder_name</strong> and <strong>seat_holder_party</strong> for the current office holder shown in
-          the race list. Target orgs use cycle {cycleYear}.
+          the race list. Set <strong>up_for_reelection</strong> for Senate, SBOE, and statewide offices on the ballot this
+          cycle. Assign a <strong>county</strong> from the Texas county list. Target orgs use cycle {cycleYear}. Deleting an
+          office also removes its candidates, sheet rows, and metrics.
+        </p>
+      ) : null}
+
+      {editMode && selectedTable === "metric_contest_candidates" ? (
+        <p className="admin-add-hint">
+          Historical results by candidate and party (R, D, I, L, G). <strong>Margin</strong> is one value per district +
+          election — every candidate in the same race shows the same number, and this is what the app displays for 2024/2022
+          race results. It is calculated from vote totals (first minus second share for district races; Republican minus
+          Democrat two-party share for Trump/Cruz/Abbott).
+        </p>
+      ) : null}
+
+      {selectedTable === "office_metrics" ? (
+        <p className="admin-add-hint">
+          Trump, Cruz, and Abbott benchmark margins by district. 2024 and 2022 race margins live in{" "}
+          <strong>Election results</strong> only.
+        </p>
+      ) : null}
+
+      {editMode && selectedTable === "tga_staffers" ? (
+        <p className="admin-add-hint">
+          Track TGA staff assignments by name and district. The district list includes every office defined in the{" "}
+          <strong>Offices</strong> table.
         </p>
       ) : null}
 
@@ -504,8 +666,9 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
       ) : (
         <div className="admin-data-body">
           <p className="admin-table-meta">
-            Showing {rows.length} of {total} rows · cycle {cycleYear}
+            Showing {visibleRows.length} of {visibleTotal} rows · cycle {cycleYear}
             {filterCategory ? ` · ${filterCategory}` : " · all categories"}
+            {singleCandidateFilterActive ? " · single-candidate races" : ""}
             {editMode ? " · editing enabled" : ""}
           </p>
           {editMode && (hasPendingEdits || saved) ? (
@@ -532,7 +695,7 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row, index) => {
+                {visibleRows.map((row, index) => {
                   const rowId = String(row.consultant_key ?? row.org_key ?? row.period_key ?? row.id ?? index);
                   const rowEdits = edits[rowId];
                   return (
@@ -546,6 +709,13 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
                             changed={Boolean(rowEdits && col in rowEdits)}
                             multiSelectRef={multiSelectColumns[col]}
                             multiSelectOptions={multiSelectColumns[col] ? multiSelectOptions[multiSelectColumns[col]] ?? [] : []}
+                            selectOptions={selectColumns[col] ? selectOptions[selectColumns[col]] ?? [] : undefined}
+                            selectValueKind={selectValueKind[col]}
+                            displayValue={
+                              col === "office_id"
+                                ? officeDisplayLabel(row)
+                                : undefined
+                            }
                             onChange={(value) => updateCell(rowId, col, value)}
                           />
                         </td>
@@ -583,6 +753,15 @@ function parseKeyList(value: unknown): string[] {
     .filter(Boolean);
 }
 
+function officeDisplayLabel(row: Record<string, unknown>) {
+  const code = row.office_code;
+  const name = row.office_name;
+  if (code && name) return `${code} — ${name}`;
+  if (code) return String(code);
+  if (name) return String(name);
+  return "";
+}
+
 function AdminTableCell({
   column,
   value,
@@ -590,6 +769,9 @@ function AdminTableCell({
   changed,
   multiSelectRef,
   multiSelectOptions,
+  selectOptions,
+  selectValueKind,
+  displayValue,
   onChange,
 }: {
   column: string;
@@ -598,9 +780,42 @@ function AdminTableCell({
   changed: boolean;
   multiSelectRef?: string;
   multiSelectOptions?: { value: string; label: string }[];
+  selectOptions?: { value: string; label: string }[];
+  selectValueKind?: string;
+  displayValue?: string;
   onChange: (value: unknown) => void;
 }) {
-  if (!editable) return <span className={column === "candidate_count" ? "admin-count-cell" : undefined}>{formatCell(value, column)}</span>;
+  if (!editable) {
+    if (displayValue) return <span>{displayValue}</span>;
+    return <span className={column === "candidate_count" ? "admin-count-cell" : undefined}>{formatCell(value, column)}</span>;
+  }
+
+  if (selectOptions) {
+    const placeholder =
+      column === "county_name" ? "Select county…" : column === "office_id" ? "Select district…" : "Select…";
+    return (
+      <select
+        className={`edit-input edit-input-sm${changed ? " edit-input-changed" : ""}`}
+        value={value == null ? "" : String(value)}
+        onChange={(e) =>
+          onChange(
+            e.target.value === ""
+              ? null
+              : selectValueKind === "number"
+                ? Number(e.target.value)
+                : e.target.value
+          )
+        }
+      >
+        <option value="">{placeholder}</option>
+        {selectOptions.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    );
+  }
 
   if (multiSelectRef && multiSelectOptions) {
     const optionKeys = new Set(multiSelectOptions.map((option) => option.value));
@@ -676,6 +891,19 @@ function AdminTableCell({
     );
   }
 
+  if (column === "contest_margin") {
+    return (
+      <input
+        className={`edit-input edit-input-sm${changed ? " edit-input-changed" : ""}`}
+        type="text"
+        placeholder="R+5.2"
+        title="Margin in points (R+5.2) or decimal — applies to every candidate in this race"
+        value={value == null ? "" : String(value)}
+        onChange={(e) => onChange(e.target.value.trim() === "" ? null : e.target.value)}
+      />
+    );
+  }
+
   return (
     <input
       className={`edit-input edit-input-sm${changed ? " edit-input-changed" : ""}`}
@@ -689,6 +917,15 @@ function AdminTableCell({
 function formatCell(value: unknown, column?: string) {
   if (value == null) return column === "candidate_count" ? "0" : "";
   if (column === "candidate_count") return String(value);
+  if (column === "vote_pct" && typeof value === "number") return `${(value * 100).toFixed(1)}%`;
+  if (
+    column &&
+    ["contest_margin", "trump_2024", "cruz_2024", "abbott_2022", "leg_2024", "leg_2022"].includes(column) &&
+    typeof value === "number"
+  ) {
+    const pts = Math.abs(value * 100);
+    return value >= 0 ? `R+${pts.toFixed(1)}` : `D+${pts.toFixed(1)}`;
+  }
   if (typeof value === "boolean" || value === 0 || value === 1) return String(value);
   return String(value);
 }

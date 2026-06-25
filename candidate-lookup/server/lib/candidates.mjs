@@ -2,12 +2,12 @@ export function candidateLookupKey(officeId, name, party, isIncumbent) {
   return `${officeId}|${String(name).trim().toLowerCase()}|${party}|${isIncumbent ? 1 : 0}`;
 }
 
-export function ensureCandidate(db, input) {
+export async function ensureCandidate(db, input) {
   const name = String(input.name ?? "").trim();
   const party = String(input.party ?? "").trim();
   if (!name || !party) return null;
 
-  const existing = db
+  const existing = await db
     .prepare(
       `SELECT id, vuid FROM candidates
        WHERE office_id = ? AND cycle_year = ? AND party = ? AND name = ? AND is_incumbent = ?`
@@ -16,18 +16,19 @@ export function ensureCandidate(db, input) {
 
   if (existing) return existing;
 
-  const result = db
+  const result = await db
     .prepare(
       `INSERT INTO candidates (office_id, cycle_year, party, name, is_incumbent)
-       VALUES (?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?)
+       RETURNING id`
     )
     .run(input.officeId, input.cycleYear, party, name, input.isIncumbent ? 1 : 0);
 
   return { id: Number(result.lastInsertRowid), vuid: null };
 }
 
-export function loadCandidateMetaMap(db, category, cycleYear) {
-  const rows = db
+export async function loadCandidateMetaMap(db, category, cycleYear) {
+  const rows = await db
     .prepare(
       `SELECT c.id, c.office_id, c.name, c.party, c.is_incumbent, c.vuid,
               c.filed, c.tec_filer_id, c.consultant, c.endorsements, c.notes,
@@ -72,10 +73,10 @@ function mergeCandidateMeta(candidate, meta) {
   candidate.race_category = meta.race_category ?? candidate.race_category ?? null;
 }
 
-export function syncRaceCandidates(db, races, cycleYear, category) {
+export async function syncRaceCandidates(db, races, cycleYear, category) {
   for (const race of races) {
     for (const candidate of race.candidates) {
-      const ensured = ensureCandidate(db, {
+      const ensured = await ensureCandidate(db, {
         officeId: race.office_id,
         cycleYear,
         name: candidate.name,
@@ -91,7 +92,7 @@ export function syncRaceCandidates(db, races, cycleYear, category) {
 
   if (!category) return races;
 
-  const metaMap = loadCandidateMetaMap(db, category, cycleYear);
+  const metaMap = await loadCandidateMetaMap(db, category, cycleYear);
   for (const race of races) {
     for (const candidate of race.candidates) {
       const stored = metaMap.get(
@@ -103,22 +104,22 @@ export function syncRaceCandidates(db, races, cycleYear, category) {
   return races;
 }
 
-export function updateCandidateVuid(db, candidateId, vuid) {
+export async function updateCandidateVuid(db, candidateId, vuid) {
   const cleaned = vuid == null || String(vuid).trim() === "" ? null : String(vuid).trim();
   if (cleaned) {
-    const conflict = db
+    const conflict = await db
       .prepare(`SELECT id FROM candidates WHERE vuid = ? AND id != ?`)
       .get(cleaned, candidateId);
     if (conflict) {
       throw new Error("VUID already assigned to another candidate");
     }
   }
-  db.prepare(`UPDATE candidates SET vuid = ? WHERE id = ?`).run(cleaned, candidateId);
+  await db.prepare(`UPDATE candidates SET vuid = ? WHERE id = ?`).run(cleaned, candidateId);
   return cleaned;
 }
 
-export function migrateCohHistoryToFinanceReports(db) {
-  const rows = db
+export async function migrateCohHistoryToFinanceReports(db) {
+  const rows = await db
     .prepare(
       `SELECT office_id, cycle_year, candidate_name, party, is_incumbent,
               period_label, report_period_end, cash_on_hand
@@ -128,7 +129,7 @@ export function migrateCohHistoryToFinanceReports(db) {
 
   let migrated = 0;
   for (const row of rows) {
-    const candidate = ensureCandidate(db, {
+    const candidate = await ensureCandidate(db, {
       officeId: row.office_id,
       cycleYear: row.cycle_year,
       name: row.candidate_name,
@@ -138,7 +139,7 @@ export function migrateCohHistoryToFinanceReports(db) {
     if (!candidate) continue;
 
     const periodEnd = row.report_period_end ?? `label:${row.period_label}`;
-    const existing = db
+    const existing = await db
       .prepare(
         `SELECT id FROM finance_reports
          WHERE candidate_id = ? AND report_period_end = ? AND report_type = 'TEC'`
@@ -146,7 +147,7 @@ export function migrateCohHistoryToFinanceReports(db) {
       .get(candidate.id, periodEnd);
     if (existing) continue;
 
-    db.prepare(
+    await db.prepare(
       `INSERT INTO finance_reports (candidate_id, report_period_end, report_type, total_raised, total_spent, cash_on_hand)
        VALUES (?, ?, 'TEC', NULL, NULL, ?)`
     ).run(candidate.id, periodEnd, row.cash_on_hand);

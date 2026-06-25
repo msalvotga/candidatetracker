@@ -1,16 +1,7 @@
-import { getDb } from "./db.mjs";
-
-const STATEWIDE_OFFICES = [
-  { code: "GOV", name: "Governor" },
-  { code: "LTGOV", name: "Lieutenant Governor" },
-  { code: "AG", name: "Attorney General" },
-  { code: "COMPT", name: "Comptroller of Public Accounts" },
-  { code: "GLO", name: "Commissioner of the General Land Office" },
-  { code: "AGRI", name: "Commissioner of Agriculture" },
-  { code: "RRC-1", name: "Railroad Commissioner (Place 1)" },
-  { code: "RRC-2", name: "Railroad Commissioner (Place 2)" },
-  { code: "RRC-3", name: "Railroad Commissioner (Place 3)" },
-];
+import { getDb, closeDb, initDb } from "./db.mjs";
+import { SENATE_DISTRICTS } from "./data/senate-districts.mjs";
+import { SBOE_DISTRICTS } from "./data/sboe-districts.mjs";
+import { STATEWIDE_OFFICES } from "./data/statewide-offices.mjs";
 
 function padDistrict(n, width = 3) {
   return String(n).padStart(width, "0");
@@ -29,7 +20,7 @@ function buildOfficeRows() {
     });
   }
 
-  for (let d = 1; d <= 31; d += 1) {
+  for (const d of SENATE_DISTRICTS) {
     rows.push({
       category: "senate",
       district: d,
@@ -39,7 +30,7 @@ function buildOfficeRows() {
     });
   }
 
-  for (let d = 1; d <= 15; d += 1) {
+  for (const d of SBOE_DISTRICTS) {
     rows.push({
       category: "sboe",
       district: d,
@@ -49,13 +40,13 @@ function buildOfficeRows() {
     });
   }
 
-  STATEWIDE_OFFICES.forEach((office, index) => {
+  STATEWIDE_OFFICES.forEach((office) => {
     rows.push({
       category: "statewide",
       district: null,
       office_code: office.code,
       office_name: office.name,
-      sort_order: index + 1,
+      sort_order: office.sort_order,
     });
   });
 
@@ -80,8 +71,9 @@ function buildOfficeRows() {
   return rows;
 }
 
-export function seedOfficesIfEmpty(database) {
-  const count = database.prepare(`SELECT COUNT(*) AS n FROM offices`).get().n;
+export async function seedOfficesIfEmpty(database) {
+  const countRow = await database.prepare(`SELECT COUNT(*) AS n FROM offices`).get();
+  const count = countRow.n;
   if (count > 0) return { seeded: false, count };
 
   const insert = database.prepare(`
@@ -89,20 +81,21 @@ export function seedOfficesIfEmpty(database) {
     VALUES (@category, @district, @office_code, @office_name, @sort_order)
   `);
 
-  const seedMany = database.transaction((rows) => {
-    for (const row of rows) insert.run(row);
+  const seedMany = database.transaction(async (rows) => {
+    for (const row of rows) await insert.run(row);
   });
 
-  seedMany(buildOfficeRows());
-  const total = database.prepare(`SELECT COUNT(*) AS n FROM offices`).get().n;
-  return { seeded: true, count: total };
+  await seedMany(buildOfficeRows());
+  const totalRow = await database.prepare(`SELECT COUNT(*) AS n FROM offices`).get();
+  return { seeded: true, count: totalRow.n };
 }
 
 const isMain = process.argv[1]?.endsWith("seed-offices.mjs");
 if (isMain) {
+  await initDb();
   const database = getDb();
-  const result = seedOfficesIfEmpty(database);
-  const counts = database
+  const result = await seedOfficesIfEmpty(database);
+  const counts = await database
     .prepare(`SELECT category, COUNT(*) AS n FROM offices GROUP BY category ORDER BY category`)
     .all();
 
@@ -114,4 +107,5 @@ if (isMain) {
   for (const row of counts) {
     console.log(`  ${row.category}: ${row.n}`);
   }
+  await closeDb();
 }
