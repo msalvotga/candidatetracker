@@ -23,6 +23,7 @@ export interface AuthMeResponse {
   user: AppUser | null;
   permissions: AppPermissions;
   authenticated: boolean;
+  guestAccess?: boolean;
 }
 export type CountyElection = "pres_2024" | "cruz_2024" | "abbott_2022";
 

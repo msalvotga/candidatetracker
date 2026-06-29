@@ -44,6 +44,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.join(__dirname, "..", "dist");
 const app = express();
 
+app.set("trust proxy", true);
 app.use(cors());
 app.use(express.json());
 
@@ -61,6 +62,7 @@ app.get("/api/auth/me", (req, res) => {
     user: req.auth.user,
     permissions: req.auth.permissions,
     authenticated: req.auth.authenticated,
+    guestAccess: Boolean(req.auth.guestAccess),
   });
 });
 

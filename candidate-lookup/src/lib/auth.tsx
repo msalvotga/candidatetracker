@@ -14,25 +14,33 @@ type AuthContextValue = {
   user: AppUser | null;
   permissions: AppPermissions;
   authenticated: boolean;
+  guestAccess: boolean;
   loading: boolean;
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
+  promptLogin: () => void;
+  cancelLoginPrompt: () => void;
 };
 
 const AuthContext = createContext<AuthContextValue>({
   user: null,
   permissions: DEFAULT_PERMISSIONS,
   authenticated: false,
+  guestAccess: false,
   loading: true,
   refresh: async () => {},
   logout: async () => {},
+  promptLogin: () => {},
+  cancelLoginPrompt: () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AppUser | null>(null);
   const [permissions, setPermissions] = useState<AppPermissions>(DEFAULT_PERMISSIONS);
   const [authenticated, setAuthenticated] = useState(false);
+  const [guestAccess, setGuestAccess] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loginPrompt, setLoginPrompt] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -40,10 +48,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(data.user);
       setPermissions(data.permissions);
       setAuthenticated(data.authenticated);
+      setGuestAccess(Boolean(data.guestAccess));
+      if (data.user) setLoginPrompt(false);
     } catch {
       setUser(null);
       setPermissions(DEFAULT_PERMISSIONS);
       setAuthenticated(false);
+      setGuestAccess(false);
     } finally {
       setLoading(false);
     }
@@ -53,10 +64,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await apiLogout();
     } finally {
-      setUser(null);
-      setPermissions(DEFAULT_PERMISSIONS);
-      setAuthenticated(false);
+      await refresh();
+      setLoginPrompt(false);
     }
+  }, [refresh]);
+
+  const promptLogin = useCallback(() => {
+    setLoginPrompt(true);
+  }, []);
+
+  const cancelLoginPrompt = useCallback(() => {
+    setLoginPrompt(false);
   }, []);
 
   useEffect(() => {
@@ -64,8 +82,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   return (
-    <AuthContext.Provider value={{ user, permissions, authenticated, loading, refresh, logout }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        permissions,
+        authenticated,
+        guestAccess,
+        loading,
+        refresh,
+        logout,
+        promptLogin,
+        cancelLoginPrompt,
+      }}
+    >
       {children}
+      {loginPrompt ? (
+        <div className="login-overlay" role="dialog" aria-modal="true" aria-label="Sign in">
+          <LoginPage
+            onSuccess={() => void refresh()}
+            onCancel={() => setLoginPrompt(false)}
+          />
+        </div>
+      ) : null}
     </AuthContext.Provider>
   );
 }

@@ -11,6 +11,8 @@ import {
   clearSessionCookie,
 } from "./sessions.mjs";
 
+const DEFAULT_GUEST_IPS = ["12.42.214.58", "127.0.0.1", "::1"];
+
 export function permissionsForRole(role) {
   const isAdmin = role === "admin";
   return {
@@ -19,6 +21,36 @@ export function permissionsForRole(role) {
     canEdit: isAdmin,
     canManageUsers: isAdmin,
   };
+}
+
+function normalizeClientIp(raw) {
+  const ip = String(raw ?? "").trim();
+  if (ip.startsWith("::ffff:")) return ip.slice(7);
+  return ip;
+}
+
+export function clientIp(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (forwarded) {
+    const first = String(forwarded).split(",")[0]?.trim();
+    if (first) return normalizeClientIp(first);
+  }
+  const realIp = req.headers["x-real-ip"];
+  if (realIp) return normalizeClientIp(String(realIp).trim());
+  return normalizeClientIp(req.socket?.remoteAddress ?? "");
+}
+
+function guestIpAllowlist() {
+  const configured = String(process.env.AUTH_GUEST_IPS ?? DEFAULT_GUEST_IPS.join(","))
+    .split(/[,;\s]+/)
+    .map((ip) => normalizeClientIp(ip))
+    .filter(Boolean);
+  return new Set(configured);
+}
+
+export function isGuestIp(req) {
+  const ip = clientIp(req);
+  return ip !== "" && guestIpAllowlist().has(ip);
 }
 
 const DEV_ADMIN_USER = {
@@ -70,10 +102,20 @@ export async function resolveAuth(req, db) {
     }
   }
 
+  if (isGuestIp(req)) {
+    return {
+      user: null,
+      permissions: permissionsForRole("viewer"),
+      authenticated: true,
+      guestAccess: true,
+    };
+  }
+
   return {
     user: null,
     permissions: permissionsForRole("viewer"),
     authenticated: false,
+    guestAccess: false,
   };
 }
 

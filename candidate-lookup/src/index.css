@@ -353,6 +353,36 @@ h2 {
   cursor: wait;
 }
 
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.login-overlay .login-page {
+  min-height: auto;
+  background: transparent;
+  padding: 0;
+}
+
+.login-cancel {
+  padding: 0.6rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.login-cancel:hover {
+  border-color: var(--accent);
+}
+
 .login-footnote {
   margin: 0;
   font-size: 0.8rem;

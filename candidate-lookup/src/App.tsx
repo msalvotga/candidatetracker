@@ -140,7 +140,7 @@ function updateCandidateFinanceHistory(
 }
 
 export default function App() {
-  const { permissions, user, logout } = useAuth();
+  const { permissions, user, logout, guestAccess, promptLogin } = useAuth();
   const currentYear = new Date().getFullYear();
   const [tab, setTab] = useState<AppTab>("house");
   const [countyElection, setCountyElection] = useState<CountyElection>("pres_2024");
@@ -498,6 +498,10 @@ export default function App() {
                 Log out
               </button>
             </div>
+          ) : guestAccess ? (
+            <button type="button" className="header-logout" onClick={promptLogin}>
+              Log in
+            </button>
           ) : null}
         </div>
       </header>
