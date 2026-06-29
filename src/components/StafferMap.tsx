@@ -41,7 +41,9 @@ function CountyPattern({
 
 export function StafferMap({ staffers }: { staffers: StafferMapEntry[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   const colorByName = useMemo(() => buildStafferColorMap(staffers.map((s) => s.name)), [staffers]);
 
@@ -93,13 +95,46 @@ export function StafferMap({ staffers }: { staffers: StafferMapEntry[] }) {
     });
   }
 
+  async function handleExportPdf() {
+    const svg = svgRef.current;
+    if (!svg || exportingPdf) return;
+    setExportingPdf(true);
+    try {
+      const { exportStafferMapPdf } = await import("../lib/stafferMapPdf");
+      await exportStafferMapPdf({
+        staffers,
+        svg,
+        assignedCount,
+        totalCounties: pathEntries.length,
+        overlapPairs: overlapPairs.map(([, names]) => ({ names })),
+      });
+    } catch (err) {
+      console.error("Staffer map PDF export failed:", err);
+      window.alert(err instanceof Error ? err.message : "Failed to create PDF");
+    } finally {
+      setExportingPdf(false);
+    }
+  }
+
   return (
     <div className="staffer-map-wrap">
       <header className="staffer-map-header">
-        <h2 className="staffer-map-title">TGA staffer territories</h2>
-        <p className="staffer-map-subtitle">
-          {assignedCount} of {pathEntries.length} counties assigned · county-based staffers only
-        </p>
+        <div className="staffer-map-header-row">
+          <div>
+            <h2 className="staffer-map-title">TGA staffer territories</h2>
+            <p className="staffer-map-subtitle">
+              {assignedCount} of {pathEntries.length} counties assigned · county-based staffers only
+            </p>
+          </div>
+          <button
+            type="button"
+            className="filter-chip staffer-map-pdf-btn"
+            onClick={() => void handleExportPdf()}
+            disabled={exportingPdf}
+          >
+            {exportingPdf ? "Creating PDF…" : "Download PDF"}
+          </button>
+        </div>
       </header>
 
       <div className="staffer-map-legend" aria-label="Staffer legend">
@@ -130,7 +165,13 @@ export function StafferMap({ staffers }: { staffers: StafferMapEntry[] }) {
       </div>
 
       <div className="staffer-map-canvas county-heatmap" ref={containerRef}>
-        <svg viewBox={texasPaths.viewBox} className="county-heatmap-svg" role="img" aria-label="Texas TGA staffer map">
+        <svg
+          ref={svgRef}
+          viewBox={texasPaths.viewBox}
+          className="county-heatmap-svg"
+          role="img"
+          aria-label="Texas TGA staffer map"
+        >
           <defs>
             {overlapPairs.map(([key, names]) => (
               <CountyPattern

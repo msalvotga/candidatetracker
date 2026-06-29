@@ -682,7 +682,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="app-topbar">
+      <header className={permissions.isAdmin ? "app-topbar app-topbar-admin" : "app-topbar"}>
         <div className="app-topbar-row">
           <div className="app-topbar-brand">
             <span className="app-topbar-title">Texas Candidate Lookup</span>

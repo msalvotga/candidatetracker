@@ -42,6 +42,24 @@ body {
   flex-shrink: 0;
 }
 
+.app-topbar-admin {
+  background: #2a1818;
+  border-color: #6b3030;
+}
+
+.app-topbar-admin .app-topbar-subtitle {
+  color: var(--rep);
+}
+
+.app-topbar-admin .app-topbar-link.is-active {
+  border-bottom-color: var(--rep);
+  background: rgba(201, 74, 74, 0.16);
+}
+
+.app-topbar-admin .app-topbar-auth:hover {
+  border-color: var(--rep);
+}
+
 .app-topbar-row {
   display: flex;
   align-items: center;
@@ -1987,6 +2005,23 @@ body.race-layout-resizing .race-layout-resizer {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+}
+
+.staffer-map-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.staffer-map-pdf-btn {
+  flex-shrink: 0;
+}
+
+.staffer-map-pdf-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .staffer-map-title {
