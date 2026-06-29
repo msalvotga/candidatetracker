@@ -108,6 +108,27 @@ export async function fetchTgaStafferRow(db, stafferId) {
   return enriched;
 }
 
+/** County coverage for the staffer map (direct county assignments only). */
+export async function fetchStafferMapData(db) {
+  const stafferRows = await db.prepare(`SELECT id, name FROM tga_staffers ORDER BY name`).all();
+  if (!stafferRows.length) return { staffers: [] };
+
+  const enriched = await enrichTgaStafferRows(db, stafferRows);
+
+  const staffers = [];
+  for (const row of enriched) {
+    const counties = [...new Set(parseKeyList(row.county_names))].sort((a, b) => a.localeCompare(b));
+    if (!counties.length) continue;
+    staffers.push({
+      id: row.id,
+      name: row.name,
+      counties,
+    });
+  }
+
+  return { staffers };
+}
+
 function staffersForOffice(officeId, stafferRows, officeCountiesMap) {
   const officeCounties = officeCountiesMap.get(officeId) ?? new Set();
   const matched = new Set();

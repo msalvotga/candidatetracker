@@ -27,7 +27,7 @@ import { seedOfficesIfEmpty } from "./seed-offices.mjs";
 import {
   attachSeatHoldersToRaces,
 } from "./lib/seatHolder.mjs";
-import { attachTgaStaffersToRaces } from "./lib/tgaStaffers.mjs";
+import { attachTgaStaffersToRaces, fetchStafferMapData } from "./lib/tgaStaffers.mjs";
 import { seedHouseOfficeCounties } from "./seed-house-office-counties.mjs";
 import {
   addTargetingOrganization,
@@ -361,6 +361,16 @@ app.get("/api/counties", async (req, res) => {
     .all(election)).map(normalizeCountyResultRow);
 
   res.json({ election, counties });
+});
+
+app.get("/api/tga-staffers/map", async (_req, res) => {
+  try {
+    const db = getDb();
+    const data = await fetchStafferMapData(db);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message ?? "failed to load staffer map" });
+  }
 });
 
 const VALID_METRIC_KEYS = new Set(["trump_2024", "cruz_2024", "abbott_2022", "leg_2024", "leg_2022"]);

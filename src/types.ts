@@ -1,5 +1,5 @@
 export type OfficeCategory = "house" | "senate" | "sboe" | "statewide" | "congressional";
-export type AppTab = OfficeCategory | "counties" | "data" | "admin";
+export type AppTab = OfficeCategory | "counties" | "staffers" | "data" | "admin";
 export type UserRole = "admin" | "viewer";
 
 export interface AppUser {
@@ -187,4 +187,14 @@ export interface MetricContest {
   note?: string;
   source?: string;
   candidates: MetricContestCandidate[];
+}
+
+export interface StafferMapEntry {
+  id: number;
+  name: string;
+  counties: string[];
+}
+
+export interface StafferMapResponse {
+  staffers: StafferMapEntry[];
 }

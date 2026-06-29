@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { addFinanceReport, fetchCounties, fetchMetricContest, fetchRaces, saveCandidateConsultants } from "./api";
+import { addFinanceReport, fetchCounties, fetchMetricContest, fetchRaces, fetchStafferMap, saveCandidateConsultants } from "./api";
 import { AdminDataPanel } from "./components/AdminData";
 import { AdminUsersPanel } from "./components/AdminUsers";
 import { CandidateDetailModal, CandidateSummary } from "./components/CandidateDetailModal";
 import { CandidateConsultantEditor, FinanceHistoryEditor, LatestFinanceDisplay } from "./components/CandidateFinance";
 import { CountyHeatmap, RaceMetrics } from "./components/CountyHeatmap";
 import { MetricContestModal } from "./components/MetricContestModal";
+import { StafferMap } from "./components/StafferMap";
 import { PendingSaveBar } from "./components/PendingSaveBar";
 import { loadRaceLayoutPrefs, saveRaceLayoutPrefs } from "./lib/raceLayoutPrefs";
 import { candidateKey, setFilingPeriods } from "./lib/finance";
@@ -40,6 +41,7 @@ import type {
   Race,
   RaceCandidate,
   RaceMetric,
+  StafferMapEntry,
 } from "./types";
 
 const RACE_TABS: { id: OfficeCategory; label: string }[] = [
@@ -148,6 +150,7 @@ export default function App() {
   const [cycleYear] = useState(2026);
   const [races, setRaces] = useState<Race[]>([]);
   const [counties, setCounties] = useState<Awaited<ReturnType<typeof fetchCounties>>["counties"]>([]);
+  const [stafferMap, setStafferMap] = useState<StafferMapEntry[]>([]);
   const [selectedOfficeId, setSelectedOfficeId] = useState<number | null>(null);
   const [filter, setFilter] = useState("");
   const [seatHolderFilter, setSeatHolderFilter] = useState<SeatHolderFilter>("all");
@@ -353,7 +356,7 @@ export default function App() {
   }, [permissions.canEdit, editMode]);
 
   const loadRaces = useCallback(async () => {
-    if (tab === "counties" || tab === "data" || tab === "admin") return;
+    if (tab === "counties" || tab === "staffers" || tab === "data" || tab === "admin") return;
     setLoading(true);
     setError("");
     try {
@@ -393,6 +396,26 @@ export default function App() {
     }
   }, [tab, countyElection]);
 
+  const loadStafferMap = useCallback(async () => {
+    if (tab !== "staffers") return;
+    setLoading(true);
+    setError("");
+    try {
+      const data = await fetchStafferMap();
+      setStafferMap(data.staffers ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load staffer map");
+      setStafferMap([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [tab]);
+
+  useEffect(() => {
+    if (tab !== "staffers") return;
+    void loadStafferMap();
+  }, [tab, loadStafferMap]);
+
   useEffect(() => {
     if (tab !== "counties") return;
     void loadCounties();
@@ -406,7 +429,7 @@ export default function App() {
     setOrganizationFilter([]);
     setConsultantFilter([]);
     setConsultantFilterMode("all");
-    if (tab === "data" || tab === "admin") {
+    if (tab === "data" || tab === "admin" || tab === "staffers") {
       setLoading(false);
     } else if (tab !== "counties") {
       setRaces([]);
@@ -430,7 +453,7 @@ export default function App() {
   }, []);
 
   const filteredRaces = useMemo(() => {
-    if (tab === "counties" || tab === "data" || tab === "admin") return [];
+    if (tab === "counties" || tab === "staffers" || tab === "data" || tab === "admin") return [];
     return races.filter((race) => {
       const query = filter.trim().toLowerCase();
       if (query) {
@@ -469,7 +492,7 @@ export default function App() {
   }, [filter, seatHolderFilter, trumpSwingFilter, openSeatFilter, tab, upForReelectionOnly, organizationFilter, consultantFilter, consultantFilterMode]);
 
   useEffect(() => {
-    if (tab === "counties" || tab === "data" || tab === "admin") return;
+    if (tab === "counties" || tab === "staffers" || tab === "data" || tab === "admin") return;
     if (filteredRaces.length === 0) {
       setSelectedOfficeId(null);
       return;
@@ -651,6 +674,7 @@ export default function App() {
     const raceTab = RACE_TABS.find((item) => item.id === tab);
     if (raceTab) return raceTab.label;
     if (tab === "counties") return "Counties";
+    if (tab === "staffers") return "Staffers";
     if (tab === "data") return "Data";
     if (tab === "admin") return "Admin";
     return "";
@@ -700,6 +724,14 @@ export default function App() {
                 onClick={() => selectTab("counties")}
               >
                 Counties
+              </button>
+              <button
+                type="button"
+                className={navLinkClass("staffers")}
+                aria-current={tab === "staffers" ? "page" : undefined}
+                onClick={() => selectTab("staffers")}
+              >
+                Staffers
               </button>
               {permissions.canAccessData ? (
                 <button
@@ -755,6 +787,17 @@ export default function App() {
         <AdminDataPanel cycleYear={cycleYear} editMode={effectiveEditMode} />
       ) : tab === "admin" ? (
         <AdminUsersPanel />
+      ) : tab === "staffers" ? (
+        <div className="staffers-panel">
+          {stafferMap.length === 0 ? (
+            <p className="loading">
+              No staffer county assignments yet. Add staffers and counties in the Data tab, or run{" "}
+              <code>npm run db:seed-tga-staffers</code>.
+            </p>
+          ) : (
+            <StafferMap staffers={stafferMap} />
+          )}
+        </div>
       ) : tab === "counties" ? (
         <div className="counties-panel">
           <div className="county-election-tabs">

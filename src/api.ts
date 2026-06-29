@@ -10,6 +10,7 @@ import type {
   MetricContest,
   OfficeCategory,
   RacesResponse,
+  StafferMapResponse,
   TargetingOrganization,
 } from "./types";
 
@@ -73,6 +74,15 @@ export async function fetchCounties(election: CountyElection): Promise<CountiesR
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Failed to load counties (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchStafferMap(): Promise<StafferMapResponse> {
+  const res = await apiFetch("/api/tga-staffers/map");
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Failed to load staffer map (${res.status})`);
   }
   return res.json();
 }
