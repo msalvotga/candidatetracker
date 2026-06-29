@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PendingSaveBar, valuesEqual } from "./PendingSaveBar";
 import texasPaths from "../data/texasCountyPaths.json";
 import { saveCountyResult } from "../api";
+import { canonicalCountyKey } from "../lib/countyKeys";
 import {
   formatMetricDisplay,
   marginFillColor,
@@ -11,15 +12,6 @@ import {
   metricGroupsForCategory,
 } from "../lib/metrics";
 import type { CountyElection, CountyResult, OfficeCategory, RaceMetric } from "../types";
-
-function normalizeCountyKey(name: string) {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/\s+county$/i, "")
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
 
 interface TooltipState {
   county: CountyResult;
@@ -46,7 +38,7 @@ export function CountyHeatmap({
   const byKey = useMemo(() => {
     const map = new Map<string, CountyResult>();
     for (const county of counties) {
-      map.set(county.county_key, county);
+      map.set(canonicalCountyKey(county.county_key), county);
     }
     return map;
   }, [counties]);
@@ -67,7 +59,7 @@ export function CountyHeatmap({
       <div className="county-heatmap" ref={containerRef}>
         <svg viewBox={texasPaths.viewBox} className="county-heatmap-svg" role="img" aria-label={title}>
           {pathEntries.map(([fips, entry]) => {
-            const key = normalizeCountyKey(entry.name);
+            const key = canonicalCountyKey(entry.name);
             const county = byKey.get(key);
             const margin = county?.margin ?? null;
             const fill = marginFillColor(margin);

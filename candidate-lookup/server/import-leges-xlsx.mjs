@@ -56,11 +56,16 @@ await importCountySheets(database, workbook);
 
 const summary = await database
   .prepare(
-    `SELECT category, COUNT(*) AS n FROM race_sheet_rows WHERE cycle_year = 2026 GROUP BY category ORDER BY category`
+    `SELECT o.category, COUNT(*) AS n
+     FROM candidates c
+     JOIN offices o ON o.id = c.office_id
+     WHERE c.cycle_year = 2026
+     GROUP BY o.category
+     ORDER BY o.category`
   )
   .all();
 
-console.log(`\nImported ${totalRows} sheet rows from ${filePath}`);
+console.log(`\nImported ${totalRows} candidate rows from ${filePath}`);
 for (const row of summary) {
   console.log(`  ${row.category}: ${row.n}`);
 }

@@ -196,11 +196,11 @@ export async function insertAdminTableRow(tableName: string, fields: Record<stri
 }
 
 export async function deleteAdminTableRow(tableName: string, id: string | number) {
-  const res = await apiFetch(`/api/admin/tables/${encodeURIComponent(tableName)}/rows`, {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id }),
-  });
+  const params = new URLSearchParams({ id: String(id) });
+  const res = await apiFetch(
+    `/api/admin/tables/${encodeURIComponent(tableName)}/rows?${params}`,
+    { method: "DELETE" }
+  );
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? adminApiError(res, `Failed to delete row from ${tableName}`));

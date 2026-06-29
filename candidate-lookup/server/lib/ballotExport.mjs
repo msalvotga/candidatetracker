@@ -37,48 +37,26 @@ function groupByOffice(rows) {
   return map;
 }
 
-function mergeCandidatesForOffice(sheetRows, dbCandidates) {
-  const map = new Map();
-
-  const add = (name, party, isIncumbent, withdrew) => {
-    const trimmedName = String(name ?? "").trim();
-    const trimmedParty = String(party ?? "").trim();
-    if (!trimmedName || !trimmedParty) return;
-    const key = `${trimmedName.toLowerCase()}|${trimmedParty}|${isIncumbent ? 1 : 0}`;
-    const existing = map.get(key);
-    const next = {
-      name: trimmedName,
-      party: trimmedParty,
-      is_incumbent: Boolean(isIncumbent),
-      withdrew: Boolean(withdrew),
-    };
-    if (!existing || next.withdrew === false) {
-      map.set(key, next);
-    }
-  };
-
-  for (const row of sheetRows) {
-    add(row.incumbent_name, row.incumbent_party, true, false);
-    add(row.candidate_name, row.candidate_party, false, false);
-  }
-
-  for (const row of dbCandidates) {
-    add(row.name, row.party, row.is_incumbent, row.withdrew);
-  }
-
-  return [...map.values()].filter((candidate) => !candidate.withdrew);
+function activeCandidates(rows) {
+  return rows
+    .filter((row) => !row.withdrew)
+    .map((row) => ({
+      name: String(row.name ?? "").trim(),
+      party: String(row.party ?? "").trim(),
+      is_incumbent: Boolean(row.is_incumbent),
+      running_for_reelection: row.running_for_reelection ?? null,
+    }))
+    .filter((candidate) => candidate.name && candidate.party);
 }
 
-function incumbentOnBallot(sheetRows, candidates) {
-  const sheetIncumbent = sheetRows.find((row) => String(row.incumbent_name ?? "").trim());
-  if (sheetIncumbent) {
-    const running = String(sheetIncumbent.running_for_reelection ?? "").trim().toLowerCase();
+function incumbentOnBallot(candidates) {
+  const incumbentCandidate = candidates.find((candidate) => candidate.is_incumbent);
+  if (incumbentCandidate) {
+    const running = String(incumbentCandidate.running_for_reelection ?? "").trim().toLowerCase();
     if (running === "no") return "No";
     if (running === "yes") return "Yes";
+    return "Yes";
   }
-
-  const incumbentCandidate = candidates.find((candidate) => candidate.is_incumbent);
-  if (incumbentCandidate) return "Yes";
 
   return "No";
 }
@@ -112,35 +90,20 @@ export async function buildBallotRowsForCategory(database, category, cycleYear) 
     )
     .all(category);
 
-  const sheetRows = await database
-    .prepare(
-      `SELECT office_id, incumbent_name, incumbent_party, running_for_reelection,
-              candidate_name, candidate_party
-       FROM race_sheet_rows
-       WHERE category = ? AND cycle_year = ?`
-    )
-    .all(category, cycleYear);
-
   const dbCandidates = await database
     .prepare(
-      `SELECT c.office_id, c.name, c.party, c.is_incumbent, c.withdrew
+      `SELECT c.office_id, c.name, c.party, c.is_incumbent, c.withdrew, c.running_for_reelection
        FROM candidates c
        JOIN offices o ON o.id = c.office_id
        WHERE o.category = ? AND c.cycle_year = ?`
     )
     .all(category, cycleYear);
 
-  const sheetByOffice = groupByOffice(sheetRows);
   const candidatesByOffice = groupByOffice(dbCandidates);
 
   return offices.map((office) => {
-    const officeSheetRows = sheetByOffice.get(office.id) ?? [];
-    const officeCandidates = mergeCandidatesForOffice(
-      officeSheetRows,
-      candidatesByOffice.get(office.id) ?? []
-    );
-
-    const onBallot = incumbentOnBallot(officeSheetRows, officeCandidates);
+    const officeCandidates = activeCandidates(candidatesByOffice.get(office.id) ?? []);
+    const onBallot = incumbentOnBallot(officeCandidates);
     const holderName = String(office.seat_holder_name ?? "").trim();
     const holderParty = String(office.seat_holder_party ?? "").trim();
 
@@ -167,14 +130,14 @@ export async function buildBallotRowsForCategory(database, category, cycleYear) 
   });
 }
 
-export async function buildBallotWorkbookBuffer(database, cycleYear) {
+export async function buildBallotSummaryWorkbook(database, cycleYear) {
   const workbook = XLSX.utils.book_new();
 
   for (const { category, sheetName } of EXPORT_CATEGORIES) {
     const rows = await buildBallotRowsForCategory(database, category, cycleYear);
-    const worksheet = XLSX.utils.json_to_sheet(rows, { header: HEADERS });
-    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+    const sheet = XLSX.utils.json_to_sheet(rows, { header: HEADERS });
+    XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
   }
 
-  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+  return workbook;
 }

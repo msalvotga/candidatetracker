@@ -1,17 +1,14 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import XLSX from "xlsx";
+import {
+  canonicalCountyKey,
+  canonicalCountyName,
+  normalizeCountyMargin,
+  normalizeCountyShare,
+} from "./countyElection.mjs";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
+/** @deprecated use canonicalCountyKey from countyElection.mjs */
 export function normalizeCountyKey(name) {
-  return String(name ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+county$/i, "")
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
+  return canonicalCountyKey(name);
 }
 
 function parseNum(value) {
@@ -39,13 +36,22 @@ function skipCounty(name) {
 }
 
 function computeMargin(gopPct, demPct, rawMargin) {
-  const margin = parseNum(rawMargin);
-  if (margin != null && Math.abs(margin) <= 1) return margin;
-  const gop = parseNum(gopPct);
-  const dem = parseNum(demPct);
-  if (gop != null && dem != null) return gop - dem;
-  if (gop != null) return gop - 0.5;
-  return null;
+  const gop = normalizeCountyShare(gopPct);
+  const dem = normalizeCountyShare(demPct);
+  return normalizeCountyMargin(rawMargin, gop, dem);
+}
+
+function finalizeCountyRow(countyName, fields) {
+  const county_name = canonicalCountyName(countyName);
+  return {
+    county_name,
+    county_key: canonicalCountyKey(county_name),
+    margin: fields.margin,
+    gop_pct: normalizeCountyShare(fields.gop_pct),
+    dem_pct: normalizeCountyShare(fields.dem_pct),
+    gop_votes: fields.gop_votes ?? null,
+    dem_votes: fields.dem_votes ?? null,
+  };
 }
 
 function parsePres2024(rows) {
@@ -69,15 +75,15 @@ function parsePres2024(rows) {
     const gopVotes = trumpVotesCol ? parseNum(row[trumpVotesCol.colIndex + 1] ?? row[trumpVotesCol.colIndex]) : null;
     const demVotes = kamalaVotesCol ? parseNum(row[kamalaVotesCol.colIndex + 1] ?? row[kamalaVotesCol.colIndex]) : null;
 
-    results.push({
-      county_name: countyName,
-      county_key: normalizeCountyKey(countyName),
-      margin,
-      gop_pct: gopPct,
-      dem_pct: demPct,
-      gop_votes: gopVotes != null ? Math.round(gopVotes) : null,
-      dem_votes: demVotes != null ? Math.round(demVotes) : null,
-    });
+    results.push(
+      finalizeCountyRow(countyName, {
+        margin,
+        gop_pct: gopPct,
+        dem_pct: demPct,
+        gop_votes: gopVotes != null ? Math.round(gopVotes) : null,
+        dem_votes: demVotes != null ? Math.round(demVotes) : null,
+      })
+    );
   }
 
   return results;
@@ -111,15 +117,15 @@ function parseCruz2024(rows) {
 
     if (margin == null && gopPct == null && demPct == null) continue;
 
-    results.push({
-      county_name: countyName,
-      county_key: normalizeCountyKey(countyName),
-      margin,
-      gop_pct: gopPct,
-      dem_pct: demPct,
-      gop_votes: gopVotes != null ? Math.round(gopVotes) : null,
-      dem_votes: demVotes != null ? Math.round(demVotes) : null,
-    });
+    results.push(
+      finalizeCountyRow(countyName, {
+        margin,
+        gop_pct: gopPct,
+        dem_pct: demPct,
+        gop_votes: gopVotes != null ? Math.round(gopVotes) : null,
+        dem_votes: demVotes != null ? Math.round(demVotes) : null,
+      })
+    );
   }
 
   return results;
@@ -149,15 +155,15 @@ function parseAbbott2022(rows) {
 
     if (margin == null && gopPct == null && demPct == null) continue;
 
-    results.push({
-      county_name: countyName,
-      county_key: normalizeCountyKey(countyName),
-      margin,
-      gop_pct: gopPct,
-      dem_pct: demPct,
-      gop_votes: null,
-      dem_votes: null,
-    });
+    results.push(
+      finalizeCountyRow(countyName, {
+        margin,
+        gop_pct: gopPct,
+        dem_pct: demPct,
+        gop_votes: null,
+        dem_votes: null,
+      })
+    );
   }
 
   return results;
@@ -170,9 +176,6 @@ const COUNTY_SHEETS = [
 ];
 
 export async function importCountySheets(database, workbook) {
-  const schemaPath = path.join(__dirname, "..", "..", "schema-metrics.sql");
-  await database.exec(fs.readFileSync(schemaPath, "utf8"));
-
   const insert = database.prepare(`
     INSERT INTO county_election_results (
       election_key, county_name, county_key, margin, gop_pct, dem_pct, gop_votes, dem_votes

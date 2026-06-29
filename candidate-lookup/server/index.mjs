@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDb, initDb } from "./db.mjs";
+import { canonicalCountyKey, normalizeCountyResultRow, normalizeCountyShare, normalizeCountyMargin } from "./lib/countyElection.mjs";
 import { isConstraintError } from "./sql.mjs";
 import {
   adminQueryTable,
@@ -16,7 +17,7 @@ import {
   deleteAdminTableRow,
 } from "./lib/adminData.mjs";
 import { listConsultants, loadCandidateConsultantsMap, attachConsultantsToRaces, addConsultant, syncCandidateConsultants, parseKeyList } from "./lib/consultants.mjs";
-import { syncRaceCandidates, updateCandidateVuid } from "./lib/candidates.mjs";
+import { buildRacesFromCandidates, updateCandidateVuid, loadCandidatesForCategory } from "./lib/candidates.mjs";
 import { addFinanceReport, attachFinanceHistoryToRaces, bulkImportFinanceReports, loadFinanceHistoryMap } from "./lib/financeReports.mjs";
 import { addFilingPeriod, listFilingPeriods, seedFilingPeriods } from "./lib/filingPeriods.mjs";
 import { buildContestResponse, detectUncontested } from "./lib/metricContest.mjs";
@@ -26,6 +27,8 @@ import { seedOfficesIfEmpty } from "./seed-offices.mjs";
 import {
   attachSeatHoldersToRaces,
 } from "./lib/seatHolder.mjs";
+import { attachTgaStaffersToRaces } from "./lib/tgaStaffers.mjs";
+import { seedHouseOfficeCounties } from "./seed-house-office-counties.mjs";
 import {
   addTargetingOrganization,
   attachTargetsToRaces,
@@ -116,9 +119,7 @@ app.get("/api/cycles", async (_req, res) => {
   const db = getDb();
   const rows = await db
     .prepare(
-      `SELECT DISTINCT cycle_year AS year FROM race_sheet_rows
-       UNION
-       SELECT DISTINCT cycle_year AS year FROM candidates
+      `SELECT DISTINCT cycle_year AS year FROM candidates
        ORDER BY year DESC`
     )
     .all();
@@ -194,102 +195,6 @@ async function buildUncontestedMap(database, category) {
 
 const EDITABLE_METRIC_KEYS = new Set([]);
 
-function attachSheetMeta(candidate, row, isIncumbent) {
-  candidate.filed = Boolean(row.filed);
-  candidate.tec_filer_id = row.tec_filer_id ?? null;
-  candidate.consultant = row.consultant ?? null;
-  candidate.endorsements = row.endorsements ?? null;
-  candidate.notes = row.notes ?? null;
-  candidate.website = row.website ?? null;
-  candidate.social_media = row.social_media ?? null;
-  candidate.race_category = row.race_category ?? null;
-  candidate.running_for_reelection = isIncumbent ? row.running_for_reelection ?? null : null;
-}
-
-function buildRacesFromSheetRows(sheetRows, metricsByOffice, category, uncontestedMap = new Map()) {
-  const byOffice = new Map();
-
-  for (const row of sheetRows) {
-    if (!byOffice.has(row.office_id)) {
-      const metrics = metricsByOffice.get(row.office_id) ?? {};
-      const metricFields = metricFieldsForCategory(category);
-      byOffice.set(row.office_id, {
-        office_id: row.office_id,
-        office_code: row.office_code,
-        office_name: row.office_name,
-        district: row.district,
-        metrics: metricFields
-          .map((field) => {
-            const winningParty = uncontestedMap.get(`${row.office_id}|${field.key}`) ?? null;
-            return {
-              key: field.key,
-              label: field.label,
-              value: metrics[field.key] ?? null,
-              uncontested: winningParty != null,
-              winning_party: winningParty,
-            };
-          }),
-        candidates: [],
-      });
-    }
-
-    const race = byOffice.get(row.office_id);
-
-    const addCandidate = (name, party, isIncumbent) => {
-      const trimmed = String(name ?? "").trim();
-      if (!trimmed || !party) return;
-
-      const key = `${trimmed.toLowerCase()}|${party}|${isIncumbent ? 1 : 0}`;
-      const existing = race.candidates.find((c) => c._key === key);
-      if (existing) {
-        attachSheetMeta(existing, row, isIncumbent);
-        return;
-      }
-
-      const candidate = {
-        _key: key,
-        name: trimmed,
-        party,
-        is_incumbent: isIncumbent,
-        filed: false,
-        tec_filer_id: null,
-        consultant: null,
-        endorsements: null,
-        notes: null,
-        website: null,
-        social_media: null,
-        race_category: null,
-        running_for_reelection: null,
-      };
-      attachSheetMeta(candidate, row, isIncumbent);
-      race.candidates.push(candidate);
-    };
-
-    addCandidate(row.incumbent_name, row.incumbent_party, true);
-    addCandidate(row.candidate_name, row.candidate_party, false);
-  }
-
-  const partyOrder = { R: 0, D: 1, I: 2, L: 3, G: 4, O: 5 };
-
-  return [...byOffice.values()]
-    .map((race) => ({
-      office_id: race.office_id,
-      office_code: race.office_code,
-      office_name: race.office_name,
-      district: race.district,
-      metrics: race.metrics,
-      candidates: race.candidates
-        .map(({ _key, ...candidate }) => candidate)
-        .sort((a, b) => {
-          const partyDiff = (partyOrder[a.party] ?? 9) - (partyOrder[b.party] ?? 9);
-          if (partyDiff !== 0) return partyDiff;
-          if (a.is_incumbent !== b.is_incumbent) return a.is_incumbent ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        }),
-    }))
-    .filter((race) => race.candidates.length > 0);
-}
-
 const FULL_OFFICE_LIST_CATEGORIES = new Set(["senate", "sboe", "statewide"]);
 
 async function expandRacesWithAllOffices(db, races, metricsByOffice, category, uncontestedMap) {
@@ -342,36 +247,7 @@ app.get("/api/races", async (req, res) => {
   const cycleYear = parseYear(req.query.year);
   const db = getDb();
 
-  const rows = await db
-    .prepare(
-      `
-      SELECT
-        r.id AS row_id,
-        o.id AS office_id,
-        o.office_code,
-        o.office_name,
-        o.district,
-        r.incumbent_name,
-        r.incumbent_party,
-        r.running_for_reelection,
-        r.candidate_name,
-        r.candidate_party,
-        r.filed,
-        r.tec_filer_id,
-        r.consultant,
-        r.endorsements,
-        r.notes,
-        r.social_media,
-        r.website,
-        r.race_category
-      FROM race_sheet_rows r
-      JOIN offices o ON o.id = r.office_id
-      WHERE r.category = @category AND r.cycle_year = @cycleYear
-      ORDER BY o.sort_order, o.district, o.office_code, r.row_order
-      `
-    )
-    .all({ category, cycleYear });
-
+  try {
   const metricsRows = await db
     .prepare(
       `SELECT m.* FROM office_metrics m
@@ -421,15 +297,17 @@ app.get("/api/races", async (req, res) => {
   }
   const uncontestedMap = await buildUncontestedMap(db, category);
   const financeMap = await loadFinanceHistoryMap(db, category, cycleYear);
-  let races = buildRacesFromSheetRows(rows, metricsByOffice, category, uncontestedMap);
+  const storedCandidates = await loadCandidatesForCategory(db, category, cycleYear);
+  const metricFields = metricFieldsForCategory(category);
+  let races = buildRacesFromCandidates(storedCandidates, metricsByOffice, metricFields, uncontestedMap);
   races = await expandRacesWithAllOffices(db, races, metricsByOffice, category, uncontestedMap);
-  await syncRaceCandidates(db, races, cycleYear, category);
   races = attachFinanceHistoryToRaces(races, financeMap);
-  races = await attachSeatHoldersToRaces(db, races, rows, category);
+  races = await attachSeatHoldersToRaces(db, races, category);
   const targetsByOffice = await loadOfficeTargetsByOffice(db, category, cycleYear);
   races = attachTargetsToRaces(races, targetsByOffice);
   const consultantsMap = await loadCandidateConsultantsMap(db, category, cycleYear);
   races = attachConsultantsToRaces(races, consultantsMap);
+  races = await attachTgaStaffersToRaces(db, races, category);
 
   res.json({
     category,
@@ -439,6 +317,10 @@ app.get("/api/races", async (req, res) => {
     targeting_organizations: await listTargetingOrganizations(db),
     consultants: await listConsultants(db, { cycleYear, category }),
   });
+  } catch (err) {
+    console.error("GET /api/races failed:", err);
+    res.status(500).json({ error: err.message ?? "failed to load races" });
+  }
 });
 
 app.get("/api/filing-periods", async (_req, res) => {
@@ -467,14 +349,14 @@ app.get("/api/counties", async (req, res) => {
   }
 
   const db = getDb();
-  const counties = await db
+  const counties = (await db
     .prepare(
       `SELECT county_name, county_key, margin, gop_pct, dem_pct, gop_votes, dem_votes
        FROM county_election_results
        WHERE election_key = ?
        ORDER BY county_name`
     )
-    .all(election);
+    .all(election)).map(normalizeCountyResultRow);
 
   res.json({ election, counties });
 });
@@ -859,7 +741,7 @@ app.patch("/api/candidates/:candidateId/consultants", requireAdmin, async (req, 
 });
 
 app.patch("/api/counties/:countyKey", requireAdmin, async (req, res) => {
-  const countyKey = String(req.params.countyKey ?? "").trim();
+  const countyKey = canonicalCountyKey(String(req.params.countyKey ?? "").trim());
   const { election, margin, gop_pct, dem_pct, gop_votes, dem_votes } = req.body ?? {};
   if (!countyKey || !VALID_ELECTIONS.has(election)) {
     res.status(400).json({ error: "election and countyKey required" });
@@ -867,21 +749,28 @@ app.patch("/api/counties/:countyKey", requireAdmin, async (req, res) => {
   }
 
   const db = getDb();
-  const existing = await db
-    .prepare(`SELECT * FROM county_election_results WHERE election_key = ? AND county_key = ?`)
-    .get(election, countyKey);
+  const electionRows = await db
+    .prepare(`SELECT * FROM county_election_results WHERE election_key = ?`)
+    .all(election);
+  const existing = electionRows.find(
+    (row) =>
+      canonicalCountyKey(row.county_key) === countyKey ||
+      canonicalCountyKey(row.county_name) === countyKey
+  );
   if (!existing) {
     res.status(404).json({ error: "county not found" });
     return;
   }
 
-  const nextGopPct = gop_pct !== undefined ? parseOptionalNumber(gop_pct) : existing.gop_pct;
-  const nextDemPct = dem_pct !== undefined ? parseOptionalNumber(dem_pct) : existing.dem_pct;
-  let nextMargin = margin !== undefined ? parseOptionalNumber(margin) : existing.margin;
-  if (margin === undefined && (gop_pct !== undefined || dem_pct !== undefined)) {
-    if (nextGopPct != null && nextDemPct != null) nextMargin = nextGopPct - nextDemPct;
-    else if (nextGopPct != null) nextMargin = nextGopPct - 0.5;
-  }
+  const normalizedExisting = normalizeCountyResultRow(existing);
+  const nextGopPct =
+    gop_pct !== undefined ? normalizeCountyShare(parseOptionalNumber(gop_pct)) : normalizedExisting.gop_pct;
+  const nextDemPct =
+    dem_pct !== undefined ? normalizeCountyShare(parseOptionalNumber(dem_pct)) : normalizedExisting.dem_pct;
+  const nextMargin =
+    margin !== undefined
+      ? normalizeCountyMargin(parseOptionalNumber(margin), nextGopPct, nextDemPct)
+      : normalizeCountyMargin(normalizedExisting.margin, nextGopPct, nextDemPct);
 
   const nextGopVotes =
     gop_votes !== undefined
@@ -898,11 +787,18 @@ app.patch("/api/counties/:countyKey", requireAdmin, async (req, res) => {
 
   await db.prepare(
     `UPDATE county_election_results
-     SET margin = @margin, gop_pct = @gop_pct, dem_pct = @dem_pct, gop_votes = @gop_votes, dem_votes = @dem_votes
-     WHERE election_key = @election AND county_key = @countyKey`
+     SET county_name = @county_name,
+         county_key = @county_key,
+         margin = @margin,
+         gop_pct = @gop_pct,
+         dem_pct = @dem_pct,
+         gop_votes = @gop_votes,
+         dem_votes = @dem_votes
+     WHERE id = @id`
   ).run({
-    election,
-    countyKey,
+    id: existing.id,
+    county_name: normalizedExisting.county_name,
+    county_key: normalizedExisting.county_key,
     margin: nextMargin,
     gop_pct: nextGopPct,
     dem_pct: nextDemPct,
@@ -910,12 +806,15 @@ app.patch("/api/counties/:countyKey", requireAdmin, async (req, res) => {
     dem_votes: Number.isFinite(nextDemVotes) ? nextDemVotes : null,
   });
 
-  const updated = await db
-    .prepare(
-      `SELECT county_name, county_key, margin, gop_pct, dem_pct, gop_votes, dem_votes
-       FROM county_election_results WHERE election_key = ? AND county_key = ?`
-    )
-    .get(election, countyKey);
+  const updated = normalizeCountyResultRow({
+    county_name: normalizedExisting.county_name,
+    county_key: normalizedExisting.county_key,
+    margin: nextMargin,
+    gop_pct: nextGopPct,
+    dem_pct: nextDemPct,
+    gop_votes: Number.isFinite(nextGopVotes) ? nextGopVotes : null,
+    dem_votes: Number.isFinite(nextDemVotes) ? nextDemVotes : null,
+  });
 
   res.json({ county: updated });
 });
@@ -979,6 +878,12 @@ if (fs.existsSync(distIndex)) {
   });
 }
 
+app.use((err, _req, res, _next) => {
+  console.error("Unhandled API error:", err);
+  if (res.headersSent) return;
+  res.status(500).json({ error: err?.message ?? "internal server error" });
+});
+
 async function start() {
   await initDb();
   const db = getDb();
@@ -989,6 +894,15 @@ async function start() {
   }
   await seedOfficesIfEmpty(db);
   await seedFilingPeriods(db);
+  try {
+    const countyCount = (await db.prepare(`SELECT COUNT(*) AS count FROM office_counties`).get()).count;
+    if (countyCount === 0) {
+      const seeded = await seedHouseOfficeCounties(db);
+      console.log(`Seeded ${seeded.inserted} house office county mappings`);
+    }
+  } catch (err) {
+    console.error("House office county seed skipped:", err);
+  }
   app.listen(PORT, () => {
     const mode = fs.existsSync(distIndex) ? "production (API + static UI)" : "API only";
     console.log(`Candidate tracker listening on port ${PORT} — ${mode}`);

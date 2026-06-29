@@ -106,6 +106,8 @@ export interface Race {
   up_for_reelection?: boolean;
   targeting_organizations?: TargetingOrganizationRef[];
   targeting_organization_keys?: string[];
+  /** Abbott/TGA staff assigned to this office or its counties. */
+  tga_staffer_names?: string[];
 }
 
 export interface SeatHolder {
