@@ -21,6 +21,7 @@
     "db:seed-sboe-benchmarks": "node server/seed-sboe-benchmarks.mjs",
     "db:seed-house-benchmarks": "node server/seed-house-benchmarks.mjs",
     "db:seed-house-office-counties": "node server/seed-house-office-counties.mjs",
+    "db:seed-third-party-candidates": "node server/seed-third-party-candidates.mjs",
     "db:reset-benchmark-margins": "node server/reset-benchmark-margins.mjs",
     "db:seed-benchmark-contests": "node server/seed-benchmark-contests.mjs",
     "db:seed-bootstrap-admin": "node server/seed-bootstrap-admin.mjs",
