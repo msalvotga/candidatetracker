@@ -420,54 +420,16 @@ async function upsertFinance(database, candidateId, periodKey, finance, prefix) 
 }
 
 export async function importParsedRows(database, config, parsedRows) {
-  const clearSheet = database.prepare(
-    `DELETE FROM race_sheet_rows WHERE category = ? AND cycle_year = ?`
-  );
   const clearCandidates = database.prepare(
     `DELETE FROM candidates WHERE office_id IN (SELECT id FROM offices WHERE category = ?) AND cycle_year = ?`
   );
 
-  await clearSheet.run(config.category, config.cycleYear);
   await clearCandidates.run(config.category, config.cycleYear);
-
-  const insertSheetRow = database.prepare(`
-    INSERT INTO race_sheet_rows (
-      office_id, cycle_year, category, row_order,
-      incumbent_name, incumbent_party, running_for_reelection,
-      candidate_name, candidate_party, filed, tec_filer_id,
-      consultant, endorsements, notes, social_media, website, race_category
-    ) VALUES (
-      @officeId, @cycleYear, @category, @rowOrder,
-      @incumbentName, @incumbentParty, @runningForReelection,
-      @candidateName, @candidateParty, @filed, @tecFilerId,
-      @consultant, @endorsements, @notes, @socialMedia, @website, @raceCategory
-    )
-  `);
 
   const importMany = database.transaction(async (rows) => {
     for (const row of rows) {
       const officeId = await upsertOffice(database, row.office, config.category);
       const finance = row.finance;
-
-      await insertSheetRow.run({
-        officeId,
-        cycleYear: config.cycleYear,
-        category: config.category,
-        rowOrder: row.rowOrder,
-        incumbentName: row.incumbentName,
-        incumbentParty: row.incumbentParty,
-        runningForReelection: row.runningForReelection,
-        candidateName: row.candidateName,
-        candidateParty: row.candidateParty,
-        filed: row.filed,
-        tecFilerId: row.tecFilerId,
-        consultant: row.consultant,
-        endorsements: row.endorsements,
-        notes: row.notes,
-        socialMedia: row.socialMedia,
-        website: row.website,
-        raceCategory: row.raceCategory,
-      });
 
       if (String(row.incumbentName ?? "").trim()) {
         await database

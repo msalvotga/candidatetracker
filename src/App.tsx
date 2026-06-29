@@ -57,12 +57,16 @@ const COUNTY_ELECTIONS: { id: CountyElection; label: string }[] = [
 function partyLabel(party: string) {
   if (party === "R") return "GOP";
   if (party === "D") return "DEM";
+  if (party === "L") return "LIB";
+  if (party === "G") return "GREEN";
   return party;
 }
 
 function partyBadgeClass(party: string | null | undefined) {
   if (party === "R") return "party-badge party-badge-r";
   if (party === "D") return "party-badge party-badge-d";
+  if (party === "L") return "party-badge party-badge-l";
+  if (party === "G") return "party-badge party-badge-g";
   return null;
 }
 
@@ -136,7 +140,7 @@ function updateCandidateFinanceHistory(
 }
 
 export default function App() {
-  const { permissions, user, logout } = useAuth();
+  const { permissions, user, logout, guestAccess, promptLogin } = useAuth();
   const currentYear = new Date().getFullYear();
   const [tab, setTab] = useState<AppTab>("house");
   const [countyElection, setCountyElection] = useState<CountyElection>("pres_2024");
@@ -494,6 +498,10 @@ export default function App() {
                 Log out
               </button>
             </div>
+          ) : guestAccess ? (
+            <button type="button" className="header-logout" onClick={promptLogin}>
+              Log in
+            </button>
           ) : null}
         </div>
       </header>

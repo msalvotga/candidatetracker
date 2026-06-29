@@ -6,6 +6,7 @@ function partyLabel(party: string) {
   if (party === "R") return "GOP";
   if (party === "D") return "DEM";
   if (party === "L") return "LIB";
+  if (party === "G") return "GREEN";
   if (party === "I") return "IND";
   return party;
 }

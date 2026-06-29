@@ -10,6 +10,8 @@
   --accent: #4c8bf5;
   --rep: #c94a4a;
   --dem: #4a6fc9;
+  --lib: #d4a017;
+  --grn: #2ea84a;
   --error: #f07178;
 }
 
@@ -349,6 +351,36 @@ h2 {
 .login-submit:disabled {
   opacity: 0.7;
   cursor: wait;
+}
+
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.login-overlay .login-page {
+  min-height: auto;
+  background: transparent;
+  padding: 0;
+}
+
+.login-cancel {
+  padding: 0.6rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.login-cancel:hover {
+  border-color: var(--accent);
 }
 
 .login-footnote {
@@ -780,6 +812,14 @@ h2 {
   color: var(--dem);
 }
 
+.party-text-l {
+  color: var(--lib);
+}
+
+.party-text-g {
+  color: var(--grn);
+}
+
 .race-search:focus {
   outline: 2px solid rgba(76, 139, 245, 0.45);
   border-color: var(--accent);
@@ -979,6 +1019,14 @@ h2 {
 
 .candidate-item.party-d {
   border-left: 4px solid var(--dem);
+}
+
+.candidate-item.party-l {
+  border-left: 4px solid var(--lib);
+}
+
+.candidate-item.party-g {
+  border-left: 4px solid var(--grn);
 }
 
 .candidate-main {
@@ -1219,6 +1267,18 @@ h2 {
   background: rgba(74, 111, 201, 0.15);
 }
 
+.party-badge-l {
+  color: #e8c84a;
+  border: 1px solid rgba(212, 160, 23, 0.55);
+  background: rgba(212, 160, 23, 0.15);
+}
+
+.party-badge-g {
+  color: #6ecf8a;
+  border: 1px solid rgba(46, 168, 74, 0.55);
+  background: rgba(46, 168, 74, 0.15);
+}
+
 .candidate-detail-modal {
   width: min(100%, 40rem);
 }
@@ -1446,6 +1506,14 @@ h2 {
 
 .party-row-d td:first-child {
   border-left: 3px solid var(--dem);
+}
+
+.party-row-l td:first-child {
+  border-left: 3px solid var(--lib);
+}
+
+.party-row-g td:first-child {
+  border-left: 3px solid var(--grn);
 }
 
 .candidate-name-cell {

@@ -6,6 +6,12 @@ import { parseLegMargin } from "./benchmarkMargin.mjs";
 import { enrichElectionResultRows, syncContestMargin } from "./contestMetrics.mjs";
 import { enrichOfficeRowsWithCounties, syncOfficeCounties } from "./officeCounties.mjs";
 import {
+  candidateIdentityFieldsTouched,
+  deleteCandidatesByIdentity,
+  fetchCandidateIdentity,
+  removeDuplicateCandidatesInSlot,
+} from "./candidates.mjs";
+import {
   enrichTgaStafferRows,
   fetchTgaStafferRow,
   syncStafferCounties,
@@ -62,7 +68,7 @@ const ADMIN_TABLES = {
         .prepare(
           `SELECT c.id, c.vuid, c.office_id, o.office_code, o.office_name, o.category,
                   c.cycle_year, c.name, c.party, c.is_incumbent, c.tec_filer_id,
-                  c.filed, c.notes,
+                  c.filed, c.notes, c.running_for_reelection,
                   COALESCE((
                     SELECT GROUP_CONCAT(cc.consultant_key)
                     FROM candidate_consultants cc
@@ -160,39 +166,6 @@ const ADMIN_TABLES = {
     },
     exportQuery: async (db, filters) =>
       (await adminQueryTable(db, "offices", { ...filters, limit: 100000, offset: 0 })).rows,
-  },
-  race_sheet_rows: {
-    label: "Race sheet rows",
-    query: async (db, { cycleYear, category, limit, offset }) => {
-      const params = { limit, offset };
-      let where = "WHERE 1=1";
-      if (cycleYear) {
-        where += " AND r.cycle_year = @cycleYear";
-        params.cycleYear = cycleYear;
-      }
-      if (category) {
-        where += " AND r.category = @category";
-        params.category = category;
-      }
-      const rows = await db
-        .prepare(
-          `SELECT r.id, r.office_id, o.office_code, r.cycle_year, r.category, r.row_order,
-                  r.incumbent_name, r.incumbent_party, r.candidate_name, r.candidate_party,
-                  r.filed, r.consultant, r.notes
-           FROM race_sheet_rows r
-           JOIN offices o ON o.id = r.office_id
-           ${where}
-           ORDER BY r.category, o.sort_order, r.row_order
-           LIMIT @limit OFFSET @offset`
-        )
-        .all(params);
-      const total = (await db
-        .prepare(`SELECT COUNT(*) AS count FROM race_sheet_rows r ${where}`)
-        .get(params)).count;
-      return { rows, total };
-    },
-    exportQuery: async (db, filters) =>
-      (await adminQueryTable(db, "race_sheet_rows", { ...filters, limit: 100000, offset: 0 })).rows,
   },
   targeting_organizations: {
     label: "Targeting organizations",
@@ -305,7 +278,7 @@ const ADMIN_TABLE_NAMES = new Set(Object.keys(ADMIN_TABLES));
 
 export const EDITABLE_COLUMNS = {
   filing_periods: ["label", "sort_order", "default_report_period_end"],
-  candidates: ["vuid", "name", "party", "is_incumbent", "tec_filer_id", "filed", "consultant_keys", "notes"],
+  candidates: ["vuid", "name", "party", "is_incumbent", "running_for_reelection", "tec_filer_id", "filed", "consultant_keys", "notes"],
   finance_reports: ["period_key", "report_period_end", "total_raised", "total_spent", "cash_on_hand"],
   offices: [
     "office_name",
@@ -317,16 +290,6 @@ export const EDITABLE_COLUMNS = {
     "seat_holder_party",
     "up_for_reelection",
     "target_org_keys",
-  ],
-  race_sheet_rows: [
-    "incumbent_name",
-    "incumbent_party",
-    "candidate_name",
-    "candidate_party",
-    "filed",
-    "tec_filer_id",
-    "consultant",
-    "notes",
   ],
   targeting_organizations: ["name"],
   consultants: ["name"],
@@ -364,7 +327,6 @@ export const DELETABLE_TABLES = {
   candidates: { keyColumn: "id", stringKey: false },
   finance_reports: { keyColumn: "id", stringKey: false },
   offices: { keyColumn: "id", stringKey: false },
-  race_sheet_rows: { keyColumn: "id", stringKey: false },
   targeting_organizations: { keyColumn: "org_key", stringKey: true },
   consultants: { keyColumn: "consultant_key", stringKey: true },
   tga_staffers: { keyColumn: "id", stringKey: false },
@@ -486,6 +448,9 @@ export async function bulkUpdateAdminTableRows(db, tableName, updates, { cycleYe
       const rowId = Number(item?.id);
       if (!Number.isInteger(rowId) || rowId < 1) throw new Error("invalid row id");
 
+      const candidateBefore =
+        tableName === "candidates" ? await fetchCandidateIdentity(db, rowId) : null;
+
       if (tableName === "offices") {
         if (Object.prototype.hasOwnProperty.call(fields, "target_org_keys")) {
           await syncOfficeTargets(db, rowId, cycleYear ?? 2026, parseKeyList(fields.target_org_keys));
@@ -557,6 +522,17 @@ export async function bulkUpdateAdminTableRows(db, tableName, updates, { cycleYe
       }
       const result = await db.prepare(`UPDATE ${tableName} SET ${setParts.join(", ")} WHERE id = @id`).run(params);
       if (result.changes === 0) throw new Error(`row ${rowId} not found`);
+      if (tableName === "candidates" && candidateBefore && candidateIdentityFieldsTouched(fields)) {
+        const candidateAfter = await fetchCandidateIdentity(db, rowId);
+        if (candidateAfter) {
+          await removeDuplicateCandidatesInSlot(db, rowId, {
+            officeId: candidateAfter.office_id,
+            cycleYear: candidateAfter.cycle_year,
+            party: candidateAfter.party,
+            isIncumbent: Boolean(candidateAfter.is_incumbent),
+          });
+        }
+      }
       if (tableName === "metric_contest_candidates") {
         const meta = await db
           .prepare(`SELECT office_id, metric_key FROM metric_contest_candidates WHERE id = ?`)
@@ -702,6 +678,14 @@ export async function deleteAdminTableRow(db, tableName, rowId) {
     recomputeTarget = await db
       .prepare(`SELECT office_id, metric_key FROM metric_contest_candidates WHERE id = ?`)
       .get(key);
+  }
+
+  if (tableName === "candidates") {
+    const candidate = await fetchCandidateIdentity(db, key);
+    if (!candidate) throw new Error("row not found");
+    const result = await deleteCandidatesByIdentity(db, candidate);
+    if (result.changes === 0) throw new Error("row not found");
+    return { deleted: result.changes };
   }
 
   const result = await db.prepare(`DELETE FROM ${tableName} WHERE ${config.keyColumn} = ?`).run(key);

@@ -17,7 +17,7 @@ import {
   deleteAdminTableRow,
 } from "./lib/adminData.mjs";
 import { listConsultants, loadCandidateConsultantsMap, attachConsultantsToRaces, addConsultant, syncCandidateConsultants, parseKeyList } from "./lib/consultants.mjs";
-import { syncRaceCandidates, updateCandidateVuid } from "./lib/candidates.mjs";
+import { buildRacesFromCandidates, updateCandidateVuid, loadCandidatesForCategory } from "./lib/candidates.mjs";
 import { addFinanceReport, attachFinanceHistoryToRaces, bulkImportFinanceReports, loadFinanceHistoryMap } from "./lib/financeReports.mjs";
 import { addFilingPeriod, listFilingPeriods, seedFilingPeriods } from "./lib/filingPeriods.mjs";
 import { buildContestResponse, detectUncontested } from "./lib/metricContest.mjs";
@@ -44,6 +44,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.join(__dirname, "..", "dist");
 const app = express();
 
+app.set("trust proxy", true);
 app.use(cors());
 app.use(express.json());
 
@@ -61,6 +62,7 @@ app.get("/api/auth/me", (req, res) => {
     user: req.auth.user,
     permissions: req.auth.permissions,
     authenticated: req.auth.authenticated,
+    guestAccess: Boolean(req.auth.guestAccess),
   });
 });
 
@@ -119,9 +121,7 @@ app.get("/api/cycles", async (_req, res) => {
   const db = getDb();
   const rows = await db
     .prepare(
-      `SELECT DISTINCT cycle_year AS year FROM race_sheet_rows
-       UNION
-       SELECT DISTINCT cycle_year AS year FROM candidates
+      `SELECT DISTINCT cycle_year AS year FROM candidates
        ORDER BY year DESC`
     )
     .all();
@@ -197,102 +197,6 @@ async function buildUncontestedMap(database, category) {
 
 const EDITABLE_METRIC_KEYS = new Set([]);
 
-function attachSheetMeta(candidate, row, isIncumbent) {
-  candidate.filed = Boolean(row.filed);
-  candidate.tec_filer_id = row.tec_filer_id ?? null;
-  candidate.consultant = row.consultant ?? null;
-  candidate.endorsements = row.endorsements ?? null;
-  candidate.notes = row.notes ?? null;
-  candidate.website = row.website ?? null;
-  candidate.social_media = row.social_media ?? null;
-  candidate.race_category = row.race_category ?? null;
-  candidate.running_for_reelection = isIncumbent ? row.running_for_reelection ?? null : null;
-}
-
-function buildRacesFromSheetRows(sheetRows, metricsByOffice, category, uncontestedMap = new Map()) {
-  const byOffice = new Map();
-
-  for (const row of sheetRows) {
-    if (!byOffice.has(row.office_id)) {
-      const metrics = metricsByOffice.get(row.office_id) ?? {};
-      const metricFields = metricFieldsForCategory(category);
-      byOffice.set(row.office_id, {
-        office_id: row.office_id,
-        office_code: row.office_code,
-        office_name: row.office_name,
-        district: row.district,
-        metrics: metricFields
-          .map((field) => {
-            const winningParty = uncontestedMap.get(`${row.office_id}|${field.key}`) ?? null;
-            return {
-              key: field.key,
-              label: field.label,
-              value: metrics[field.key] ?? null,
-              uncontested: winningParty != null,
-              winning_party: winningParty,
-            };
-          }),
-        candidates: [],
-      });
-    }
-
-    const race = byOffice.get(row.office_id);
-
-    const addCandidate = (name, party, isIncumbent) => {
-      const trimmed = String(name ?? "").trim();
-      if (!trimmed || !party) return;
-
-      const key = `${trimmed.toLowerCase()}|${party}|${isIncumbent ? 1 : 0}`;
-      const existing = race.candidates.find((c) => c._key === key);
-      if (existing) {
-        attachSheetMeta(existing, row, isIncumbent);
-        return;
-      }
-
-      const candidate = {
-        _key: key,
-        name: trimmed,
-        party,
-        is_incumbent: isIncumbent,
-        filed: false,
-        tec_filer_id: null,
-        consultant: null,
-        endorsements: null,
-        notes: null,
-        website: null,
-        social_media: null,
-        race_category: null,
-        running_for_reelection: null,
-      };
-      attachSheetMeta(candidate, row, isIncumbent);
-      race.candidates.push(candidate);
-    };
-
-    addCandidate(row.incumbent_name, row.incumbent_party, true);
-    addCandidate(row.candidate_name, row.candidate_party, false);
-  }
-
-  const partyOrder = { R: 0, D: 1, I: 2, L: 3, G: 4, O: 5 };
-
-  return [...byOffice.values()]
-    .map((race) => ({
-      office_id: race.office_id,
-      office_code: race.office_code,
-      office_name: race.office_name,
-      district: race.district,
-      metrics: race.metrics,
-      candidates: race.candidates
-        .map(({ _key, ...candidate }) => candidate)
-        .sort((a, b) => {
-          const partyDiff = (partyOrder[a.party] ?? 9) - (partyOrder[b.party] ?? 9);
-          if (partyDiff !== 0) return partyDiff;
-          if (a.is_incumbent !== b.is_incumbent) return a.is_incumbent ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        }),
-    }))
-    .filter((race) => race.candidates.length > 0);
-}
-
 const FULL_OFFICE_LIST_CATEGORIES = new Set(["senate", "sboe", "statewide"]);
 
 async function expandRacesWithAllOffices(db, races, metricsByOffice, category, uncontestedMap) {
@@ -346,36 +250,6 @@ app.get("/api/races", async (req, res) => {
   const db = getDb();
 
   try {
-  const rows = await db
-    .prepare(
-      `
-      SELECT
-        r.id AS row_id,
-        o.id AS office_id,
-        o.office_code,
-        o.office_name,
-        o.district,
-        r.incumbent_name,
-        r.incumbent_party,
-        r.running_for_reelection,
-        r.candidate_name,
-        r.candidate_party,
-        r.filed,
-        r.tec_filer_id,
-        r.consultant,
-        r.endorsements,
-        r.notes,
-        r.social_media,
-        r.website,
-        r.race_category
-      FROM race_sheet_rows r
-      JOIN offices o ON o.id = r.office_id
-      WHERE r.category = @category AND r.cycle_year = @cycleYear
-      ORDER BY o.sort_order, o.district, o.office_code, r.row_order
-      `
-    )
-    .all({ category, cycleYear });
-
   const metricsRows = await db
     .prepare(
       `SELECT m.* FROM office_metrics m
@@ -425,11 +299,12 @@ app.get("/api/races", async (req, res) => {
   }
   const uncontestedMap = await buildUncontestedMap(db, category);
   const financeMap = await loadFinanceHistoryMap(db, category, cycleYear);
-  let races = buildRacesFromSheetRows(rows, metricsByOffice, category, uncontestedMap);
+  const storedCandidates = await loadCandidatesForCategory(db, category, cycleYear);
+  const metricFields = metricFieldsForCategory(category);
+  let races = buildRacesFromCandidates(storedCandidates, metricsByOffice, metricFields, uncontestedMap);
   races = await expandRacesWithAllOffices(db, races, metricsByOffice, category, uncontestedMap);
-  await syncRaceCandidates(db, races, cycleYear, category);
   races = attachFinanceHistoryToRaces(races, financeMap);
-  races = await attachSeatHoldersToRaces(db, races, rows, category);
+  races = await attachSeatHoldersToRaces(db, races, category);
   const targetsByOffice = await loadOfficeTargetsByOffice(db, category, cycleYear);
   races = attachTargetsToRaces(races, targetsByOffice);
   const consultantsMap = await loadCandidateConsultantsMap(db, category, cycleYear);

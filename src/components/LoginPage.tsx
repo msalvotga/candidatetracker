@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { loginUser } from "../api";
 
-export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
+export function LoginPage({
+  onSuccess,
+  onCancel,
+}: {
+  onSuccess: () => void;
+  onCancel?: () => void;
+}) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(true);
@@ -72,6 +78,12 @@ export function LoginPage({ onSuccess }: { onSuccess: () => void }) {
           <button type="submit" className="login-submit" disabled={submitting}>
             {submitting ? "Please wait…" : "Sign in"}
           </button>
+
+          {onCancel ? (
+            <button type="button" className="login-cancel" onClick={onCancel}>
+              Continue as guest
+            </button>
+          ) : null}
         </form>
 
         <p className="login-footnote">Use the email address on your account.</p>

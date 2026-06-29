@@ -55,6 +55,7 @@ const COLUMN_LABELS: Record<string, string> = {
   leg_2022: "2022 race margin",
   cycle_year: "Cycle year",
   is_incumbent: "Incumbent",
+  running_for_reelection: "Running for reelection",
 };
 
 const TABLE_COLUMNS: Record<string, string[]> = {
@@ -627,7 +628,8 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
       {editMode && selectedTable === "candidates" ? (
         <p className="admin-add-hint">
           Add a candidate by office, cycle year, name, party, and whether they are the incumbent. Use the category
-          filter above to narrow the office list.
+          filter above to narrow the office list. Set <strong>running_for_reelection</strong> to <strong>No</strong> on
+          an incumbent to mark the seat as open.
         </p>
       ) : null}
 

@@ -29,42 +29,17 @@ export async function seedThirdPartyCandidates(db, { cycleYear = CYCLE_YEAR } = 
       continue;
     }
 
-    const existingSheet = await db
+    const existing = await db
       .prepare(
-        `SELECT id FROM race_sheet_rows
-         WHERE office_id = ? AND cycle_year = ? AND candidate_name = ? AND candidate_party = ?`
+        `SELECT id FROM candidates
+         WHERE office_id = ? AND cycle_year = ? AND name = ? AND party = ? AND is_incumbent = 0`
       )
       .get(office.id, cycleYear, name, entry.party);
 
-    if (existingSheet) {
-      skipped.push({ name, party: entry.party, officeCode: entry.officeCode, reason: "already in sheet" });
+    if (existing) {
+      skipped.push({ name, party: entry.party, officeCode: entry.officeCode, reason: "already present" });
       continue;
     }
-
-    const orderRow = await db
-      .prepare(
-        `SELECT COALESCE(MAX(row_order), 0) AS max_order
-         FROM race_sheet_rows
-         WHERE office_id = ? AND cycle_year = ?`
-      )
-      .get(office.id, cycleYear);
-    const rowOrder = (orderRow?.max_order ?? 0) + 1;
-
-    await db.prepare(
-      `INSERT INTO race_sheet_rows (
-         office_id, cycle_year, category, row_order,
-         incumbent_name, incumbent_party, running_for_reelection,
-         candidate_name, candidate_party, filed, website
-       ) VALUES (?, ?, ?, ?, '', NULL, NULL, ?, ?, 1, ?)`
-    ).run(
-      office.id,
-      cycleYear,
-      office.category,
-      rowOrder,
-      name,
-      entry.party,
-      entry.website ?? null
-    );
 
     await ensureCandidate(db, {
       officeId: office.id,
