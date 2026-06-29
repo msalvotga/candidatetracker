@@ -279,7 +279,7 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
     try {
       const data = await fetchAdminTable(selectedTable, {
         cycleYear,
-        category: filterCategory || undefined,
+        category: selectedTable === "tga_staffers" ? undefined : filterCategory || undefined,
         limit: 500,
         singleCandidateRaces: selectedTable === "candidates" && singleCandidateRacesOnly,
       });
@@ -551,19 +551,21 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
       </header>
 
       <div className="admin-data-filters">
-        <label className="year-picker">
-          Category filter
-          <select
-            value={filterCategory}
-            onChange={(e) => setFilterCategory(e.target.value as OfficeCategory | "")}
-          >
-            {CATEGORY_OPTIONS.map((opt) => (
-              <option key={opt.id || "all"} value={opt.id}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        {selectedTable !== "tga_staffers" ? (
+          <label className="year-picker">
+            Category filter
+            <select
+              value={filterCategory}
+              onChange={(e) => setFilterCategory(e.target.value as OfficeCategory | "")}
+            >
+              {CATEGORY_OPTIONS.map((opt) => (
+                <option key={opt.id || "all"} value={opt.id}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {selectedTable === "candidates" ? (
           <label className="filter-check-item admin-data-filter-check">
             <input

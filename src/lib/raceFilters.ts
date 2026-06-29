@@ -124,3 +124,11 @@ export function matchesConsultantFilter(race: Race, selectedConsultantKeys: stri
     (candidate.consultant_keys ?? []).some((key) => selectedConsultantKeys.includes(key))
   );
 }
+
+export function normalizeConsultantFilterMode(
+  mode: "all" | "select",
+  selectedConsultantKeys: string[]
+): "all" | "select" {
+  if (mode === "select" && selectedConsultantKeys.length === 0) return "all";
+  return mode;
+}

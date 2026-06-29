@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { addFinanceReport, fetchCounties, fetchCycles, fetchMetricContest, fetchRaces, saveCandidateConsultants } from "./api";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { addFinanceReport, fetchCounties, fetchMetricContest, fetchRaces, saveCandidateConsultants } from "./api";
 import { AdminDataPanel } from "./components/AdminData";
 import { AdminUsersPanel } from "./components/AdminUsers";
 import { CandidateDetailModal, CandidateSummary } from "./components/CandidateDetailModal";
@@ -7,11 +7,13 @@ import { CandidateConsultantEditor, FinanceHistoryEditor, LatestFinanceDisplay }
 import { CountyHeatmap, RaceMetrics } from "./components/CountyHeatmap";
 import { MetricContestModal } from "./components/MetricContestModal";
 import { PendingSaveBar } from "./components/PendingSaveBar";
+import { loadRaceLayoutPrefs, saveRaceLayoutPrefs } from "./lib/raceLayoutPrefs";
 import { candidateKey, setFilingPeriods } from "./lib/finance";
 import { isBenchmarkMetricKey, metricFieldsForCategory } from "./lib/metrics";
 import {
   matchesOrganizationFilter,
   matchesConsultantFilter,
+  normalizeConsultantFilterMode,
   matchesOpenSeatFilter,
   matchesUpForReelectionFilter,
   isUpForReelectionRelevant,
@@ -141,11 +143,9 @@ function updateCandidateFinanceHistory(
 
 export default function App() {
   const { permissions, user, logout, guestAccess, promptLogin } = useAuth();
-  const currentYear = new Date().getFullYear();
   const [tab, setTab] = useState<AppTab>("house");
   const [countyElection, setCountyElection] = useState<CountyElection>("pres_2024");
-  const [cycleYear, setCycleYear] = useState(2026);
-  const [cycles, setCycles] = useState<number[]>(() => [...new Set([2026, currentYear])]);
+  const [cycleYear] = useState(2026);
   const [races, setRaces] = useState<Race[]>([]);
   const [counties, setCounties] = useState<Awaited<ReturnType<typeof fetchCounties>>["counties"]>([]);
   const [selectedOfficeId, setSelectedOfficeId] = useState<number | null>(null);
@@ -156,10 +156,10 @@ export default function App() {
   const [upForReelectionOnly, setUpForReelectionOnly] = useState(true);
   const [organizationFilter, setOrganizationFilter] = useState<string[]>([]);
   const [consultantFilter, setConsultantFilter] = useState<string[]>([]);
-  const [showMoreFilters, setShowMoreFilters] = useState(false);
+  const [consultantFilterMode, setConsultantFilterMode] = useState<"all" | "select">("all");
   const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const [consultants, setConsultants] = useState<Consultant[]>([]);
-  const [showCoh, setShowCoh] = useState(true);
   const [editMode, setEditMode] = useState(false);
   const [pendingConsultantEdits, setPendingConsultantEdits] = useState<Record<string, string[]>>({});
   const [pendingCohAdds, setPendingCohAdds] = useState<PendingFinanceEntry[]>([]);
@@ -172,8 +172,176 @@ export default function App() {
   const [contestError, setContestError] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [listPanelWidth, setListPanelWidth] = useState(() => loadRaceLayoutPrefs().listPanelWidth);
+  const [listPanelHeight, setListPanelHeight] = useState(() => loadRaceLayoutPrefs().listPanelHeight);
+  const raceLayoutRef = useRef<HTMLDivElement>(null);
+  const listPanelRef = useRef<HTMLElement>(null);
+  const filtersScrollRef = useRef<HTMLDivElement>(null);
+  const listPanelWidthRef = useRef(listPanelWidth);
+  const listPanelHeightRef = useRef(listPanelHeight);
+  const listPanelHeightBeforeFiltersRef = useRef<number | null>(null);
+  const prevFiltersExpandedRef = useRef(filtersExpanded);
+
+  useEffect(() => {
+    listPanelWidthRef.current = listPanelWidth;
+  }, [listPanelWidth]);
+
+  useEffect(() => {
+    listPanelHeightRef.current = listPanelHeight;
+  }, [listPanelHeight]);
+
+  const persistRaceLayoutPrefs = useCallback(() => {
+    saveRaceLayoutPrefs({
+      listPanelWidth: listPanelWidthRef.current,
+      listPanelHeight: listPanelHeightRef.current,
+    });
+  }, []);
+
+  const LIST_PANEL_MIN_WIDTH = 200;
+  const LIST_PANEL_DETAIL_MIN = 240;
+  const LIST_PANEL_FILTERS_MIN_WIDTH = 360;
+  const LIST_PANEL_MIN_HEIGHT = 180;
+  const LIST_PANEL_DETAIL_MIN_HEIGHT = 200;
+  const LIST_PANEL_FILTERS_MIN_HEIGHT = 320;
+
+  const isStackedRaceLayout = useCallback(
+    () => window.matchMedia("(max-width: 900px)").matches,
+    []
+  );
+
+  const expandListPanelForFilters = useCallback(() => {
+    const layout = raceLayoutRef.current;
+    const panel = listPanelRef.current;
+    if (!layout) return;
+
+    if (isStackedRaceLayout()) {
+      const maxHeight = Math.max(
+        LIST_PANEL_MIN_HEIGHT,
+        layout.clientHeight - LIST_PANEL_DETAIL_MIN_HEIGHT - 28
+      );
+
+      let targetHeight = Math.max(
+        LIST_PANEL_FILTERS_MIN_HEIGHT,
+        Math.round(layout.clientHeight * 0.55)
+      );
+
+      if (panel && filtersScrollRef.current) {
+        const heading = panel.querySelector<HTMLElement>(".race-panel-heading");
+        const search = panel.querySelector<HTMLElement>(".race-search-row");
+        const measured =
+          (heading?.offsetHeight ?? 0) +
+          (search?.offsetHeight ?? 0) +
+          filtersScrollRef.current.scrollHeight +
+          88;
+        targetHeight = Math.max(targetHeight, measured);
+      }
+
+      setListPanelHeight((current) => Math.min(maxHeight, Math.max(current, targetHeight)));
+      return;
+    }
+
+    const maxWidth = Math.max(
+      LIST_PANEL_MIN_WIDTH,
+      layout.clientWidth - LIST_PANEL_DETAIL_MIN - 28
+    );
+    const targetWidth = Math.min(
+      maxWidth,
+      Math.max(LIST_PANEL_FILTERS_MIN_WIDTH, Math.round(layout.clientWidth * 0.4))
+    );
+    setListPanelWidth((current) => Math.max(current, targetWidth));
+  }, [isStackedRaceLayout]);
+
+  const handleFiltersToggle = useCallback(() => {
+    setFiltersExpanded((open) => !open);
+  }, []);
+
+  useLayoutEffect(() => {
+    const wasExpanded = prevFiltersExpandedRef.current;
+    prevFiltersExpandedRef.current = filtersExpanded;
+
+    if (filtersExpanded) {
+      if (isStackedRaceLayout() && !wasExpanded) {
+        listPanelHeightBeforeFiltersRef.current = listPanelHeightRef.current;
+      }
+      expandListPanelForFilters();
+      return;
+    }
+
+    if (wasExpanded && isStackedRaceLayout()) {
+      const restoreHeight =
+        listPanelHeightBeforeFiltersRef.current ?? loadRaceLayoutPrefs().listPanelHeight;
+      listPanelHeightBeforeFiltersRef.current = null;
+      setListPanelHeight(restoreHeight);
+    }
+  }, [filtersExpanded, expandListPanelForFilters, tab, consultants.length, isStackedRaceLayout]);
 
   const effectiveEditMode = editMode && permissions.canEdit;
+
+  const handleListPanelResizeStart = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const layout = raceLayoutRef.current;
+      if (!layout) return;
+
+      const stacked = isStackedRaceLayout();
+
+      if (stacked) {
+        const startY = event.clientY;
+        const startHeight = listPanelHeight;
+
+        const onPointerMove = (moveEvent: PointerEvent) => {
+          const maxHeight = Math.max(
+            LIST_PANEL_MIN_HEIGHT,
+            layout.clientHeight - LIST_PANEL_DETAIL_MIN_HEIGHT - 28
+          );
+          const nextHeight = Math.min(
+            maxHeight,
+            Math.max(LIST_PANEL_MIN_HEIGHT, startHeight + moveEvent.clientY - startY)
+          );
+          setListPanelHeight(nextHeight);
+        };
+
+        const onPointerUp = () => {
+          window.removeEventListener("pointermove", onPointerMove);
+          window.removeEventListener("pointerup", onPointerUp);
+          document.body.classList.remove("race-layout-resizing", "race-layout-resizing-vertical");
+          persistRaceLayoutPrefs();
+        };
+
+        document.body.classList.add("race-layout-resizing", "race-layout-resizing-vertical");
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", onPointerUp);
+        return;
+      }
+
+      const startX = event.clientX;
+      const startWidth = listPanelWidth;
+
+      const onPointerMove = (moveEvent: PointerEvent) => {
+        const maxWidth = Math.max(
+          LIST_PANEL_MIN_WIDTH,
+          layout.clientWidth - LIST_PANEL_DETAIL_MIN - 28
+        );
+        const nextWidth = Math.min(
+          maxWidth,
+          Math.max(LIST_PANEL_MIN_WIDTH, startWidth + moveEvent.clientX - startX)
+        );
+        setListPanelWidth(nextWidth);
+      };
+
+      const onPointerUp = () => {
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+        document.body.classList.remove("race-layout-resizing", "race-layout-resizing-vertical");
+        persistRaceLayoutPrefs();
+      };
+
+      document.body.classList.add("race-layout-resizing");
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+    },
+    [isStackedRaceLayout, listPanelHeight, listPanelWidth, persistRaceLayoutPrefs]
+  );
 
   useEffect(() => {
     if (tab === "data" && !permissions.canAccessData) setTab("house");
@@ -226,12 +394,6 @@ export default function App() {
   }, [tab, countyElection]);
 
   useEffect(() => {
-    void fetchCycles().then((years) => {
-      setCycles([...new Set(years)]);
-    });
-  }, []);
-
-  useEffect(() => {
     if (tab !== "counties") return;
     void loadCounties();
   }, [tab, countyElection, loadCounties]);
@@ -243,7 +405,7 @@ export default function App() {
     setOpenSeatFilter(false);
     setOrganizationFilter([]);
     setConsultantFilter([]);
-    setShowMoreFilters(false);
+    setConsultantFilterMode("all");
     if (tab === "data" || tab === "admin") {
       setLoading(false);
     } else if (tab !== "counties") {
@@ -254,6 +416,17 @@ export default function App() {
 
   const handleUpForReelectionOnlyChange = useCallback((upOnly: boolean) => {
     setUpForReelectionOnly(upOnly);
+  }, []);
+
+  const resetRaceFilters = useCallback(() => {
+    setFilter("");
+    setSeatHolderFilter("all");
+    setTrumpSwingFilter(false);
+    setOpenSeatFilter(false);
+    setUpForReelectionOnly(false);
+    setOrganizationFilter([]);
+    setConsultantFilter([]);
+    setConsultantFilterMode("all");
   }, []);
 
   const filteredRaces = useMemo(() => {
@@ -291,9 +464,9 @@ export default function App() {
     if (openSeatFilter) count += 1;
     if (isUpForReelectionRelevant(tab as OfficeCategory) && upForReelectionOnly) count += 1;
     if (organizationFilter.length > 0) count += 1;
-    if (consultantFilter.length > 0) count += 1;
+    if (consultantFilterMode === "select" && consultantFilter.length > 0) count += 1;
     return count;
-  }, [filter, seatHolderFilter, trumpSwingFilter, openSeatFilter, tab, upForReelectionOnly, organizationFilter, consultantFilter]);
+  }, [filter, seatHolderFilter, trumpSwingFilter, openSeatFilter, tab, upForReelectionOnly, organizationFilter, consultantFilter, consultantFilterMode]);
 
   useEffect(() => {
     if (tab === "counties" || tab === "data" || tab === "admin") return;
@@ -459,90 +632,119 @@ export default function App() {
     setContestLoading(false);
   }
 
+  const selectTab = useCallback(
+    (next: AppTab) => {
+      if (next !== tab) {
+        setConsultantFilterMode((mode) => normalizeConsultantFilterMode(mode, consultantFilter));
+      }
+      setTab(next);
+      setNavOpen(false);
+    },
+    [consultantFilter, tab]
+  );
+
+  function navLinkClass(id: AppTab) {
+    return tab === id ? "app-topbar-link is-active" : "app-topbar-link";
+  }
+
+  const activeNavLabel = useMemo(() => {
+    const raceTab = RACE_TABS.find((item) => item.id === tab);
+    if (raceTab) return raceTab.label;
+    if (tab === "counties") return "Counties";
+    if (tab === "data") return "Data";
+    if (tab === "admin") return "Admin";
+    return "";
+  }, [tab]);
+
   return (
     <div className="app">
-      <header className="header">
-        <div>
-          <h1>Texas Candidate Lookup</h1>
-          <p className="subtitle">Select a race to view candidates, results, and campaign finance</p>
-        </div>
-        <div className="header-controls">
-          {permissions.canEdit ? (
-            <label className="toggle">
-              <input type="checkbox" checked={editMode} onChange={(e) => setEditMode(e.target.checked)} />
-              Edit mode
-            </label>
-          ) : null}
-          {tab !== "counties" && tab !== "data" && tab !== "admin" ? (
-            <label className="toggle">
-              <input type="checkbox" checked={showCoh} onChange={(e) => setShowCoh(e.target.checked)} />
-              Show finance
-            </label>
-          ) : null}
-          {tab !== "counties" && tab !== "admin" ? (
-            <label className="year-picker">
-              Cycle year
-              <select value={cycleYear} onChange={(e) => setCycleYear(Number(e.target.value))}>
-                {cycles.map((year) => (
-                  <option key={year} value={year}>
-                    {year}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          {user ? (
-            <div className="header-user-row">
-              <span className="header-user">{user.display_name}</span>
-              <button type="button" className="header-logout" onClick={() => void logout()}>
-                Log out
+      <header className="app-topbar">
+        <div className="app-topbar-row">
+          <div className="app-topbar-brand">
+            <span className="app-topbar-title">Texas Candidate Lookup</span>
+            {activeNavLabel ? (
+              <span className="app-topbar-subtitle">{activeNavLabel}</span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="app-topbar-menu-btn"
+            aria-label={navOpen ? "Close menu" : "Open menu"}
+            aria-expanded={navOpen}
+            aria-controls="app-main-nav"
+            onClick={() => setNavOpen((open) => !open)}
+          >
+            <span className="app-topbar-menu-icon" aria-hidden="true" />
+          </button>
+          <nav
+            id="app-main-nav"
+            className={navOpen ? "app-topbar-nav is-open" : "app-topbar-nav"}
+            aria-label="Sections"
+          >
+            <div className="app-topbar-links">
+              {RACE_TABS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={navLinkClass(item.id)}
+                  aria-current={tab === item.id ? "page" : undefined}
+                  onClick={() => selectTab(item.id)}
+                >
+                  {item.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className={navLinkClass("counties")}
+                aria-current={tab === "counties" ? "page" : undefined}
+                onClick={() => selectTab("counties")}
+              >
+                Counties
               </button>
+              {permissions.canAccessData ? (
+                <button
+                  type="button"
+                  className={navLinkClass("data")}
+                  aria-current={tab === "data" ? "page" : undefined}
+                  onClick={() => selectTab("data")}
+                >
+                  Data
+                </button>
+              ) : null}
+              {permissions.canManageUsers ? (
+                <button
+                  type="button"
+                  className={navLinkClass("admin")}
+                  aria-current={tab === "admin" ? "page" : undefined}
+                  onClick={() => selectTab("admin")}
+                >
+                  Admin
+                </button>
+              ) : null}
             </div>
-          ) : guestAccess ? (
-            <button type="button" className="header-logout" onClick={promptLogin}>
-              Log in
-            </button>
-          ) : null}
+            <div className="app-topbar-util">
+              {permissions.canEdit ? (
+                <label className="app-topbar-edit toggle">
+                  <input type="checkbox" checked={editMode} onChange={(e) => setEditMode(e.target.checked)} />
+                  Edit mode
+                </label>
+              ) : null}
+              {user ? (
+                <>
+                  <span className="app-topbar-user">{user.display_name}</span>
+                  <button type="button" className="app-topbar-auth" onClick={() => void logout()}>
+                    Log out
+                  </button>
+                </>
+              ) : guestAccess ? (
+                <button type="button" className="app-topbar-auth" onClick={promptLogin}>
+                  Log in
+                </button>
+              ) : null}
+            </div>
+          </nav>
         </div>
       </header>
-
-      <nav className="tabs" aria-label="Sections">
-        {RACE_TABS.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={tab === item.id ? "tab active" : "tab"}
-            onClick={() => setTab(item.id)}
-          >
-            {item.label}
-          </button>
-        ))}
-        <button
-          type="button"
-          className={tab === "counties" ? "tab active" : "tab"}
-          onClick={() => setTab("counties")}
-        >
-          Counties
-        </button>
-        {permissions.canAccessData ? (
-          <button
-            type="button"
-            className={tab === "data" ? "tab active" : "tab"}
-            onClick={() => setTab("data")}
-          >
-            Data
-          </button>
-        ) : null}
-        {permissions.canManageUsers ? (
-          <button
-            type="button"
-            className={tab === "admin" ? "tab active" : "tab"}
-            onClick={() => setTab("admin")}
-          >
-            Admin
-          </button>
-        ) : null}
-      </nav>
 
       {error ? <div className="banner error">{error}</div> : null}
       {saveError ? <div className="banner error">{saveError}</div> : null}
@@ -587,28 +789,43 @@ export default function App() {
           No races for {cycleYear}. Run <code>npm run db:import</code> with your Excel file.
         </p>
       ) : (
-        <div className="race-layout">
-          <aside className="race-list-panel">
-            <input
-              className="race-search"
-              type="search"
-              placeholder="Search district, office, incumbent, or candidate…"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-            />
-            <button
-              type="button"
-              className="race-filters-toggle"
-              aria-expanded={filtersExpanded}
-              onClick={() => setFiltersExpanded((open) => !open)}
-            >
-              <span>{filtersExpanded ? "Hide filters" : "Show filters"}</span>
-              {activeFilterCount > 0 ? (
-                <span className="race-filters-toggle-count">{activeFilterCount} active</span>
-              ) : null}
-            </button>
+        <div
+          className="race-layout"
+          ref={raceLayoutRef}
+          style={
+            {
+              "--race-list-panel-width": `${listPanelWidth}px`,
+              "--race-list-panel-height": `${listPanelHeight}px`,
+            } as React.CSSProperties
+          }
+        >
+          <aside
+            ref={listPanelRef}
+            className={filtersExpanded ? "race-list-panel filters-expanded" : "race-list-panel"}
+          >
+            <h2 className="race-panel-heading">Select an office/race</h2>
+            <div className="race-search-row">
+              <input
+                className="race-search"
+                type="search"
+                placeholder="Search district, office, incumbent, or candidate…"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+              />
+              <button
+                type="button"
+                className="race-filters-toggle"
+                aria-expanded={filtersExpanded}
+                onClick={handleFiltersToggle}
+              >
+                <span>{filtersExpanded ? "Hide filters" : "Show filters"}</span>
+                {activeFilterCount > 0 ? (
+                  <span className="race-filters-toggle-count">{activeFilterCount} active</span>
+                ) : null}
+              </button>
+            </div>
             {filtersExpanded ? (
-            <div className="race-filters-scroll">
+            <div className="race-filters-scroll" ref={filtersScrollRef}>
               <div className="race-filters">
                 <div className="filter-group">
                   <span className="filter-label">Seat held by</span>
@@ -724,21 +941,30 @@ export default function App() {
                   </div>
                 ) : null}
 
-                <div className="filter-group">
-                  <button
-                    type="button"
-                    className={showMoreFilters ? "filter-chip active" : "filter-chip"}
-                    onClick={() => setShowMoreFilters((open) => !open)}
-                  >
-                    More filters
-                  </button>
-                </div>
-
-                {showMoreFilters ? (
-                  <>
-                    {consultants.length > 0 ? (
-                      <div className="filter-group">
-                        <span className="filter-label">Consultant</span>
+                {consultants.length > 0 ? (
+                  <div className="filter-group">
+                    <span className="filter-label">Consultant</span>
+                    <div className="filter-chips">
+                      <button
+                        type="button"
+                        className={consultantFilterMode === "all" ? "filter-chip active" : "filter-chip"}
+                        onClick={() => {
+                          setConsultantFilterMode("all");
+                          setConsultantFilter([]);
+                        }}
+                      >
+                        All
+                      </button>
+                      <button
+                        type="button"
+                        className={consultantFilterMode === "select" ? "filter-chip active" : "filter-chip"}
+                        onClick={() => setConsultantFilterMode("select")}
+                      >
+                        Select
+                      </button>
+                    </div>
+                    {consultantFilterMode === "select" ? (
+                      <>
                         <div className="filter-checklist">
                           {consultants.map((consultant) => {
                             const checked = consultantFilter.includes(consultant.consultant_key);
@@ -766,19 +992,31 @@ export default function App() {
                             Clear consultants
                           </button>
                         ) : null}
-                      </div>
-                    ) : (
-                      <p className="filter-hint">
-                        Add consultants in the <strong>Data</strong> tab, then assign them on the{" "}
-                        <strong>Candidates</strong> table.
-                      </p>
-                    )}
-                  </>
-                ) : null}
+                      </>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className="filter-hint">
+                    Add consultants in the <strong>Data</strong> tab, then assign them on the{" "}
+                    <strong>Candidates</strong> table.
+                  </p>
+                )}
+
+                <div className="filter-reset-row">
+                  <button
+                    type="button"
+                    className="filter-reset-btn"
+                    disabled={activeFilterCount === 0}
+                    onClick={resetRaceFilters}
+                  >
+                    Reset filters
+                  </button>
+                </div>
               </div>
             </div>
             ) : null}
-            <ul className="race-list" role="listbox" aria-label="Races">
+            <div className="race-list-region">
+              <ul className="race-list" role="listbox" aria-label="Races">
               {filteredRaces.map((race) => {
                 const selected = race.office_id === selectedOfficeId;
                 const holder = raceSeatHolder(race);
@@ -809,9 +1047,26 @@ export default function App() {
             {filteredRaces.length === 0 ? (
               <p className="race-list-empty">No races match your filters.</p>
             ) : null}
+            </div>
           </aside>
 
+          <div
+            className="race-layout-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize office list panel"
+            aria-valuemin={LIST_PANEL_MIN_WIDTH}
+            aria-valuemax={640}
+            aria-valuenow={listPanelWidth}
+            tabIndex={0}
+            onPointerDown={handleListPanelResizeStart}
+          >
+            <span className="race-layout-resizer-grip" aria-hidden="true" />
+          </div>
+
           <section className="race-detail-panel">
+            <h2 className="race-panel-heading">Candidate/Race Info</h2>
+            <div className="race-detail-scroll">
             {selectedRace ? (
               <>
                 <header className="race-detail-header">
@@ -923,11 +1178,9 @@ export default function App() {
                               <span className="candidate-party">{partyLabel(candidate.party)}</span>
                             </div>
                             <CandidateSummary candidate={candidate} />
-                            {showCoh ? (
-                              <div className="candidate-finance">
-                                <LatestFinanceDisplay candidate={candidate} />
-                              </div>
-                            ) : null}
+                            <div className="candidate-finance">
+                              <LatestFinanceDisplay candidate={candidate} />
+                            </div>
                           </button>
                         )}
                       </li>
@@ -938,6 +1191,7 @@ export default function App() {
             ) : (
               <p className="loading">Select a race from the list.</p>
             )}
+            </div>
           </section>
         </div>
       )}
