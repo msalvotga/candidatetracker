@@ -3,6 +3,10 @@ import type { StafferMapEntry } from "../types";
 import { buildStafferColorMap, STAFFER_MAP_UNASSIGNED, splitLabel } from "./stafferColors";
 
 const MAP_ASPECT = 860 / 920;
+const MARGIN = 40;
+const LEGEND_LINE_HEIGHT = 14;
+const LEGEND_SWATCH = 8;
+const LEGEND_GAP = 12;
 
 function hexToRgb(hex: string): [number, number, number] {
   const normalized = hex.replace("#", "");
@@ -57,18 +61,113 @@ async function svgToPngDataUrl(svg: SVGSVGElement): Promise<string> {
   }
 }
 
-function drawLegendSwatch(doc: jsPDF, x: number, y: number, color: string, size = 8) {
+function drawLegendSwatch(doc: jsPDF, x: number, y: number, color: string) {
   const [r, g, b] = hexToRgb(color);
   doc.setFillColor(r, g, b);
   doc.setDrawColor(40, 40, 40);
-  doc.rect(x, y - size + 2, size, size, "FD");
+  doc.rect(x, y - LEGEND_SWATCH + 2, LEGEND_SWATCH, LEGEND_SWATCH, "FD");
 }
 
-function addPageIfNeeded(doc: jsPDF, y: number, needed: number, margin: number) {
-  const pageHeight = doc.internal.pageSize.getHeight();
-  if (y + needed <= pageHeight - margin) return y;
+function pageBottom(doc: jsPDF) {
+  return doc.internal.pageSize.getHeight() - MARGIN;
+}
+
+function ensureSpace(doc: jsPDF, y: number, needed: number) {
+  if (y + needed <= pageBottom(doc)) return y;
   doc.addPage();
-  return margin;
+  return MARGIN;
+}
+
+function legendEntryHeight(doc: jsPDF, label: string, maxLabelWidth: number) {
+  const lines = doc.splitTextToSize(label, maxLabelWidth) as string[];
+  return Math.max(LEGEND_LINE_HEIGHT, lines.length * 11 + 2);
+}
+
+interface LegendLayout {
+  leftEntries: { label: string; color: string }[];
+  rightEntries: { label: string; color: string }[];
+  columnWidth: number;
+  labelWidth: number;
+  rowCount: number;
+  rowHeights: number[];
+  totalHeight: number;
+}
+
+function measureLegendLayout(
+  doc: jsPDF,
+  legendEntries: { label: string; color: string }[],
+  contentWidth: number
+): LegendLayout {
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+
+  const columnWidth = contentWidth / 2;
+  const labelWidth = columnWidth - 16;
+  const splitAt = Math.ceil(legendEntries.length / 2);
+  const leftEntries = legendEntries.slice(0, splitAt);
+  const rightEntries = legendEntries.slice(splitAt);
+  const rowCount = Math.max(leftEntries.length, rightEntries.length);
+  const rowHeights: number[] = [];
+
+  for (let row = 0; row < rowCount; row++) {
+    const left = leftEntries[row];
+    const right = rightEntries[row];
+    rowHeights.push(
+      Math.max(
+        LEGEND_LINE_HEIGHT,
+        left ? legendEntryHeight(doc, left.label, labelWidth) : 0,
+        right ? legendEntryHeight(doc, right.label, labelWidth) : 0
+      )
+    );
+  }
+
+  const rowsHeight = rowHeights.reduce((sum, height) => sum + height + 2, 0);
+  const totalHeight = 16 + rowsHeight;
+
+  return {
+    leftEntries,
+    rightEntries,
+    columnWidth,
+    labelWidth,
+    rowCount,
+    rowHeights,
+    totalHeight,
+  };
+}
+
+function drawLegendBlock(doc: jsPDF, startY: number, layout: LegendLayout) {
+  let y = startY;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.text("Legend", MARGIN, y);
+  y += 16;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+
+  for (let row = 0; row < layout.rowCount; row++) {
+    const rowHeight = layout.rowHeights[row];
+    const left = layout.leftEntries[row];
+    const right = layout.rightEntries[row];
+
+    if (left) {
+      drawLegendSwatch(doc, MARGIN, y, left.color);
+      doc.text(doc.splitTextToSize(left.label, layout.labelWidth) as string[], MARGIN + 12, y);
+    }
+    if (right) {
+      drawLegendSwatch(doc, MARGIN + layout.columnWidth, y, right.color);
+      doc.text(
+        doc.splitTextToSize(right.label, layout.labelWidth) as string[],
+        MARGIN + layout.columnWidth + 12,
+        y
+      );
+    }
+
+    y += rowHeight + 2;
+  }
+
+  return y;
 }
 
 export async function exportStafferMapPdf(options: {
@@ -82,12 +181,12 @@ export async function exportStafferMapPdf(options: {
   const colorByName = buildStafferColorMap(staffers.map((staffer) => staffer.name));
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
   const pageWidth = doc.internal.pageSize.getWidth();
-  const margin = 40;
-  let y = margin;
+  const contentWidth = pageWidth - MARGIN * 2;
+  let y = MARGIN;
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(18);
-  doc.text("TGA Staffer Territories", margin, y);
+  doc.text("TGA Staffer Territories", MARGIN, y);
   y += 22;
 
   doc.setFont("helvetica", "normal");
@@ -96,29 +195,11 @@ export async function exportStafferMapPdf(options: {
   const dateLabel = new Date().toLocaleDateString(undefined, { dateStyle: "long" });
   doc.text(
     `${assignedCount} of ${totalCounties} counties assigned · county-based staffers only · ${dateLabel}`,
-    margin,
+    MARGIN,
     y
   );
   doc.setTextColor(0, 0, 0);
-  y += 24;
-
-  const mapDataUrl = await svgToPngDataUrl(svg);
-  const mapWidth = pageWidth - margin * 2;
-  const mapHeight = mapWidth * MAP_ASPECT;
-  y = addPageIfNeeded(doc, y, mapHeight + 20, margin);
-  doc.addImage(mapDataUrl, "PNG", margin, y, mapWidth, mapHeight);
-  y += mapHeight + 24;
-
-  y = addPageIfNeeded(doc, y, 30, margin);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(12);
-  doc.text("Legend", margin, y);
-  y += 16;
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  const legendColumnWidth = (pageWidth - margin * 2) / 2;
-  const legendLineHeight = 14;
+  y += 20;
 
   const legendEntries: { label: string; color: string }[] = [
     ...staffers.map((staffer) => ({
@@ -132,49 +213,51 @@ export async function exportStafferMapPdf(options: {
     { label: "Unassigned", color: STAFFER_MAP_UNASSIGNED },
   ];
 
-  const legendSplit = Math.ceil(legendEntries.length / 2);
-  const legendColumns = [
-    legendEntries.slice(0, legendSplit),
-    legendEntries.slice(legendSplit),
-  ];
-  const columnYs = [y, y];
+  const legendLayout = measureLegendLayout(doc, legendEntries, contentWidth);
+  const mapDataUrl = await svgToPngDataUrl(svg);
+  const maxMapHeight = pageBottom(doc) - y - legendLayout.totalHeight - LEGEND_GAP;
+  let mapWidth = contentWidth;
+  let mapHeight = mapWidth * MAP_ASPECT;
 
-  for (let column = 0; column < legendColumns.length; column++) {
-    const x = margin + column * legendColumnWidth;
-    for (const entry of legendColumns[column]) {
-      columnYs[column] = addPageIfNeeded(doc, columnYs[column], legendLineHeight, margin);
-      drawLegendSwatch(doc, x, columnYs[column], entry.color);
-      doc.text(entry.label, x + 12, columnYs[column]);
-      columnYs[column] += legendLineHeight;
-    }
+  if (mapHeight > maxMapHeight) {
+    mapHeight = Math.max(120, maxMapHeight);
+    mapWidth = mapHeight / MAP_ASPECT;
+  }
+  if (mapWidth > contentWidth) {
+    mapWidth = contentWidth;
+    mapHeight = mapWidth * MAP_ASPECT;
   }
 
-  y = Math.max(columnYs[0], columnYs[1]) + 20;
-  y = addPageIfNeeded(doc, y, 30, margin);
+  const mapX = MARGIN + (contentWidth - mapWidth) / 2;
+  doc.addImage(mapDataUrl, "PNG", mapX, y, mapWidth, mapHeight);
+  y += mapHeight + LEGEND_GAP;
+  drawLegendBlock(doc, y, legendLayout);
+
+  doc.addPage();
+  y = MARGIN;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(12);
-  doc.text("Staffer county assignments", margin, y);
+  doc.text("Staffer county assignments", MARGIN, y);
   y += 18;
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9);
-  doc.text("Staffer", margin, y);
-  doc.text("Counties", margin + 150, y);
+  doc.text("Staffer", MARGIN, y);
+  doc.text("Counties", MARGIN + 150, y);
   y += 12;
 
   doc.setFont("helvetica", "normal");
   const sortedStaffers = [...staffers].sort((a, b) => a.name.localeCompare(b.name));
-  const countiesColumnWidth = pageWidth - margin * 2 - 150;
+  const countiesColumnWidth = contentWidth - 150;
 
   for (const staffer of sortedStaffers) {
-    const countiesText = staffer.counties.join(", ");
-    const countyLines = doc.splitTextToSize(countiesText, countiesColumnWidth) as string[];
-    const blockHeight = Math.max(14, countyLines.length * 11 + 2);
-    y = addPageIfNeeded(doc, y, blockHeight, margin);
+    const countyLines = doc.splitTextToSize(staffer.counties.join(", "), countiesColumnWidth) as string[];
+    const blockHeight = Math.max(LEGEND_LINE_HEIGHT, countyLines.length * 11 + 2);
+    y = ensureSpace(doc, y, blockHeight);
 
-    drawLegendSwatch(doc, margin, y, colorByName.get(staffer.name)!);
-    doc.text(staffer.name, margin + 12, y);
-    doc.text(countyLines, margin + 150, y);
+    drawLegendSwatch(doc, MARGIN, y, colorByName.get(staffer.name)!);
+    doc.text(staffer.name, MARGIN + 12, y);
+    doc.text(countyLines, MARGIN + 150, y);
     y += blockHeight;
   }
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { loadDataTabFilters, saveDataTabFilters } from "../lib/appTabFilters";
 import {
   bulkImportFinance,
   exportAdminTableCsv,
@@ -215,9 +216,13 @@ function filterSingleCandidateRaces(rows: Record<string, unknown>[]) {
   return rows.filter((row) => singleOfficeIds.has(Number(row.office_id)));
 }
 
+const INITIAL_DATA_FILTERS = loadDataTabFilters();
+
 export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; editMode: boolean }) {
-  const [filterCategory, setFilterCategory] = useState<OfficeCategory | "">("house");
-  const [singleCandidateRacesOnly, setSingleCandidateRacesOnly] = useState(false);
+  const [filterCategory, setFilterCategory] = useState<OfficeCategory | "">(INITIAL_DATA_FILTERS.filterCategory);
+  const [singleCandidateRacesOnly, setSingleCandidateRacesOnly] = useState(
+    INITIAL_DATA_FILTERS.singleCandidateRacesOnly
+  );
   const [tables, setTables] = useState<
     {
       id: string;
@@ -230,7 +235,7 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
       deletable?: boolean;
     }[]
   >([]);
-  const [selectedTable, setSelectedTable] = useState("candidates");
+  const [selectedTable, setSelectedTable] = useState(INITIAL_DATA_FILTERS.selectedTable);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -261,6 +266,10 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
     [rows, singleCandidateFilterActive]
   );
   const visibleTotal = singleCandidateFilterActive ? visibleRows.length : total;
+
+  useEffect(() => {
+    saveDataTabFilters({ filterCategory, singleCandidateRacesOnly, selectedTable });
+  }, [filterCategory, singleCandidateRacesOnly, selectedTable]);
 
   const columns = useMemo(() => {
     return visibleRows[0]

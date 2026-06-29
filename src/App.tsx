@@ -9,6 +9,16 @@ import { MetricContestModal } from "./components/MetricContestModal";
 import { StafferMap } from "./components/StafferMap";
 import { PendingSaveBar } from "./components/PendingSaveBar";
 import { loadRaceLayoutPrefs, saveRaceLayoutPrefs } from "./lib/raceLayoutPrefs";
+import { loadAppTab, saveAppTab } from "./lib/appTabPrefs";
+import {
+  isRaceTab,
+  loadCountiesTabFilters,
+  loadInitialTabFilters,
+  loadRaceTabFilters,
+  saveCountiesTabFilters,
+  saveRaceTabFilters,
+  type RaceTabFilters,
+} from "./lib/appTabFilters";
 import { candidateKey, setFilingPeriods } from "./lib/finance";
 import { isBenchmarkMetricKey, metricFieldsForCategory } from "./lib/metrics";
 import {
@@ -143,24 +153,35 @@ function updateCandidateFinanceHistory(
   });
 }
 
+const INITIAL_TAB = loadAppTab();
+const INITIAL_TAB_FILTERS = loadInitialTabFilters(INITIAL_TAB);
+
 export default function App() {
   const { permissions, user, logout, guestAccess, promptLogin } = useAuth();
-  const [tab, setTab] = useState<AppTab>("house");
-  const [countyElection, setCountyElection] = useState<CountyElection>("pres_2024");
+  const [tab, setTab] = useState<AppTab>(INITIAL_TAB);
+  const [countyElection, setCountyElection] = useState(INITIAL_TAB_FILTERS.counties.countyElection);
   const [cycleYear] = useState(2026);
   const [races, setRaces] = useState<Race[]>([]);
   const [counties, setCounties] = useState<Awaited<ReturnType<typeof fetchCounties>>["counties"]>([]);
   const [stafferMap, setStafferMap] = useState<StafferMapEntry[]>([]);
-  const [selectedOfficeId, setSelectedOfficeId] = useState<number | null>(null);
-  const [filter, setFilter] = useState("");
-  const [seatHolderFilter, setSeatHolderFilter] = useState<SeatHolderFilter>("all");
-  const [trumpSwingFilter, setTrumpSwingFilter] = useState(false);
-  const [openSeatFilter, setOpenSeatFilter] = useState(false);
-  const [upForReelectionOnly, setUpForReelectionOnly] = useState(true);
-  const [organizationFilter, setOrganizationFilter] = useState<string[]>([]);
-  const [consultantFilter, setConsultantFilter] = useState<string[]>([]);
-  const [consultantFilterMode, setConsultantFilterMode] = useState<"all" | "select">("all");
-  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [selectedOfficeId, setSelectedOfficeId] = useState<number | null>(
+    INITIAL_TAB_FILTERS.race.selectedOfficeId
+  );
+  const [filter, setFilter] = useState(INITIAL_TAB_FILTERS.race.filter);
+  const [seatHolderFilter, setSeatHolderFilter] = useState<SeatHolderFilter>(
+    INITIAL_TAB_FILTERS.race.seatHolderFilter
+  );
+  const [trumpSwingFilter, setTrumpSwingFilter] = useState(INITIAL_TAB_FILTERS.race.trumpSwingFilter);
+  const [openSeatFilter, setOpenSeatFilter] = useState(INITIAL_TAB_FILTERS.race.openSeatFilter);
+  const [upForReelectionOnly, setUpForReelectionOnly] = useState(INITIAL_TAB_FILTERS.race.upForReelectionOnly);
+  const [organizationFilter, setOrganizationFilter] = useState<string[]>(
+    INITIAL_TAB_FILTERS.race.organizationFilter
+  );
+  const [consultantFilter, setConsultantFilter] = useState<string[]>(INITIAL_TAB_FILTERS.race.consultantFilter);
+  const [consultantFilterMode, setConsultantFilterMode] = useState<"all" | "select">(
+    INITIAL_TAB_FILTERS.race.consultantFilterMode
+  );
+  const [filtersExpanded, setFiltersExpanded] = useState(INITIAL_TAB_FILTERS.race.filtersExpanded);
   const [navOpen, setNavOpen] = useState(false);
   const [consultants, setConsultants] = useState<Consultant[]>([]);
   const [editMode, setEditMode] = useState(false);
@@ -347,9 +368,57 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (tab === "data" && !permissions.canAccessData) setTab("house");
-    if (tab === "admin" && !permissions.canManageUsers) setTab("house");
-  }, [tab, permissions.canAccessData, permissions.canManageUsers]);
+    saveAppTab(tab);
+  }, [tab]);
+
+  const currentRaceFilters = useCallback((): RaceTabFilters => {
+    return {
+      filter,
+      seatHolderFilter,
+      trumpSwingFilter,
+      openSeatFilter,
+      upForReelectionOnly,
+      organizationFilter,
+      consultantFilter,
+      consultantFilterMode,
+      filtersExpanded,
+      selectedOfficeId,
+    };
+  }, [
+    filter,
+    seatHolderFilter,
+    trumpSwingFilter,
+    openSeatFilter,
+    upForReelectionOnly,
+    organizationFilter,
+    consultantFilter,
+    consultantFilterMode,
+    filtersExpanded,
+    selectedOfficeId,
+  ]);
+
+  const applyRaceFilters = useCallback((saved: RaceTabFilters) => {
+    setFilter(saved.filter);
+    setSeatHolderFilter(saved.seatHolderFilter);
+    setTrumpSwingFilter(saved.trumpSwingFilter);
+    setOpenSeatFilter(saved.openSeatFilter);
+    setUpForReelectionOnly(saved.upForReelectionOnly);
+    setOrganizationFilter(saved.organizationFilter);
+    setConsultantFilter(saved.consultantFilter);
+    setConsultantFilterMode(saved.consultantFilterMode);
+    setFiltersExpanded(saved.filtersExpanded);
+    setSelectedOfficeId(saved.selectedOfficeId);
+  }, []);
+
+  useEffect(() => {
+    if (!isRaceTab(tab)) return;
+    saveRaceTabFilters(tab, currentRaceFilters());
+  }, [tab, currentRaceFilters]);
+
+  useEffect(() => {
+    if (tab !== "counties") return;
+    saveCountiesTabFilters({ countyElection });
+  }, [tab, countyElection]);
 
   useEffect(() => {
     if (!permissions.canEdit && editMode) setEditMode(false);
@@ -422,13 +491,6 @@ export default function App() {
   }, [tab, countyElection, loadCounties]);
 
   useEffect(() => {
-    setFilter("");
-    setSeatHolderFilter("all");
-    setTrumpSwingFilter(false);
-    setOpenSeatFilter(false);
-    setOrganizationFilter([]);
-    setConsultantFilter([]);
-    setConsultantFilterMode("all");
     if (tab === "data" || tab === "admin" || tab === "staffers") {
       setLoading(false);
     } else if (tab !== "counties") {
@@ -655,16 +717,36 @@ export default function App() {
     setContestLoading(false);
   }
 
+  const changeTab = useCallback(
+    (next: AppTab) => {
+      if (next === tab) return;
+
+      if (isRaceTab(tab)) saveRaceTabFilters(tab, currentRaceFilters());
+      if (tab === "counties") saveCountiesTabFilters({ countyElection });
+
+      if (isRaceTab(next)) applyRaceFilters(loadRaceTabFilters(next));
+      else if (next === "counties") setCountyElection(loadCountiesTabFilters().countyElection);
+
+      setTab(next);
+    },
+    [tab, countyElection, currentRaceFilters, applyRaceFilters]
+  );
+
   const selectTab = useCallback(
     (next: AppTab) => {
       if (next !== tab) {
         setConsultantFilterMode((mode) => normalizeConsultantFilterMode(mode, consultantFilter));
+        changeTab(next);
       }
-      setTab(next);
       setNavOpen(false);
     },
-    [consultantFilter, tab]
+    [consultantFilter, tab, changeTab]
   );
+
+  useEffect(() => {
+    if (tab === "data" && !permissions.canAccessData) changeTab("house");
+    else if (tab === "admin" && !permissions.canManageUsers) changeTab("house");
+  }, [tab, permissions.canAccessData, permissions.canManageUsers, changeTab]);
 
   function navLinkClass(id: AppTab) {
     return tab === id ? "app-topbar-link is-active" : "app-topbar-link";
