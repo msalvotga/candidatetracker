@@ -219,7 +219,9 @@ export function StafferMap({
   function countyFill(countyKey: string, stafferNames: string[]) {
     const highlight = countyHighlights[countyKey];
     if (highlight) return highlight;
-    if (stafferNames.length === 1) return colorByName.get(stafferNames[0])!;
+    if (stafferNames.length === 1) {
+      return colorByName.get(stafferNames[0]) ?? STAFFER_MAP_UNASSIGNED;
+    }
     if (stafferNames.length > 1) {
       return `url(#staffer-pattern-${patternKey(stafferNames).replace(/[^a-z0-9|]+/gi, "-")})`;
     }
@@ -294,7 +296,7 @@ export function StafferMap({
 
       <div className="staffer-map-legend" aria-label="Staffer legend">
         {staffers.map((staffer) => {
-          const color = colorByName.get(staffer.name)!;
+          const color = colorByName.get(staffer.name) ?? STAFFER_MAP_UNASSIGNED;
           return (
             <span key={staffer.id} className="staffer-map-legend-item">
               <span className="staffer-map-legend-swatch" style={{ background: color }} />
@@ -332,7 +334,7 @@ export function StafferMap({
               <CountyPattern
                 key={key}
                 id={`staffer-pattern-${key.replace(/[^a-z0-9|]+/gi, "-")}`}
-                colors={names.map((name) => colorByName.get(name)!)}
+                colors={names.map((name) => colorByName.get(name) ?? STAFFER_MAP_UNASSIGNED)}
               />
             ))}
           </defs>

@@ -50,11 +50,12 @@ function pickNextColor(
   familyIndices: number[],
   startFamily: number,
   avoidFamily: number | null,
-  reserved: Set<string>
+  reserved: Set<string>,
+  strict = true
 ): { color: string; family: number; nextStart: number } | null {
   for (let offset = 0; offset < STAFFER_PALETTE_FAMILIES.length; offset++) {
     const family = (startFamily + offset) % STAFFER_PALETTE_FAMILIES.length;
-    if (avoidFamily !== null && family === avoidFamily) continue;
+    if (strict && avoidFamily !== null && family === avoidFamily) continue;
 
     const colors = STAFFER_PALETTE_FAMILIES[family]!;
     const index = familyIndices[family]!;
@@ -78,7 +79,7 @@ function pickNextColor(
     const color = STAFFER_PALETTE_FLAT[i]!;
     if (reserved.has(normalizeHex(color))) continue;
     const family = colorFamilyIndex(color);
-    if (avoidFamily !== null && family === avoidFamily) continue;
+    if (strict && avoidFamily !== null && family === avoidFamily) continue;
     return { color, family, nextStart: startFamily };
   }
 
@@ -94,6 +95,7 @@ export function buildStafferColorMap(stafferNames: string[]) {
   const familyIndices = STAFFER_PALETTE_FAMILIES.map(() => 0);
   let startFamily = 0;
   let lastFamily: number | null = null;
+  let fallbackIndex = 0;
   const map = new Map<string, string>();
 
   for (const name of sorted) {
@@ -104,8 +106,21 @@ export function buildStafferColorMap(stafferNames: string[]) {
       continue;
     }
 
-    const picked = pickNextColor(familyIndices, startFamily, lastFamily, reserved);
-    if (!picked) break;
+    let picked =
+      pickNextColor(familyIndices, startFamily, lastFamily, reserved, true) ??
+      pickNextColor(familyIndices, startFamily, lastFamily, reserved, false);
+
+    if (!picked) {
+      while (fallbackIndex < STAFFER_PALETTE_FLAT.length * 2) {
+        const color = STAFFER_PALETTE_FLAT[fallbackIndex % STAFFER_PALETTE_FLAT.length]!;
+        fallbackIndex += 1;
+        if (reserved.has(normalizeHex(color))) continue;
+        picked = { color, family: colorFamilyIndex(color), nextStart: startFamily };
+        break;
+      }
+    }
+
+    if (!picked) continue;
 
     map.set(name, picked.color);
     reserved.add(normalizeHex(picked.color));
