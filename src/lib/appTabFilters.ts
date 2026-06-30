@@ -1,13 +1,17 @@
 import type { AppTab, CountyElection, OfficeCategory } from "../types";
 import type { SeatHolderFilter } from "./raceFilters";
+import { loadLegacyRaceCategory } from "./appTabPrefs";
 
 const STORAGE_KEY = "candidate-lookup.tab-filters";
 
-const RACE_TABS: OfficeCategory[] = ["house", "senate", "sboe", "statewide", "congressional"];
+const OFFICE_CATEGORIES: OfficeCategory[] = ["house", "senate", "sboe", "statewide", "congressional"];
 const SEAT_HOLDER_FILTERS = new Set<SeatHolderFilter>(["all", "gop", "dem"]);
 const COUNTY_ELECTIONS = new Set<CountyElection>(["pres_2024", "cruz_2024", "abbott_2022"]);
 
+export type RaceCategoryFilter = OfficeCategory | "all";
+
 export type RaceTabFilters = {
+  categoryFilter: RaceCategoryFilter;
   filter: string;
   seatHolderFilter: SeatHolderFilter;
   trumpSwingFilter: boolean;
@@ -31,12 +35,15 @@ export type DataTabFilters = {
 };
 
 type TabFiltersStore = {
-  race: Partial<Record<OfficeCategory, RaceTabFilters>>;
+  races?: RaceTabFilters;
+  /** @deprecated Migrated to unified `races` on read. */
+  race?: Partial<Record<OfficeCategory, Omit<RaceTabFilters, "categoryFilter">>>;
   counties: CountiesTabFilters;
   data: DataTabFilters;
 };
 
 export const DEFAULT_RACE_TAB_FILTERS: RaceTabFilters = {
+  categoryFilter: "all",
   filter: "",
   seatHolderFilter: "all",
   trumpSwingFilter: false,
@@ -59,44 +66,29 @@ export const DEFAULT_DATA_TAB_FILTERS: DataTabFilters = {
   selectedTable: "candidates",
 };
 
-export function isRaceTab(tab: AppTab): tab is OfficeCategory {
-  return RACE_TABS.includes(tab as OfficeCategory);
+export function isRacesTab(tab: AppTab): boolean {
+  return tab === "races";
 }
 
 function defaultStore(): TabFiltersStore {
   return {
-    race: {},
     counties: { ...DEFAULT_COUNTIES_TAB_FILTERS },
     data: { ...DEFAULT_DATA_TAB_FILTERS },
   };
 }
 
-function readStore(): TabFiltersStore {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultStore();
-    const parsed = JSON.parse(raw) as Partial<TabFiltersStore>;
-    return {
-      race: parsed.race ?? {},
-      counties: { ...DEFAULT_COUNTIES_TAB_FILTERS, ...parsed.counties },
-      data: { ...DEFAULT_DATA_TAB_FILTERS, ...parsed.data },
-    };
-  } catch {
-    return defaultStore();
+function normalizeRaceCategoryFilter(value: unknown): RaceCategoryFilter {
+  if (value === "all") return "all";
+  if (typeof value === "string" && OFFICE_CATEGORIES.includes(value as OfficeCategory)) {
+    return value as OfficeCategory;
   }
-}
-
-function writeStore(store: TabFiltersStore) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-  } catch {
-    // Ignore storage failures (private mode, quota, etc.).
-  }
+  return DEFAULT_RACE_TAB_FILTERS.categoryFilter;
 }
 
 function normalizeRaceTabFilters(raw: Partial<RaceTabFilters> | undefined): RaceTabFilters {
   if (!raw) return { ...DEFAULT_RACE_TAB_FILTERS };
   return {
+    categoryFilter: normalizeRaceCategoryFilter(raw.categoryFilter),
     filter: typeof raw.filter === "string" ? raw.filter : DEFAULT_RACE_TAB_FILTERS.filter,
     seatHolderFilter: SEAT_HOLDER_FILTERS.has(raw.seatHolderFilter as SeatHolderFilter)
       ? (raw.seatHolderFilter as SeatHolderFilter)
@@ -120,6 +112,56 @@ function normalizeRaceTabFilters(raw: Partial<RaceTabFilters> | undefined): Race
   };
 }
 
+function migrateLegacyRaceFilters(store: TabFiltersStore): RaceTabFilters {
+  const legacyCategory = loadLegacyRaceCategory();
+  if (store.races) {
+    const filters = normalizeRaceTabFilters(store.races);
+    if (legacyCategory && filters.categoryFilter === "all") {
+      filters.categoryFilter = legacyCategory;
+    }
+    return filters;
+  }
+
+  const sourceCategory = legacyCategory ?? "house";
+  const legacyFilters = store.race?.[sourceCategory] ?? store.race?.house;
+  return normalizeRaceTabFilters({
+    ...DEFAULT_RACE_TAB_FILTERS,
+    ...legacyFilters,
+    categoryFilter: legacyCategory ?? "all",
+  });
+}
+
+function readStore(): TabFiltersStore {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return defaultStore();
+    const parsed = JSON.parse(raw) as Partial<TabFiltersStore>;
+    return {
+      races: parsed.races ? normalizeRaceTabFilters(parsed.races) : undefined,
+      race: parsed.race,
+      counties: { ...DEFAULT_COUNTIES_TAB_FILTERS, ...parsed.counties },
+      data: { ...DEFAULT_DATA_TAB_FILTERS, ...parsed.data },
+    };
+  } catch {
+    return defaultStore();
+  }
+}
+
+function writeStore(store: TabFiltersStore) {
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        races: store.races,
+        counties: store.counties,
+        data: store.data,
+      })
+    );
+  } catch {
+    // Ignore storage failures (private mode, quota, etc.).
+  }
+}
+
 function normalizeCountiesTabFilters(raw: Partial<CountiesTabFilters> | undefined): CountiesTabFilters {
   const countyElection =
     raw?.countyElection && COUNTY_ELECTIONS.has(raw.countyElection)
@@ -132,7 +174,7 @@ function normalizeDataTabFilters(raw: Partial<DataTabFilters> | undefined): Data
   let filterCategory: OfficeCategory | "" = DEFAULT_DATA_TAB_FILTERS.filterCategory;
   if (raw?.filterCategory === "") {
     filterCategory = "";
-  } else if (raw?.filterCategory && RACE_TABS.includes(raw.filterCategory)) {
+  } else if (raw?.filterCategory && OFFICE_CATEGORIES.includes(raw.filterCategory)) {
     filterCategory = raw.filterCategory;
   }
   return {
@@ -142,13 +184,13 @@ function normalizeDataTabFilters(raw: Partial<DataTabFilters> | undefined): Data
   };
 }
 
-export function loadRaceTabFilters(tab: OfficeCategory): RaceTabFilters {
-  return normalizeRaceTabFilters(readStore().race[tab]);
+export function loadRaceTabFilters(): RaceTabFilters {
+  return migrateLegacyRaceFilters(readStore());
 }
 
-export function saveRaceTabFilters(tab: OfficeCategory, filters: RaceTabFilters) {
+export function saveRaceTabFilters(filters: RaceTabFilters) {
   const store = readStore();
-  store.race[tab] = normalizeRaceTabFilters(filters);
+  store.races = normalizeRaceTabFilters(filters);
   writeStore(store);
 }
 
@@ -173,9 +215,9 @@ export function saveDataTabFilters(filters: DataTabFilters) {
 }
 
 export function loadInitialTabFilters(tab: AppTab) {
-  if (isRaceTab(tab)) {
+  if (tab === "races") {
     return {
-      race: loadRaceTabFilters(tab),
+      race: loadRaceTabFilters(),
       counties: DEFAULT_COUNTIES_TAB_FILTERS,
     };
   }

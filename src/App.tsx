@@ -11,12 +11,13 @@ import { PendingSaveBar } from "./components/PendingSaveBar";
 import { loadRaceLayoutPrefs, saveRaceLayoutPrefs } from "./lib/raceLayoutPrefs";
 import { loadAppTab, saveAppTab } from "./lib/appTabPrefs";
 import {
-  isRaceTab,
+  isRacesTab,
   loadCountiesTabFilters,
   loadInitialTabFilters,
   loadRaceTabFilters,
   saveCountiesTabFilters,
   saveRaceTabFilters,
+  type RaceCategoryFilter,
   type RaceTabFilters,
 } from "./lib/appTabFilters";
 import { candidateKey, setFilingPeriods } from "./lib/finance";
@@ -27,7 +28,6 @@ import {
   normalizeConsultantFilterMode,
   matchesOpenSeatFilter,
   matchesUpForReelectionFilter,
-  isUpForReelectionRelevant,
   isOfficeFlagTrue,
   matchesSeatHolderFilter,
   matchesTrumpSwingFilter,
@@ -51,16 +51,28 @@ import type {
   Race,
   RaceCandidate,
   RaceMetric,
+  StafferDistrictEntry,
   StafferMapEntry,
 } from "./types";
 
-const RACE_TABS: { id: OfficeCategory; label: string }[] = [
+const RACE_CATEGORIES: OfficeCategory[] = ["house", "senate", "sboe", "statewide", "congressional"];
+
+const RACE_CATEGORY_OPTIONS: { id: RaceCategoryFilter; label: string }[] = [
+  { id: "all", label: "All" },
   { id: "house", label: "Texas House" },
   { id: "senate", label: "Texas Senate" },
   { id: "sboe", label: "SBOE" },
   { id: "statewide", label: "Statewide" },
   { id: "congressional", label: "Congressional" },
 ];
+
+const RACE_CATEGORY_LABELS: Record<OfficeCategory, string> = {
+  house: "Texas House",
+  senate: "Texas Senate",
+  sboe: "SBOE",
+  statewide: "Statewide",
+  congressional: "Congressional",
+};
 
 const COUNTY_ELECTIONS: { id: CountyElection; label: string }[] = [
   { id: "pres_2024", label: "2024 President" },
@@ -84,8 +96,12 @@ function partyBadgeClass(party: string | null | undefined) {
   return null;
 }
 
-function raceListLabel(race: Race, tab: OfficeCategory) {
-  if (tab === "statewide") return race.office_name;
+function raceCategory(race: Race): OfficeCategory {
+  return race.category ?? "house";
+}
+
+function raceListLabel(race: Race) {
+  if (raceCategory(race) === "statewide") return race.office_name;
   if (race.district != null) return `District ${race.district}`;
   return race.office_code;
 }
@@ -94,9 +110,9 @@ function raceDetailTitle(race: Race) {
   return `${race.office_code} — ${race.office_name}`;
 }
 
-function mergeRaceMetrics(race: Race, tab: OfficeCategory): RaceMetric[] {
+function mergeRaceMetrics(race: Race, category: OfficeCategory): RaceMetric[] {
   const byKey = new Map((race.metrics ?? []).map((m) => [m.key, m]));
-  return metricFieldsForCategory(tab).map((field) => {
+  return metricFieldsForCategory(category).map((field) => {
     const existing = byKey.get(field.key);
     return {
       key: field.key,
@@ -164,8 +180,12 @@ export default function App() {
   const [races, setRaces] = useState<Race[]>([]);
   const [counties, setCounties] = useState<Awaited<ReturnType<typeof fetchCounties>>["counties"]>([]);
   const [stafferMap, setStafferMap] = useState<StafferMapEntry[]>([]);
+  const [stafferDistrictMap, setStafferDistrictMap] = useState<StafferDistrictEntry[]>([]);
   const [selectedOfficeId, setSelectedOfficeId] = useState<number | null>(
     INITIAL_TAB_FILTERS.race.selectedOfficeId
+  );
+  const [categoryFilter, setCategoryFilter] = useState<RaceCategoryFilter>(
+    INITIAL_TAB_FILTERS.race.categoryFilter
   );
   const [filter, setFilter] = useState(INITIAL_TAB_FILTERS.race.filter);
   const [seatHolderFilter, setSeatHolderFilter] = useState<SeatHolderFilter>(
@@ -373,6 +393,7 @@ export default function App() {
 
   const currentRaceFilters = useCallback((): RaceTabFilters => {
     return {
+      categoryFilter,
       filter,
       seatHolderFilter,
       trumpSwingFilter,
@@ -385,6 +406,7 @@ export default function App() {
       selectedOfficeId,
     };
   }, [
+    categoryFilter,
     filter,
     seatHolderFilter,
     trumpSwingFilter,
@@ -398,6 +420,7 @@ export default function App() {
   ]);
 
   const applyRaceFilters = useCallback((saved: RaceTabFilters) => {
+    setCategoryFilter(saved.categoryFilter);
     setFilter(saved.filter);
     setSeatHolderFilter(saved.seatHolderFilter);
     setTrumpSwingFilter(saved.trumpSwingFilter);
@@ -411,8 +434,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isRaceTab(tab)) return;
-    saveRaceTabFilters(tab, currentRaceFilters());
+    if (!isRacesTab(tab)) return;
+    saveRaceTabFilters(currentRaceFilters());
   }, [tab, currentRaceFilters]);
 
   useEffect(() => {
@@ -425,18 +448,38 @@ export default function App() {
   }, [permissions.canEdit, editMode]);
 
   const loadRaces = useCallback(async () => {
-    if (tab === "counties" || tab === "staffers" || tab === "data" || tab === "admin") return;
+    if (tab !== "races") return;
     setLoading(true);
     setError("");
     try {
-      const data = await fetchRaces(tab, cycleYear);
-      if (data.filing_periods?.length) setFilingPeriods(data.filing_periods);
-      const nextRaces = (data.races ?? []).map((race) => ({
-        ...race,
-        up_for_reelection: isOfficeFlagTrue(race.up_for_reelection),
-      }));
+      const results = await Promise.all(RACE_CATEGORIES.map((category) => fetchRaces(category, cycleYear)));
+      let filingPeriodsLoaded = false;
+      const consultantMap = new Map<string, Consultant>();
+      const nextRaces: Race[] = [];
+
+      for (let index = 0; index < RACE_CATEGORIES.length; index++) {
+        const category = RACE_CATEGORIES[index];
+        const data = results[index];
+        if (!filingPeriodsLoaded && data.filing_periods?.length) {
+          setFilingPeriods(data.filing_periods);
+          filingPeriodsLoaded = true;
+        }
+        for (const consultant of data.consultants ?? []) {
+          consultantMap.set(consultant.consultant_key, consultant);
+        }
+        for (const race of data.races ?? []) {
+          nextRaces.push({
+            ...race,
+            category,
+            up_for_reelection: isOfficeFlagTrue(race.up_for_reelection),
+          });
+        }
+      }
+
       setRaces(nextRaces);
-      setConsultants(data.consultants ?? []);
+      setConsultants(
+        [...consultantMap.values()].sort((a, b) => a.name.localeCompare(b.name))
+      );
       setSelectedOfficeId((prev) => {
         if (prev && nextRaces.some((race) => race.office_id === prev)) return prev;
         return nextRaces[0]?.office_id ?? null;
@@ -472,9 +515,11 @@ export default function App() {
     try {
       const data = await fetchStafferMap();
       setStafferMap(data.staffers ?? []);
+      setStafferDistrictMap(data.districtStaffers ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load staffer map");
       setStafferMap([]);
+      setStafferDistrictMap([]);
     } finally {
       setLoading(false);
     }
@@ -493,7 +538,7 @@ export default function App() {
   useEffect(() => {
     if (tab === "data" || tab === "admin" || tab === "staffers") {
       setLoading(false);
-    } else if (tab !== "counties") {
+    } else if (tab === "races") {
       setRaces([]);
       void loadRaces();
     }
@@ -504,6 +549,7 @@ export default function App() {
   }, []);
 
   const resetRaceFilters = useCallback(() => {
+    setCategoryFilter("all");
     setFilter("");
     setSeatHolderFilter("all");
     setTrumpSwingFilter(false);
@@ -515,16 +561,20 @@ export default function App() {
   }, []);
 
   const filteredRaces = useMemo(() => {
-    if (tab === "counties" || tab === "staffers" || tab === "data" || tab === "admin") return [];
+    if (tab !== "races") return [];
     return races.filter((race) => {
+      const category = raceCategory(race);
+      if (categoryFilter !== "all" && category !== categoryFilter) return false;
+
       const query = filter.trim().toLowerCase();
       if (query) {
-        const label = raceListLabel(race, tab as OfficeCategory).toLowerCase();
+        const label = raceListLabel(race).toLowerCase();
         const incumbentName = raceSeatHolder(race)?.name?.toLowerCase() ?? "";
         const matchesSearch =
           label.includes(query) ||
           race.office_code.toLowerCase().includes(query) ||
           race.office_name.toLowerCase().includes(query) ||
+          RACE_CATEGORY_LABELS[category].toLowerCase().includes(query) ||
           incumbentName.includes(query) ||
           race.candidates.some((c) => c.name.toLowerCase().includes(query));
         if (!matchesSearch) return false;
@@ -533,28 +583,59 @@ export default function App() {
       if (!matchesSeatHolderFilter(race, seatHolderFilter)) return false;
       if (!matchesTrumpSwingFilter(race, trumpSwingFilter)) return false;
       if (!matchesOpenSeatFilter(race, openSeatFilter)) return false;
-      if (!matchesUpForReelectionFilter(race, tab as OfficeCategory, upForReelectionOnly)) return false;
+      if (!matchesUpForReelectionFilter(race, category, upForReelectionOnly)) return false;
       if (!matchesOrganizationFilter(race, organizationFilter)) return false;
       if (!matchesConsultantFilter(race, consultantFilter)) return false;
 
       return true;
     });
-  }, [races, filter, tab, seatHolderFilter, trumpSwingFilter, openSeatFilter, upForReelectionOnly, organizationFilter, consultantFilter]);
+  }, [
+    races,
+    filter,
+    tab,
+    categoryFilter,
+    seatHolderFilter,
+    trumpSwingFilter,
+    openSeatFilter,
+    upForReelectionOnly,
+    organizationFilter,
+    consultantFilter,
+  ]);
+
+  const showUpForReelectionFilter =
+    categoryFilter === "all" ||
+    categoryFilter === "senate" ||
+    categoryFilter === "sboe" ||
+    categoryFilter === "statewide";
+
+  const showOrganizationFilter = categoryFilter === "all" || categoryFilter === "house";
 
   const activeFilterCount = useMemo(() => {
     let count = 0;
+    if (categoryFilter !== "all") count += 1;
     if (filter.trim()) count += 1;
     if (seatHolderFilter !== "all") count += 1;
     if (trumpSwingFilter) count += 1;
     if (openSeatFilter) count += 1;
-    if (isUpForReelectionRelevant(tab as OfficeCategory) && upForReelectionOnly) count += 1;
+    if (showUpForReelectionFilter && upForReelectionOnly) count += 1;
     if (organizationFilter.length > 0) count += 1;
     if (consultantFilterMode === "select" && consultantFilter.length > 0) count += 1;
     return count;
-  }, [filter, seatHolderFilter, trumpSwingFilter, openSeatFilter, tab, upForReelectionOnly, organizationFilter, consultantFilter, consultantFilterMode]);
+  }, [
+    categoryFilter,
+    filter,
+    seatHolderFilter,
+    trumpSwingFilter,
+    openSeatFilter,
+    showUpForReelectionFilter,
+    upForReelectionOnly,
+    organizationFilter,
+    consultantFilter,
+    consultantFilterMode,
+  ]);
 
   useEffect(() => {
-    if (tab === "counties" || tab === "staffers" || tab === "data" || tab === "admin") return;
+    if (tab !== "races") return;
     if (filteredRaces.length === 0) {
       setSelectedOfficeId(null);
       return;
@@ -566,9 +647,7 @@ export default function App() {
 
   const selectedRace = filteredRaces.find((race) => race.office_id === selectedOfficeId) ?? null;
   const selectedMetrics =
-    selectedRace && tab !== "counties" && tab !== "data" && tab !== "admin"
-      ? mergeRaceMetrics(selectedRace, tab as OfficeCategory)
-      : [];
+    selectedRace && tab === "races" ? mergeRaceMetrics(selectedRace, raceCategory(selectedRace)) : [];
   const countyTitle = COUNTY_ELECTIONS.find((e) => e.id === countyElection)?.label ?? "County results";
 
   useEffect(() => {
@@ -721,10 +800,10 @@ export default function App() {
     (next: AppTab) => {
       if (next === tab) return;
 
-      if (isRaceTab(tab)) saveRaceTabFilters(tab, currentRaceFilters());
+      if (tab === "races") saveRaceTabFilters(currentRaceFilters());
       if (tab === "counties") saveCountiesTabFilters({ countyElection });
 
-      if (isRaceTab(next)) applyRaceFilters(loadRaceTabFilters(next));
+      if (next === "races") applyRaceFilters(loadRaceTabFilters());
       else if (next === "counties") setCountyElection(loadCountiesTabFilters().countyElection);
 
       setTab(next);
@@ -744,8 +823,8 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (tab === "data" && !permissions.canAccessData) changeTab("house");
-    else if (tab === "admin" && !permissions.canManageUsers) changeTab("house");
+    if (tab === "data" && !permissions.canAccessData) changeTab("races");
+    else if (tab === "admin" && !permissions.canManageUsers) changeTab("races");
   }, [tab, permissions.canAccessData, permissions.canManageUsers, changeTab]);
 
   function navLinkClass(id: AppTab) {
@@ -753,8 +832,7 @@ export default function App() {
   }
 
   const activeNavLabel = useMemo(() => {
-    const raceTab = RACE_TABS.find((item) => item.id === tab);
-    if (raceTab) return raceTab.label;
+    if (tab === "races") return "Races";
     if (tab === "counties") return "Counties";
     if (tab === "staffers") return "Staffers";
     if (tab === "data") return "Data";
@@ -788,17 +866,14 @@ export default function App() {
             aria-label="Sections"
           >
             <div className="app-topbar-links">
-              {RACE_TABS.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={navLinkClass(item.id)}
-                  aria-current={tab === item.id ? "page" : undefined}
-                  onClick={() => selectTab(item.id)}
-                >
-                  {item.label}
-                </button>
-              ))}
+              <button
+                type="button"
+                className={navLinkClass("races")}
+                aria-current={tab === "races" ? "page" : undefined}
+                onClick={() => selectTab("races")}
+              >
+                Races
+              </button>
               <button
                 type="button"
                 className={navLinkClass("counties")}
@@ -877,7 +952,7 @@ export default function App() {
               <code>npm run db:seed-tga-staffers</code>.
             </p>
           ) : (
-            <StafferMap staffers={stafferMap} />
+            <StafferMap staffers={stafferMap} districtStaffers={stafferDistrictMap} />
           )}
         </div>
       ) : tab === "counties" ? (
@@ -953,6 +1028,22 @@ export default function App() {
             <div className="race-filters-scroll" ref={filtersScrollRef}>
               <div className="race-filters">
                 <div className="filter-group">
+                  <span className="filter-label">Office type</span>
+                  <div className="filter-chips">
+                    {RACE_CATEGORY_OPTIONS.map((option) => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        className={categoryFilter === option.id ? "filter-chip active" : "filter-chip"}
+                        onClick={() => setCategoryFilter(option.id)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="filter-group">
                   <span className="filter-label">Seat held by</span>
                   <div className="filter-chips">
                     {(
@@ -995,7 +1086,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {isUpForReelectionRelevant(tab as OfficeCategory) ? (
+                {showUpForReelectionFilter ? (
                   <div className="filter-group">
                     <span className="filter-label">Up for reelection</span>
                     <div className="filter-chips">
@@ -1039,7 +1130,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {tab === "house" ? (
+                {showOrganizationFilter ? (
                   <div className="filter-group">
                     <span className="filter-label">Targets</span>
                     <div className="filter-chips">
@@ -1155,7 +1246,10 @@ export default function App() {
                       onClick={() => setSelectedOfficeId(race.office_id)}
                     >
                       <span className="race-item-label">
-                        {raceListLabel(race, tab as OfficeCategory)}
+                        {raceListLabel(race)}
+                        {categoryFilter === "all" ? (
+                          <span className="race-item-category">{RACE_CATEGORY_LABELS[raceCategory(race)]}</span>
+                        ) : null}
                         {race.is_open ? <span className="open-badge">Open</span> : null}
                         {holder?.party && partyBadgeClass(holder.party) ? (
                           <span className={partyBadgeClass(holder.party)!}>{partyLabel(holder.party)}</span>
@@ -1232,7 +1326,7 @@ export default function App() {
 
                 <RaceMetrics
                   metrics={selectedMetrics}
-                  category={tab}
+                  category={raceCategory(selectedRace)}
                   editMode={effectiveEditMode}
                   onMetricClick={(metric) => void handleMetricClick(metric)}
                 />

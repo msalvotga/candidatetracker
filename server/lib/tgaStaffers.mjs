@@ -108,25 +108,56 @@ export async function fetchTgaStafferRow(db, stafferId) {
   return enriched;
 }
 
+/** Harris County Texas House districts shown on the staffer map drill-down. */
+export const HARRIS_HOUSE_DISTRICTS = [
+  126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145,
+  146, 147, 148, 149, 150,
+];
+
 /** County coverage for the staffer map (direct county assignments only). */
 export async function fetchStafferMapData(db) {
   const stafferRows = await db.prepare(`SELECT id, name FROM tga_staffers ORDER BY name`).all();
-  if (!stafferRows.length) return { staffers: [] };
+  if (!stafferRows.length) return { staffers: [], districtStaffers: [] };
 
   const enriched = await enrichTgaStafferRows(db, stafferRows);
 
+  const houseOffices = await db
+    .prepare(`SELECT id, district FROM offices WHERE category = 'house'`)
+    .all();
+  const districtByOfficeId = new Map(
+    houseOffices.map((office) => [String(office.id), Number(office.district)])
+  );
+
   const staffers = [];
+  const districtStaffers = [];
   for (const row of enriched) {
     const counties = [...new Set(parseKeyList(row.county_names))].sort((a, b) => a.localeCompare(b));
-    if (!counties.length) continue;
-    staffers.push({
-      id: row.id,
-      name: row.name,
-      counties,
-    });
+    if (counties.length) {
+      staffers.push({
+        id: row.id,
+        name: row.name,
+        counties,
+      });
+    }
+
+    const officeIds = parseKeyList(row.office_ids);
+    const districts = [
+      ...new Set(
+        officeIds
+          .map((officeId) => districtByOfficeId.get(officeId))
+          .filter((district) => Number.isInteger(district) && district > 0)
+      ),
+    ].sort((a, b) => a - b);
+    if (districts.length) {
+      districtStaffers.push({
+        id: row.id,
+        name: row.name,
+        districts,
+      });
+    }
   }
 
-  return { staffers };
+  return { staffers, districtStaffers };
 }
 
 function staffersForOffice(officeId, stafferRows, officeCountiesMap) {

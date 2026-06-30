@@ -1,5 +1,5 @@
 export type OfficeCategory = "house" | "senate" | "sboe" | "statewide" | "congressional";
-export type AppTab = OfficeCategory | "counties" | "staffers" | "data" | "admin";
+export type AppTab = "races" | "counties" | "staffers" | "data" | "admin";
 export type UserRole = "admin" | "viewer";
 
 export interface AppUser {
@@ -98,6 +98,8 @@ export interface Race {
   office_code: string;
   office_name: string;
   district: number | null;
+  /** Set when races from multiple categories are loaded together. */
+  category?: OfficeCategory;
   metrics: RaceMetric[];
   candidates: RaceCandidate[];
   seat_holder?: SeatHolder | null;
@@ -195,6 +197,13 @@ export interface StafferMapEntry {
   counties: string[];
 }
 
+export interface StafferDistrictEntry {
+  id: number;
+  name: string;
+  districts: number[];
+}
+
 export interface StafferMapResponse {
   staffers: StafferMapEntry[];
+  districtStaffers: StafferDistrictEntry[];
 }

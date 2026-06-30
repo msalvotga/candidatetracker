@@ -1204,6 +1204,12 @@ body.race-layout-resizing .race-layout-resizer {
   font-weight: 600;
 }
 
+.race-item-category {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
 .race-item-meta {
   display: block;
   margin-top: 0.25rem;
@@ -2068,8 +2074,165 @@ body.race-layout-resizing .race-layout-resizer {
   max-width: 920px;
 }
 
+.staffer-map-svg .staffer-map-county {
+  cursor: pointer;
+}
+
+.staffer-map-svg .staffer-map-county:hover {
+  filter: brightness(1.08);
+}
+
+.staffer-map-svg-zooming {
+  transition: opacity 0.35s ease;
+  opacity: 0.35;
+}
+
+.staffer-map-canvas-zooming {
+  pointer-events: none;
+}
+
+.staffer-map-county-harris {
+  cursor: zoom-in;
+}
+
+.staffer-map-harris {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.staffer-map-harris-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.staffer-map-harris-back {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+}
+
+.staffer-map-harris-back:hover {
+  border-color: var(--accent);
+}
+
+.staffer-map-harris-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.staffer-map-harris-canvas {
+  animation: staffer-map-harris-in 0.35s ease;
+}
+
+.staffer-map-harris-svg .staffer-map-hd {
+  cursor: pointer;
+}
+
+.staffer-map-harris-svg .staffer-map-hd:hover {
+  filter: brightness(1.08);
+}
+
+.staffer-map-hd-label {
+  stroke-width: 0.2px;
+}
+
+@keyframes staffer-map-harris-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.staffer-map-county-label {
+  fill: #e8edf4;
+  stroke: #0f1419;
+  stroke-width: 0.35px;
+  paint-order: stroke fill;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-weight: 500;
+  pointer-events: none;
+  user-select: none;
+}
+
+.staffer-map-color-picker {
+  position: absolute;
+  z-index: 3;
+  min-width: 10rem;
+  background: rgba(15, 20, 25, 0.97);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.82rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.staffer-map-color-picker strong {
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+.staffer-map-color-picker-hint {
+  margin: 0 0 0.45rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.staffer-map-color-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1.15rem);
+  gap: 0.35rem;
+}
+
+.staffer-map-color-option {
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.staffer-map-color-option:hover {
+  transform: scale(1.08);
+  border-color: #fff;
+}
+
+.staffer-map-color-clear {
+  margin-top: 0.45rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.staffer-map-color-clear:hover {
+  text-decoration: underline;
+}
+
 .staffer-map-tooltip-empty {
   color: var(--muted);
+}
+
+.staffer-map-tooltip-hint {
+  color: var(--accent);
+  font-size: 0.78rem;
 }
 
 .edit-input {
