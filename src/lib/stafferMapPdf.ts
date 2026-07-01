@@ -1,6 +1,6 @@
 import { jsPDF } from "jspdf";
 import type { StafferMapEntry } from "../types";
-import { buildStafferColorMap, STAFFER_MAP_UNASSIGNED, splitLabel } from "./stafferColors";
+import { buildStafferColorMap, STAFFER_MAP_UNASSIGNED } from "./stafferColors";
 
 const MAP_ASPECT = 860 / 920;
 const MARGIN = 40;
@@ -175,9 +175,8 @@ export async function exportStafferMapPdf(options: {
   svg: SVGSVGElement;
   assignedCount: number;
   totalCounties: number;
-  overlapPairs: { names: string[] }[];
 }) {
-  const { staffers, svg, assignedCount, totalCounties, overlapPairs } = options;
+  const { staffers, svg, assignedCount, totalCounties } = options;
   const colorByName = buildStafferColorMap(staffers.map((staffer) => staffer.name));
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -205,10 +204,6 @@ export async function exportStafferMapPdf(options: {
     ...staffers.map((staffer) => ({
       label: staffer.name,
       color: colorByName.get(staffer.name)!,
-    })),
-    ...overlapPairs.map(({ names }) => ({
-      label: splitLabel(names),
-      color: colorByName.get(names[0])!,
     })),
     { label: "Unassigned", color: STAFFER_MAP_UNASSIGNED },
   ];

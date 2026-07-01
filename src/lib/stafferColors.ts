@@ -21,6 +21,18 @@ export const STAFFER_MAP_UNASSIGNED = "#3a3d47";
 
 /** Fixed legend colors for named staffers (case-sensitive). */
 const STAFFER_COLOR_OVERRIDES: Record<string, string> = {
+  "Vanessa Garcia": "#5b9bd5",
+  "Lucy Sisnega": "#e8b923",
+  "Rick Cromack": "#8b2942",
+  "Hayden Head": "#c8b4e8",
+  "Elayna Hefner": "#1e3a8a",
+  "Robert Bennett": "#87ceeb",
+  "Lou Minnick": "#5cb8a8",
+  "Carine Martinez": "#e74c3c",
+  "Carolyn Bryant": "#22c55e",
+  "Mallory McCoy": "#8fa652",
+  "Sarah Rios": "#7b5ea7",
+  "Jessica Colon": "#dc2626",
   "Vacant 1": "#f87171",
   "Vacant 2": "#eab308",
   "Vacant 3": "#166534",
@@ -28,6 +40,17 @@ const STAFFER_COLOR_OVERRIDES: Record<string, string> = {
 
 /** Hue family for override colors not present in STAFFER_PALETTE_FAMILIES. */
 const OVERRIDE_COLOR_FAMILIES: Record<string, number> = {
+  "#5b9bd5": 0,
+  "#e8b923": 6,
+  "#8b2942": 1,
+  "#c8b4e8": 4,
+  "#1e3a8a": 0,
+  "#87ceeb": 0,
+  "#5cb8a8": 5,
+  "#e74c3c": 1,
+  "#22c55e": 2,
+  "#8fa652": 2,
+  "#7b5ea7": 4,
   "#f87171": 1,
   "#166534": 2,
 };

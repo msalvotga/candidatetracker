@@ -9,7 +9,6 @@ import {
 import {
   buildStafferColorMap,
   pickHighlightColors,
-  splitLabel,
   STAFFER_MAP_UNASSIGNED,
 } from "../lib/stafferColors";
 import { canonicalCountyKey } from "../lib/countyKeys";
@@ -241,7 +240,6 @@ export function StafferMap({
         svg,
         assignedCount,
         totalCounties: pathEntries.length,
-        overlapPairs: overlapPairs.map(([, names]) => ({ names })),
       });
     } catch (err) {
       console.error("Staffer map PDF export failed:", err);
@@ -304,17 +302,6 @@ export function StafferMap({
             </span>
           );
         })}
-        {overlapPairs.map(([key, names]) => (
-          <span key={key} className="staffer-map-legend-item staffer-map-legend-overlap">
-            <span
-              className="staffer-map-legend-swatch staffer-map-legend-swatch-split"
-              style={{
-                background: `linear-gradient(135deg, ${colorByName.get(names[0])} 50%, ${colorByName.get(names[1] ?? names[0])} 50%)`,
-              }}
-            />
-            {splitLabel(names)}
-          </span>
-        ))}
         <span className="staffer-map-legend-item">
           <span className="staffer-map-legend-swatch" style={{ background: STAFFER_MAP_UNASSIGNED }} />
           Unassigned
