@@ -157,7 +157,6 @@ export const TGA_STAFFERS = [
     counties: [
       "Atascosa",
       "Bandera",
-      "Bee",
       "Bexar",
       "DeWitt",
       "Frio",
@@ -176,7 +175,6 @@ export const TGA_STAFFERS = [
   {
     name: "Mallory McCoy",
     counties: [
-      "Bee",
       "Brooks",
       "Cameron",
       "Dimmit",
@@ -202,6 +200,7 @@ export const TGA_STAFFERS = [
     name: "Sarah Rios",
     counties: [
       "Aransas",
+      "Bee",
       "Calhoun",
       "Goliad",
       "Jackson",
@@ -240,6 +239,7 @@ export const TGA_STAFFERS = [
       "Colorado",
       "Fort Bend",
       "Galveston",
+      "Lavaca",
       "Matagorda",
       "Waller",
       "Wharton",
