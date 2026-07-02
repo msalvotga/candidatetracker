@@ -20,6 +20,7 @@ type AuthContextValue = {
   logout: () => Promise<void>;
   promptLogin: () => void;
   cancelLoginPrompt: () => void;
+  detectedIp: string | null;
 };
 
 const AuthContext = createContext<AuthContextValue>({
@@ -32,6 +33,7 @@ const AuthContext = createContext<AuthContextValue>({
   logout: async () => {},
   promptLogin: () => {},
   cancelLoginPrompt: () => {},
+  detectedIp: null,
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -41,6 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [guestAccess, setGuestAccess] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loginPrompt, setLoginPrompt] = useState(false);
+  const [detectedIp, setDetectedIp] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -49,12 +52,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setPermissions(data.permissions);
       setAuthenticated(data.authenticated);
       setGuestAccess(Boolean(data.guestAccess));
+      setDetectedIp(data.clientIp ?? null);
       if (data.user) setLoginPrompt(false);
     } catch {
       setUser(null);
       setPermissions(DEFAULT_PERMISSIONS);
       setAuthenticated(false);
       setGuestAccess(false);
+      setDetectedIp(null);
     } finally {
       setLoading(false);
     }
@@ -93,6 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logout,
         promptLogin,
         cancelLoginPrompt,
+        detectedIp,
       }}
     >
       {children}
@@ -109,7 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 }
 
 export function AuthGate({ children }: { children: ReactNode }) {
-  const { authenticated, loading, refresh } = useAuth();
+  const { authenticated, loading, refresh, detectedIp } = useAuth();
 
   if (loading) {
     return (
@@ -120,7 +126,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
 
   if (!authenticated) {
-    return <LoginPage onSuccess={() => void refresh()} />;
+    return <LoginPage detectedIp={detectedIp} onSuccess={() => void refresh()} />;
   }
 
   return <>{children}</>;

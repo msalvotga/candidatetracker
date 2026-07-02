@@ -4,9 +4,11 @@ import { loginUser } from "../api";
 export function LoginPage({
   onSuccess,
   onCancel,
+  detectedIp,
 }: {
   onSuccess: () => void;
   onCancel?: () => void;
+  detectedIp?: string | null;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -86,7 +88,15 @@ export function LoginPage({
           ) : null}
         </form>
 
-        <p className="login-footnote">Use the email address on your account.</p>
+        <p className="login-footnote">
+          Use the email address on your account.
+          {detectedIp ? (
+            <>
+              {" "}
+              Server sees your IP as <strong>{detectedIp}</strong>.
+            </>
+          ) : null}
+        </p>
       </div>
     </div>
   );

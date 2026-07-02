@@ -24,6 +24,7 @@ export interface AuthMeResponse {
   permissions: AppPermissions;
   authenticated: boolean;
   guestAccess?: boolean;
+  clientIp?: string;
 }
 export type CountyElection = "pres_2024" | "cruz_2024" | "abbott_2022";
 

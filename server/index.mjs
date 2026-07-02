@@ -35,7 +35,7 @@ import {
   listTargetingOrganizations,
   loadOfficeTargetsByOffice,
 } from "./lib/targeting.mjs";
-import { resolveAuth, requireAdmin, requireAuth, loginUser, logoutUser, initAuth } from "./lib/auth.mjs";
+import { resolveAuth, requireAdmin, requireAuth, loginUser, logoutUser, initAuth, clientIp } from "./lib/auth.mjs";
 import { ensureBootstrapAdmin } from "./lib/bootstrapAdmin.mjs";
 import { createAppUser, deleteAppUser, listAppUsers, updateAppUser } from "./lib/users.mjs";
 
@@ -63,6 +63,7 @@ app.get("/api/auth/me", (req, res) => {
     permissions: req.auth.permissions,
     authenticated: req.auth.authenticated,
     guestAccess: Boolean(req.auth.guestAccess),
+    clientIp: clientIp(req),
   });
 });
 
