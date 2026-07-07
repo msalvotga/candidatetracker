@@ -35,7 +35,6 @@ import {
   raceCurrentHolderLabel,
   raceGopCandidateLabel,
   raceRunningForReelectionLabel,
-  HOUSE_TARGET_FILTER_OPTIONS,
   type SeatHolderFilter,
 } from "./lib/raceFilters";
 import { useAuth } from "./lib/auth";
@@ -53,6 +52,7 @@ import type {
   RaceMetric,
   StafferDistrictEntry,
   StafferMapEntry,
+  TargetingOrganization,
 } from "./types";
 
 const RACE_CATEGORIES: OfficeCategory[] = ["house", "senate", "sboe", "statewide", "congressional"];
@@ -205,6 +205,7 @@ export default function App() {
   const [filtersExpanded, setFiltersExpanded] = useState(INITIAL_TAB_FILTERS.race.filtersExpanded);
   const [navOpen, setNavOpen] = useState(false);
   const [consultants, setConsultants] = useState<Consultant[]>([]);
+  const [targetingOrganizations, setTargetingOrganizations] = useState<TargetingOrganization[]>([]);
   const [editMode, setEditMode] = useState(false);
   const [pendingConsultantEdits, setPendingConsultantEdits] = useState<Record<string, string[]>>({});
   const [pendingCohAdds, setPendingCohAdds] = useState<PendingFinanceEntry[]>([]);
@@ -456,6 +457,7 @@ export default function App() {
       const results = await Promise.all(RACE_CATEGORIES.map((category) => fetchRaces(category, cycleYear)));
       let filingPeriodsLoaded = false;
       const consultantMap = new Map<string, Consultant>();
+      const targetingOrgMap = new Map<string, TargetingOrganization>();
       const nextRaces: Race[] = [];
 
       for (let index = 0; index < RACE_CATEGORIES.length; index++) {
@@ -467,6 +469,9 @@ export default function App() {
         }
         for (const consultant of data.consultants ?? []) {
           consultantMap.set(consultant.consultant_key, consultant);
+        }
+        for (const org of data.targeting_organizations ?? []) {
+          targetingOrgMap.set(org.org_key, org);
         }
         for (const race of data.races ?? []) {
           nextRaces.push({
@@ -480,6 +485,13 @@ export default function App() {
       setRaces(nextRaces);
       setConsultants(
         [...consultantMap.values()].sort((a, b) => a.name.localeCompare(b.name))
+      );
+      const nextTargetingOrgs = [...targetingOrgMap.values()].sort((a, b) =>
+        a.org_key.localeCompare(b.org_key)
+      );
+      setTargetingOrganizations(nextTargetingOrgs);
+      setOrganizationFilter((prev) =>
+        prev.filter((orgKey) => targetingOrgMap.has(orgKey))
       );
       setSelectedOfficeId((prev) => {
         if (prev && nextRaces.some((race) => race.office_id === prev)) return prev;
@@ -611,7 +623,8 @@ export default function App() {
     categoryFilter === "sboe" ||
     categoryFilter === "statewide";
 
-  const showOrganizationFilter = categoryFilter === "all" || categoryFilter === "house";
+  const showOrganizationFilter =
+    (categoryFilter === "all" || categoryFilter === "house") && targetingOrganizations.length > 0;
 
   const activeFilterCount = useMemo(() => {
     let count = 0;
@@ -1148,16 +1161,17 @@ export default function App() {
                       >
                         All
                       </button>
-                      {HOUSE_TARGET_FILTER_OPTIONS.map((option) => (
+                      {targetingOrganizations.map((org) => (
                         <button
-                          key={option.orgKey}
+                          key={org.org_key}
                           type="button"
                           className={
-                            organizationFilter.includes(option.orgKey) ? "filter-chip active" : "filter-chip"
+                            organizationFilter.includes(org.org_key) ? "filter-chip active" : "filter-chip"
                           }
-                          onClick={() => toggleOrganizationFilter(option.orgKey)}
+                          onClick={() => toggleOrganizationFilter(org.org_key)}
+                          title={org.name}
                         >
-                          {option.label}
+                          {org.org_key}
                         </button>
                       ))}
                     </div>

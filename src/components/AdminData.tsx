@@ -79,6 +79,14 @@ const TABLE_COLUMNS: Record<string, string[]> = {
   office_metrics: ["office_code", "office_name", "trump_2024", "cruz_2024", "abbott_2022"],
 };
 
+const TABLE_COLUMN_LABELS: Record<string, Record<string, string>> = {
+  targeting_organizations: { name: "Targets" },
+};
+
+function columnLabel(tableId: string, column: string) {
+  return TABLE_COLUMN_LABELS[tableId]?.[column] ?? COLUMN_LABELS[column] ?? column;
+}
+
 function visibleColumns(tableId: string, row: Record<string, unknown>) {
   const keys = Object.keys(row);
   const preferred = TABLE_COLUMNS[tableId];
@@ -443,7 +451,7 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
       for (const column of insertableColumns) {
         const value = newRowFields[column];
         if (value == null || String(value).trim() === "") {
-          setError(`${COLUMN_LABELS[column] ?? column} is required`);
+          setError(`${columnLabel(selectedTable, column)} is required`);
           return;
         }
         fields[column] = value;
@@ -611,7 +619,7 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
         <div className="admin-add-row">
           {insertableColumns.map((column) => (
             <label key={column} className="admin-add-field">
-              <span className="admin-add-label">{COLUMN_LABELS[column] ?? column}</span>
+              <span className="admin-add-label">{columnLabel(selectedTable, column)}</span>
               <AdminTableCell
                 column={column}
                 value={newRowFields[column] ?? ""}
@@ -713,7 +721,7 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
                 <tr>
                   {columns.map((col) => (
                     <th key={col}>
-                      {COLUMN_LABELS[col] ?? col}
+                      {columnLabel(selectedTable, col)}
                       {editMode && editableColumns.has(col) ? <span className="admin-col-editable"> ✎</span> : null}
                     </th>
                   ))}

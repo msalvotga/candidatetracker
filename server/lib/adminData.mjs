@@ -170,7 +170,7 @@ const ADMIN_TABLES = {
       (await adminQueryTable(db, "offices", { ...filters, limit: 100000, offset: 0 })).rows,
   },
   targeting_organizations: {
-    label: "Targeting organizations",
+    label: "Targets",
     query: async (db, { limit, offset }) => {
       const rows = await db
         .prepare(
