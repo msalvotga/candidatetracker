@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { loadDataTabFilters, saveDataTabFilters } from "../lib/appTabFilters";
 import {
   bulkImportFinance,
@@ -57,13 +57,14 @@ const COLUMN_LABELS: Record<string, string> = {
   cycle_year: "Cycle year",
   is_incumbent: "Incumbent",
   running_for_reelection: "Running for reelection",
+  map_color: "Map color",
 };
 
 const TABLE_COLUMNS: Record<string, string[]> = {
   consultants: ["consultant_key", "name", "candidate_count"],
   targeting_organizations: ["org_key", "name"],
   offices: ["office_code", "office_name", "district", "county_name", "county_names", "seat_holder_name", "seat_holder_party", "up_for_reelection", "target_org_keys"],
-  tga_staffers: ["name", "office_ids", "county_names"],
+  tga_staffers: ["name", "map_color", "office_ids", "county_names"],
   metric_contest_candidates: [
     "office_code",
     "metric_key",
@@ -680,7 +681,8 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
       {editMode && selectedTable === "tga_staffers" ? (
         <p className="admin-add-hint">
           Track TGA staff by name, assign multiple districts (House, Senate, SBOE, and Congressional — not statewide),
-          and select counties they cover. Staff appear on race breakdowns when linked to that office or a county in that
+          and select counties they cover. Set <strong>map_color</strong> to a hex value (e.g. <code>#2563eb</code>) for
+          the staffer map legend. Staff appear on race breakdowns when linked to that office or a county in that
           district (assign counties on the Offices table).
         </p>
       ) : null}
@@ -742,6 +744,8 @@ export function AdminDataPanel({ cycleYear, editMode }: { cycleYear: number; edi
                                   ? String(row.county_labels ?? row.county_names ?? "")
                                   : col === "office_id"
                                     ? officeDisplayLabel(row)
+                                    : col === "map_color"
+                                      ? formatMapColorDisplay(rowEdits && col in rowEdits ? rowEdits[col] : row[col])
                                     : undefined
                             }
                             onChange={(value) => updateCell(rowId, col, value)}
@@ -810,11 +814,11 @@ function AdminTableCell({
   multiSelectOptions?: { value: string; label: string }[];
   selectOptions?: { value: string; label: string }[];
   selectValueKind?: string;
-  displayValue?: string;
+  displayValue?: ReactNode;
   onChange: (value: unknown) => void;
 }) {
   if (!editable) {
-    if (displayValue) return <span>{displayValue}</span>;
+    if (displayValue != null && displayValue !== "") return <span>{displayValue}</span>;
     return <span className={column === "candidate_count" ? "admin-count-cell" : undefined}>{formatCell(value, column)}</span>;
   }
 
@@ -933,6 +937,27 @@ function AdminTableCell({
     );
   }
 
+  if (column === "map_color") {
+    const textValue = value == null ? "" : String(value);
+    return (
+      <div className="admin-map-color-edit">
+        <span
+          className="admin-map-color-swatch"
+          style={{ background: textValue && /^#?[0-9a-f]{3,6}$/i.test(textValue) ? (textValue.startsWith("#") ? textValue : `#${textValue}`) : "#e5e7eb" }}
+          aria-hidden
+        />
+        <input
+          className={`edit-input edit-input-sm${changed ? " edit-input-changed" : ""}`}
+          type="text"
+          placeholder="#2563eb"
+          title="Hex color for staffer map (e.g. #2563eb)"
+          value={textValue}
+          onChange={(e) => onChange(e.target.value.trim() === "" ? null : e.target.value)}
+        />
+      </div>
+    );
+  }
+
   return (
     <input
       className={`edit-input edit-input-sm${changed ? " edit-input-changed" : ""}`}
@@ -943,8 +968,21 @@ function AdminTableCell({
   );
 }
 
-function formatCell(value: unknown, column?: string) {
+function formatMapColorDisplay(value: unknown) {
+  if (value == null || String(value).trim() === "") return "";
+  const text = String(value);
+  const hex = text.startsWith("#") ? text : `#${text}`;
+  return (
+    <span className="admin-map-color-display">
+      <span className="admin-map-color-swatch" style={{ background: hex }} aria-hidden />
+      {text}
+    </span>
+  );
+}
+
+function formatCell(value: unknown, column?: string): ReactNode {
   if (value == null) return column === "candidate_count" ? "0" : "";
+  if (column === "map_color") return formatMapColorDisplay(value);
   if (column === "candidate_count") return String(value);
   if (column === "vote_pct" && typeof value === "number") return `${(value * 100).toFixed(1)}%`;
   if (

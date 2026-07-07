@@ -3,6 +3,8 @@ import { syncCandidateConsultants, parseKeyList, formatKeyList, listConsultants 
 import { syncOfficeTargets } from "./targeting.mjs";
 import { listTexasCountyOptions } from "../data/texas-counties.mjs";
 import { parseLegMargin } from "./benchmarkMargin.mjs";
+import { normalizeTecFilerId } from "./tecFilerId.mjs";
+import { normalizeMapColor } from "./stafferMapColor.mjs";
 import { enrichElectionResultRows, syncContestMargin } from "./contestMetrics.mjs";
 import { enrichOfficeRowsWithCounties, syncOfficeCounties } from "./officeCounties.mjs";
 import {
@@ -201,7 +203,7 @@ const ADMIN_TABLES = {
     query: async (db, { limit, offset }) => {
       const rows = await db
         .prepare(
-          `SELECT s.id, s.name
+          `SELECT s.id, s.name, s.map_color
            FROM tga_staffers s
            ORDER BY s.name COLLATE NOCASE, s.id
            LIMIT @limit OFFSET @offset`
@@ -366,6 +368,12 @@ function coerceAdminValue(column, value) {
   }
   if (column === "contest_margin") {
     return parseLegMargin(value);
+  }
+  if (column === "tec_filer_id") {
+    return normalizeTecFilerId(value);
+  }
+  if (column === "map_color") {
+    return normalizeMapColor(value);
   }
   if (REAL_COLUMNS.has(column)) {
     const num = Number(String(value).replace(/[$,%\s]/g, ""));

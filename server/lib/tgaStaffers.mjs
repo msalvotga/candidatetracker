@@ -2,7 +2,7 @@ import { TEXAS_COUNTIES } from "../data/texas-counties.mjs";
 import { parseKeyList } from "./consultants.mjs";
 import { loadOfficeCountiesMap } from "./officeCounties.mjs";
 
-export const TGA_STAFFER_EDITABLE_COLUMNS = ["name", "office_ids", "county_names"];
+export const TGA_STAFFER_EDITABLE_COLUMNS = ["name", "map_color", "office_ids", "county_names"];
 
 export async function syncStafferOffices(db, stafferId, officeIds) {
   const ids = [
@@ -92,6 +92,7 @@ export async function enrichTgaStafferRows(db, rows) {
     return {
       id: row.id,
       name: row.name,
+      map_color: row.map_color ?? null,
       office_ids: offices.map((office) => String(office.office_id)).join(","),
       office_codes: offices.map((office) => office.office_code).join(", "),
       office_labels: offices.map((office) => `${office.office_code} — ${office.office_name}`).join("; "),
@@ -102,7 +103,7 @@ export async function enrichTgaStafferRows(db, rows) {
 }
 
 export async function fetchTgaStafferRow(db, stafferId) {
-  const row = await db.prepare(`SELECT id, name FROM tga_staffers WHERE id = ?`).get(stafferId);
+  const row = await db.prepare(`SELECT id, name, map_color FROM tga_staffers WHERE id = ?`).get(stafferId);
   if (!row) return null;
   const [enriched] = await enrichTgaStafferRows(db, [row]);
   return enriched;
@@ -116,7 +117,7 @@ export const HARRIS_HOUSE_DISTRICTS = [
 
 /** County coverage for the staffer map (direct county assignments only). */
 export async function fetchStafferMapData(db) {
-  const stafferRows = await db.prepare(`SELECT id, name FROM tga_staffers ORDER BY name`).all();
+  const stafferRows = await db.prepare(`SELECT id, name, map_color FROM tga_staffers ORDER BY name`).all();
   if (!stafferRows.length) return { staffers: [], districtStaffers: [] };
 
   const enriched = await enrichTgaStafferRows(db, stafferRows);
@@ -137,6 +138,7 @@ export async function fetchStafferMapData(db) {
         id: row.id,
         name: row.name,
         counties,
+        map_color: row.map_color ?? null,
       });
     }
 
@@ -153,6 +155,7 @@ export async function fetchStafferMapData(db) {
         id: row.id,
         name: row.name,
         districts,
+        map_color: row.map_color ?? null,
       });
     }
   }
@@ -191,7 +194,7 @@ export async function attachTgaStaffersToRaces(db, races, category) {
   if (!races.length || category === "statewide") return races;
 
   try {
-    const stafferRows = await db.prepare(`SELECT id, name FROM tga_staffers ORDER BY name`).all();
+    const stafferRows = await db.prepare(`SELECT id, name, map_color FROM tga_staffers ORDER BY name`).all();
     if (!stafferRows.length) return races;
 
     const enriched = await enrichTgaStafferRows(db, stafferRows);

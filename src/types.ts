@@ -196,12 +196,14 @@ export interface StafferMapEntry {
   id: number;
   name: string;
   counties: string[];
+  map_color?: string | null;
 }
 
 export interface StafferDistrictEntry {
   id: number;
   name: string;
   districts: number[];
+  map_color?: string | null;
 }
 
 export interface StafferMapResponse {

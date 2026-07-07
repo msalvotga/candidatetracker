@@ -717,6 +717,21 @@ h2 {
   z-index: 1;
 }
 
+.admin-map-color-edit,
+.admin-map-color-display {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.admin-map-color-swatch {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 0.2rem;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
 .admin-table-scroll-staffers {
   max-height: min(70vh, 900px);
 }

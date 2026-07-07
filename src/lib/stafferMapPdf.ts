@@ -1,6 +1,6 @@
 import { jsPDF } from "jspdf";
 import type { StafferMapEntry } from "../types";
-import { buildStafferColorMap, STAFFER_MAP_UNASSIGNED } from "./stafferColors";
+import { buildStafferColorMap, stafferColorOverrides, STAFFER_MAP_UNASSIGNED } from "./stafferColors";
 
 const MAP_ASPECT = 860 / 920;
 const MARGIN = 40;
@@ -175,9 +175,12 @@ export async function exportStafferMapPdf(options: {
   svg: SVGSVGElement;
   assignedCount: number;
   totalCounties: number;
+  colorByName?: Map<string, string>;
 }) {
-  const { staffers, svg, assignedCount, totalCounties } = options;
-  const colorByName = buildStafferColorMap(staffers.map((staffer) => staffer.name));
+  const { staffers, svg, assignedCount, totalCounties, colorByName: colorByNameInput } = options;
+  const colorByName =
+    colorByNameInput ??
+    buildStafferColorMap(staffers.map((staffer) => staffer.name), stafferColorOverrides(staffers));
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const contentWidth = pageWidth - MARGIN * 2;

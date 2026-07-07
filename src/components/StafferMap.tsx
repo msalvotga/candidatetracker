@@ -9,6 +9,7 @@ import {
 import {
   buildStafferColorMap,
   pickHighlightColors,
+  stafferColorOverrides,
   STAFFER_MAP_UNASSIGNED,
 } from "../lib/stafferColors";
 import { canonicalCountyKey } from "../lib/countyKeys";
@@ -80,7 +81,11 @@ export function StafferMap({
     for (const staffer of staffers) names.add(staffer.name);
     for (const staffer of districtStaffers) names.add(staffer.name);
     for (const staffer of harrisDistrictStaffersForMap(districtStaffers)) names.add(staffer.name);
-    return buildStafferColorMap([...names]);
+    const overrides = {
+      ...stafferColorOverrides(staffers),
+      ...stafferColorOverrides(districtStaffers),
+    };
+    return buildStafferColorMap([...names], overrides);
   }, [staffers, districtStaffers]);
 
   const highlightColors = useMemo(
@@ -240,6 +245,7 @@ export function StafferMap({
         svg,
         assignedCount,
         totalCounties: pathEntries.length,
+        colorByName,
       });
     } catch (err) {
       console.error("Staffer map PDF export failed:", err);

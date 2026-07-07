@@ -1,3 +1,5 @@
+import { normalizeTecFilerId } from "./tecFilerId.mjs";
+
 export function candidateLookupKey(officeId, name, party, isIncumbent) {
   return `${officeId}|${String(name).trim().toLowerCase()}|${party}|${isIncumbent ? 1 : 0}`;
 }
@@ -53,7 +55,7 @@ function storedRowToRaceCandidate(row) {
     party,
     is_incumbent: isIncumbentFlag(row.is_incumbent),
     filed: Boolean(row.filed),
-    tec_filer_id: row.tec_filer_id ?? null,
+    tec_filer_id: normalizeTecFilerId(row.tec_filer_id),
     consultant: row.consultant ?? null,
     endorsements: row.endorsements ?? null,
     notes: row.notes ?? null,

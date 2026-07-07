@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import pg from "pg";
 import { bindSql } from "./sql.mjs";
+import { DEFAULT_STAFFER_MAP_COLORS } from "./lib/stafferMapColor.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, "..");
@@ -114,6 +115,10 @@ async function runMigrations(pool) {
     )
   `);
   await pool.query(`
+    ALTER TABLE tga_staffers
+    ADD COLUMN IF NOT EXISTS map_color TEXT
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS tga_staffer_offices (
       staffer_id INTEGER NOT NULL REFERENCES tga_staffers(id) ON DELETE CASCADE,
       office_id INTEGER NOT NULL REFERENCES offices(id) ON DELETE CASCADE,
@@ -202,6 +207,12 @@ async function runMigrations(pool) {
     SET margin = margin / 100
     WHERE margin IS NOT NULL AND ABS(margin) > 1
   `);
+  for (const [name, color] of Object.entries(DEFAULT_STAFFER_MAP_COLORS)) {
+    await pool.query(`UPDATE tga_staffers SET map_color = $1 WHERE name = $2 AND map_color IS NULL`, [
+      color,
+      name,
+    ]);
+  }
 }
 
 export function getDb() {
