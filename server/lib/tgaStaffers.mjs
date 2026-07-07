@@ -160,7 +160,19 @@ export async function fetchStafferMapData(db) {
     }
   }
 
-  return { staffers, districtStaffers };
+  return { staffers, districtStaffers, stafferColors: await fetchStafferColorMap(db) };
+}
+
+/** All staffer map colors from the database (authoritative for legend and map). */
+export async function fetchStafferColorMap(db) {
+  const rows = await db
+    .prepare(`SELECT name, map_color FROM tga_staffers WHERE map_color IS NOT NULL AND TRIM(map_color) != ''`)
+    .all();
+  const stafferColors = {};
+  for (const row of rows) {
+    stafferColors[row.name] = row.map_color;
+  }
+  return stafferColors;
 }
 
 function staffersForOffice(officeId, stafferRows, officeCountiesMap) {

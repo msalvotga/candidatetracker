@@ -181,6 +181,7 @@ export default function App() {
   const [counties, setCounties] = useState<Awaited<ReturnType<typeof fetchCounties>>["counties"]>([]);
   const [stafferMap, setStafferMap] = useState<StafferMapEntry[]>([]);
   const [stafferDistrictMap, setStafferDistrictMap] = useState<StafferDistrictEntry[]>([]);
+  const [stafferColorMap, setStafferColorMap] = useState<Record<string, string>>({});
   const [selectedOfficeId, setSelectedOfficeId] = useState<number | null>(
     INITIAL_TAB_FILTERS.race.selectedOfficeId
   );
@@ -516,10 +517,12 @@ export default function App() {
       const data = await fetchStafferMap();
       setStafferMap(data.staffers ?? []);
       setStafferDistrictMap(data.districtStaffers ?? []);
+      setStafferColorMap(data.stafferColors ?? {});
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load staffer map");
       setStafferMap([]);
       setStafferDistrictMap([]);
+      setStafferColorMap({});
     } finally {
       setLoading(false);
     }
@@ -952,7 +955,11 @@ export default function App() {
               <code>npm run db:seed-tga-staffers</code>.
             </p>
           ) : (
-            <StafferMap staffers={stafferMap} districtStaffers={stafferDistrictMap} />
+            <StafferMap
+              staffers={stafferMap}
+              districtStaffers={stafferDistrictMap}
+              stafferColors={stafferColorMap}
+            />
           )}
         </div>
       ) : tab === "counties" ? (

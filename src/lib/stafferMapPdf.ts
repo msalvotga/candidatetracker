@@ -1,6 +1,11 @@
 import { jsPDF } from "jspdf";
-import type { StafferMapEntry } from "../types";
-import { buildStafferColorMap, stafferColorOverrides, STAFFER_MAP_UNASSIGNED } from "./stafferColors";
+import type { StafferDistrictEntry, StafferMapEntry } from "../types";
+import {
+  buildStafferColorMap,
+  buildStafferColorOverrideMap,
+  mergeStaffersForLegend,
+  STAFFER_MAP_UNASSIGNED,
+} from "./stafferColors";
 
 const MAP_ASPECT = 860 / 920;
 const MARGIN = 40;
@@ -172,15 +177,29 @@ function drawLegendBlock(doc: jsPDF, startY: number, layout: LegendLayout) {
 
 export async function exportStafferMapPdf(options: {
   staffers: StafferMapEntry[];
+  districtStaffers?: StafferDistrictEntry[];
+  stafferColors?: Record<string, string>;
   svg: SVGSVGElement;
   assignedCount: number;
   totalCounties: number;
   colorByName?: Map<string, string>;
 }) {
-  const { staffers, svg, assignedCount, totalCounties, colorByName: colorByNameInput } = options;
+  const {
+    staffers,
+    districtStaffers = [],
+    stafferColors,
+    svg,
+    assignedCount,
+    totalCounties,
+    colorByName: colorByNameInput,
+  } = options;
+  const legendStaffers = mergeStaffersForLegend(staffers, districtStaffers);
   const colorByName =
     colorByNameInput ??
-    buildStafferColorMap(staffers.map((staffer) => staffer.name), stafferColorOverrides(staffers));
+    buildStafferColorMap(
+      legendStaffers.map((staffer) => staffer.name),
+      buildStafferColorOverrideMap(stafferColors, staffers, districtStaffers)
+    );
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const contentWidth = pageWidth - MARGIN * 2;
@@ -204,9 +223,9 @@ export async function exportStafferMapPdf(options: {
   y += 20;
 
   const legendEntries: { label: string; color: string }[] = [
-    ...staffers.map((staffer) => ({
+    ...legendStaffers.map((staffer) => ({
       label: staffer.name,
-      color: colorByName.get(staffer.name)!,
+      color: colorByName.get(staffer.name) ?? STAFFER_MAP_UNASSIGNED,
     })),
     { label: "Unassigned", color: STAFFER_MAP_UNASSIGNED },
   ];
@@ -253,7 +272,7 @@ export async function exportStafferMapPdf(options: {
     const blockHeight = Math.max(LEGEND_LINE_HEIGHT, countyLines.length * 11 + 2);
     y = ensureSpace(doc, y, blockHeight);
 
-    drawLegendSwatch(doc, MARGIN, y, colorByName.get(staffer.name)!);
+    drawLegendSwatch(doc, MARGIN, y, colorByName.get(staffer.name) ?? STAFFER_MAP_UNASSIGNED);
     doc.text(staffer.name, MARGIN + 12, y);
     doc.text(countyLines, MARGIN + 150, y);
     y += blockHeight;

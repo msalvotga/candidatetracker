@@ -258,7 +258,7 @@ export function HarrisDistrictMap({
 
           <span key={name} className="staffer-map-legend-item">
 
-            <span className="staffer-map-legend-swatch" style={{ background: colorByName.get(name) }} />
+            <span className="staffer-map-legend-swatch" style={{ background: colorByName.get(name) ?? STAFFER_MAP_UNASSIGNED }} />
 
             {name}
 
@@ -276,7 +276,7 @@ export function HarrisDistrictMap({
 
               style={{
 
-                background: `linear-gradient(135deg, ${colorByName.get(names[0])} 50%, ${colorByName.get(names[1] ?? names[0])} 50%)`,
+                background: `linear-gradient(135deg, ${colorByName.get(names[0]) ?? STAFFER_MAP_UNASSIGNED} 50%, ${colorByName.get(names[1] ?? names[0]) ?? STAFFER_MAP_UNASSIGNED} 50%)`,
 
               }}
 

@@ -3,6 +3,7 @@ import { TEXAS_COUNTIES } from "./data/texas-counties.mjs";
 import { TGA_STAFFERS } from "./data/tga-staffers.mjs";
 import { seedOfficesIfEmpty } from "./seed-offices.mjs";
 import { syncStafferCounties, syncStafferOffices } from "./lib/tgaStaffers.mjs";
+import { seedDefaultStafferMapColors } from "./lib/stafferMapColor.mjs";
 
 function normalizeName(name) {
   return String(name ?? "").trim().replace(/\s+/g, " ");
@@ -126,11 +127,13 @@ export async function seedTgaStaffers(db) {
     await syncStafferCounties(db, stafferId, counties);
   }
 
+  const colorsSeeded = await seedDefaultStafferMapColors(db);
+
   const total = (await db.prepare(`SELECT COUNT(*) AS count FROM tga_staffers`).get()).count;
   const countyLinks = (await db.prepare(`SELECT COUNT(*) AS count FROM tga_staffer_counties`).get()).count;
   const officeLinks = (await db.prepare(`SELECT COUNT(*) AS count FROM tga_staffer_offices`).get()).count;
 
-  return { added, updated, total, countyLinks, officeLinks };
+  return { added, updated, total, countyLinks, officeLinks, colorsSeeded };
 }
 
 async function logTargetDatabase(db) {

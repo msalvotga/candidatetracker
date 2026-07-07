@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import pg from "pg";
 import { bindSql } from "./sql.mjs";
-import { DEFAULT_STAFFER_MAP_COLORS } from "./lib/stafferMapColor.mjs";
+import { seedDefaultStafferMapColors } from "./lib/stafferMapColor.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, "..");
@@ -94,6 +94,7 @@ export async function initDb() {
   const schema = fs.readFileSync(schemaPath, "utf8");
   await pool.query(schema);
   await runMigrations(pool);
+  await seedDefaultStafferMapColors(dbWrapper);
   return dbWrapper;
 }
 
@@ -207,12 +208,6 @@ async function runMigrations(pool) {
     SET margin = margin / 100
     WHERE margin IS NOT NULL AND ABS(margin) > 1
   `);
-  for (const [name, color] of Object.entries(DEFAULT_STAFFER_MAP_COLORS)) {
-    await pool.query(`UPDATE tga_staffers SET map_color = $1 WHERE name = $2 AND map_color IS NULL`, [
-      color,
-      name,
-    ]);
-  }
 }
 
 export function getDb() {

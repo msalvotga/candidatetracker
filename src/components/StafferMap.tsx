@@ -8,8 +8,9 @@ import {
 } from "../lib/harrisDistrictStaffers";
 import {
   buildStafferColorMap,
+  buildStafferColorOverrideMap,
+  mergeStaffersForLegend,
   pickHighlightColors,
-  stafferColorOverrides,
   STAFFER_MAP_UNASSIGNED,
 } from "../lib/stafferColors";
 import { canonicalCountyKey } from "../lib/countyKeys";
@@ -62,9 +63,11 @@ function CountyPattern({
 export function StafferMap({
   staffers,
   districtStaffers,
+  stafferColors,
 }: {
   staffers: StafferMapEntry[];
   districtStaffers: StafferDistrictEntry[];
+  stafferColors?: Record<string, string>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -76,17 +79,18 @@ export function StafferMap({
   const [harrisView, setHarrisView] = useState(false);
   const [zoomingHarris, setZoomingHarris] = useState(false);
 
+  const legendStaffers = useMemo(
+    () => mergeStaffersForLegend(staffers, districtStaffers),
+    [staffers, districtStaffers]
+  );
+
   const colorByName = useMemo(() => {
     const names = new Set<string>();
-    for (const staffer of staffers) names.add(staffer.name);
-    for (const staffer of districtStaffers) names.add(staffer.name);
+    for (const staffer of legendStaffers) names.add(staffer.name);
     for (const staffer of harrisDistrictStaffersForMap(districtStaffers)) names.add(staffer.name);
-    const overrides = {
-      ...stafferColorOverrides(staffers),
-      ...stafferColorOverrides(districtStaffers),
-    };
+    const overrides = buildStafferColorOverrideMap(stafferColors, staffers, districtStaffers);
     return buildStafferColorMap([...names], overrides);
-  }, [staffers, districtStaffers]);
+  }, [legendStaffers, staffers, districtStaffers, stafferColors]);
 
   const highlightColors = useMemo(
     () => pickHighlightColors(colorByName.values()),
@@ -242,6 +246,8 @@ export function StafferMap({
       const { exportStafferMapPdf } = await import("../lib/stafferMapPdf");
       await exportStafferMapPdf({
         staffers,
+        districtStaffers,
+        stafferColors,
         svg,
         assignedCount,
         totalCounties: pathEntries.length,
@@ -299,10 +305,10 @@ export function StafferMap({
       </header>
 
       <div className="staffer-map-legend" aria-label="Staffer legend">
-        {staffers.map((staffer) => {
+        {legendStaffers.map((staffer) => {
           const color = colorByName.get(staffer.name) ?? STAFFER_MAP_UNASSIGNED;
           return (
-            <span key={staffer.id} className="staffer-map-legend-item">
+            <span key={`${staffer.id}-${staffer.name}`} className="staffer-map-legend-item">
               <span className="staffer-map-legend-swatch" style={{ background: color }} />
               {staffer.name}
             </span>

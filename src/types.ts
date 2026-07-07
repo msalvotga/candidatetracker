@@ -209,4 +209,5 @@ export interface StafferDistrictEntry {
 export interface StafferMapResponse {
   staffers: StafferMapEntry[];
   districtStaffers: StafferDistrictEntry[];
+  stafferColors?: Record<string, string>;
 }
