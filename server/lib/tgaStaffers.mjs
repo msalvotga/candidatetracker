@@ -25,6 +25,33 @@ export async function syncStafferOffices(db, stafferId, officeIds) {
   await apply();
 }
 
+export async function syncCountyStafferAssignments(db, countyName, stafferIds) {
+  const name = String(countyName ?? "").trim();
+  if (!TEXAS_COUNTIES.includes(name)) throw new Error(`invalid county: ${name}`);
+
+  const ids = [
+    ...new Set(
+      stafferIds
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    ),
+  ];
+
+  for (const stafferId of ids) {
+    const staffer = await db.prepare(`SELECT id FROM tga_staffers WHERE id = ?`).get(stafferId);
+    if (!staffer) throw new Error(`staffer ${stafferId} not found`);
+  }
+
+  const apply = db.transaction(async () => {
+    await db.prepare(`DELETE FROM tga_staffer_counties WHERE county_name = ?`).run(name);
+    const insert = db.prepare(`INSERT INTO tga_staffer_counties (staffer_id, county_name) VALUES (?, ?)`);
+    for (const stafferId of ids) {
+      await insert.run(stafferId, name);
+    }
+  });
+  await apply();
+}
+
 export async function syncStafferCounties(db, stafferId, countyNames) {
   const names = [
     ...new Set(
@@ -118,7 +145,9 @@ export const HARRIS_HOUSE_DISTRICTS = [
 /** County coverage for the staffer map (direct county assignments only). */
 export async function fetchStafferMapData(db) {
   const stafferRows = await db.prepare(`SELECT id, name, map_color FROM tga_staffers ORDER BY name`).all();
-  if (!stafferRows.length) return { staffers: [], districtStaffers: [] };
+  if (!stafferRows.length) {
+    return { staffers: [], districtStaffers: [], allStaffers: [], stafferColors: {} };
+  }
 
   const enriched = await enrichTgaStafferRows(db, stafferRows);
 
@@ -160,7 +189,18 @@ export async function fetchStafferMapData(db) {
     }
   }
 
-  return { staffers, districtStaffers, stafferColors: await fetchStafferColorMap(db) };
+  const allStaffers = stafferRows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    map_color: row.map_color ?? null,
+  }));
+
+  return {
+    staffers,
+    districtStaffers,
+    allStaffers,
+    stafferColors: await fetchStafferColorMap(db),
+  };
 }
 
 /** All staffer map colors from the database (authoritative for legend and map). */

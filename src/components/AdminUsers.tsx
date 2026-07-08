@@ -7,6 +7,7 @@ type RowEdits = Record<number, Partial<AppUser> & { password?: string }>;
 
 const ROLE_OPTIONS: { id: UserRole; label: string }[] = [
   { id: "admin", label: "Admin" },
+  { id: "staff_edit", label: "Staff edit" },
   { id: "viewer", label: "Viewer" },
 ];
 
@@ -154,8 +155,8 @@ export function AdminUsersPanel() {
   return (
     <div className="admin-users-panel">
       <p className="admin-add-hint">
-        Manage login accounts. Usernames are email addresses. Create accounts here; promote to admin
-        for Data tab and edit access.
+        Manage login accounts. Usernames are email addresses. Admin gets Data tab and full edit access.
+        Staff edit can reassign counties on the Staffers map only. Viewers can browse and download the map PDF.
       </p>
 
       {error ? <div className="banner error">{error}</div> : null}

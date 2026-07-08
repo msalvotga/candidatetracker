@@ -121,3 +121,44 @@ export function normalizeConsultantFilterMode(
   if (mode === "select" && selectedConsultantKeys.length === 0) return "all";
   return mode;
 }
+
+const RACE_CATEGORY_SORT_ORDER: Record<OfficeCategory, number> = {
+  house: 0,
+  senate: 1,
+  sboe: 2,
+  statewide: 3,
+  congressional: 4,
+};
+
+function raceCategoryForSort(race: Race): OfficeCategory {
+  return race.category ?? "house";
+}
+
+/** Sort races by category, then district number, then ballot order (statewide), then office name. */
+export function compareRaces(a: Race, b: Race) {
+  const categoryA = raceCategoryForSort(a);
+  const categoryB = raceCategoryForSort(b);
+  const categoryOrder = RACE_CATEGORY_SORT_ORDER[categoryA] - RACE_CATEGORY_SORT_ORDER[categoryB];
+  if (categoryOrder !== 0) return categoryOrder;
+
+  const districtA = a.district;
+  const districtB = b.district;
+  if (districtA != null && districtB != null && districtA !== districtB) {
+    return districtA - districtB;
+  }
+  if (districtA != null && districtB == null) return -1;
+  if (districtA == null && districtB != null) return 1;
+
+  if (categoryA === "statewide") {
+    const sortA = a.sort_order ?? Number.MAX_SAFE_INTEGER;
+    const sortB = b.sort_order ?? Number.MAX_SAFE_INTEGER;
+    if (sortA !== sortB) return sortA - sortB;
+  }
+
+  const labelA = a.office_name?.trim() || a.office_code;
+  const labelB = b.office_name?.trim() || b.office_code;
+  const nameOrder = labelA.localeCompare(labelB, undefined, { sensitivity: "base" });
+  if (nameOrder !== 0) return nameOrder;
+
+  return a.office_code.localeCompare(b.office_code, undefined, { sensitivity: "base" });
+}

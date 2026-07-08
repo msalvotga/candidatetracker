@@ -7,6 +7,7 @@ const DEFAULT_PERMISSIONS: AppPermissions = {
   isAdmin: false,
   canAccessData: false,
   canEdit: false,
+  canEditStafferMap: false,
   canManageUsers: false,
 };
 

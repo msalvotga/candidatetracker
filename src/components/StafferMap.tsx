@@ -10,11 +10,10 @@ import {
   buildStafferColorMap,
   buildStafferColorOverrideMap,
   mergeStaffersForLegend,
-  pickHighlightColors,
   STAFFER_MAP_UNASSIGNED,
 } from "../lib/stafferColors";
 import { canonicalCountyKey } from "../lib/countyKeys";
-import type { StafferDistrictEntry, StafferMapEntry } from "../types";
+import type { StafferDistrictEntry, StafferMapEntry, StafferOption } from "../types";
 
 const HARRIS_COUNTY_KEY = canonicalCountyKey("Harris");
 
@@ -28,8 +27,10 @@ interface TooltipState {
 interface CountyPickerState {
   countyName: string;
   countyKey: string;
+  assignedStafferIds: number[];
   x: number;
   y: number;
+  saving: boolean;
 }
 
 function patternKey(stafferNames: string[]) {
@@ -63,18 +64,26 @@ function CountyPattern({
 export function StafferMap({
   staffers,
   districtStaffers,
+  allStaffers = [],
   stafferColors,
+  canEdit = false,
+  onSaveCountyAssignments,
 }: {
   staffers: StafferMapEntry[];
   districtStaffers: StafferDistrictEntry[];
+  allStaffers?: StafferOption[];
   stafferColors?: Record<string, string>;
+  canEdit?: boolean;
+  onSaveCountyAssignments?: (
+    countyName: string,
+    stafferIds: number[]
+  ) => Promise<void>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const [countyPicker, setCountyPicker] = useState<CountyPickerState | null>(null);
-  const [countyHighlights, setCountyHighlights] = useState<Record<string, string>>({});
   const [exportingPdf, setExportingPdf] = useState(false);
   const [harrisView, setHarrisView] = useState(false);
   const [zoomingHarris, setZoomingHarris] = useState(false);
@@ -92,10 +101,23 @@ export function StafferMap({
     return buildStafferColorMap([...names], overrides);
   }, [legendStaffers, staffers, districtStaffers, stafferColors]);
 
-  const highlightColors = useMemo(
-    () => pickHighlightColors(colorByName.values()),
-    [colorByName]
-  );
+  const stafferOptions = useMemo(() => (Array.isArray(allStaffers) ? allStaffers : []), [allStaffers]);
+
+  const pickerColorByName = useMemo(() => {
+    const names = new Set<string>();
+    for (const staffer of stafferOptions) names.add(staffer.name);
+    for (const staffer of legendStaffers) names.add(staffer.name);
+    for (const staffer of harrisDistrictStaffersForMap(districtStaffers)) names.add(staffer.name);
+    const overrides = {
+      ...(stafferColors ?? {}),
+      ...Object.fromEntries(
+        stafferOptions
+          .filter((staffer) => staffer.map_color)
+          .map((staffer) => [staffer.name, staffer.map_color as string])
+      ),
+    };
+    return buildStafferColorMap([...names], overrides);
+  }, [stafferOptions, legendStaffers, districtStaffers, stafferColors]);
 
   const staffersByCountyKey = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -108,6 +130,21 @@ export function StafferMap({
     }
     for (const names of map.values()) {
       names.sort((a, b) => a.localeCompare(b));
+    }
+    return map;
+  }, [staffers]);
+
+  const stafferIdsByCountyKey = useMemo(() => {
+    const map = new Map<string, number[]>();
+    for (const staffer of staffers) {
+      for (const county of staffer.counties) {
+        const key = canonicalCountyKey(county);
+        if (!map.has(key)) map.set(key, []);
+        map.get(key)!.push(staffer.id);
+      }
+    }
+    for (const ids of map.values()) {
+      ids.sort((a, b) => a - b);
     }
     return map;
   }, [staffers]);
@@ -139,7 +176,10 @@ export function StafferMap({
     return count;
   }, [pathEntries, staffersByCountyKey]);
 
-  const highlightedCount = Object.keys(countyHighlights).length;
+  const sortedAllStaffers = useMemo(
+    () => [...stafferOptions].sort((a, b) => a.name.localeCompare(b.name)),
+    [stafferOptions]
+  );
 
   useEffect(() => {
     if (!countyPicker) return;
@@ -148,8 +188,13 @@ export function StafferMap({
       if (pickerRef.current?.contains(target)) return;
       setCountyPicker(null);
     }
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
+    const timer = window.setTimeout(() => {
+      document.addEventListener("pointerdown", handlePointerDown);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
   }, [countyPicker]);
 
   function showTooltip(e: React.MouseEvent, countyName: string, stafferNames: string[]) {
@@ -176,8 +221,10 @@ export function StafferMap({
     setCountyPicker({
       countyName,
       countyKey,
+      assignedStafferIds: [...(stafferIdsByCountyKey.get(countyKey) ?? [])],
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
+      saving: false,
     });
   }
 
@@ -210,23 +257,30 @@ export function StafferMap({
     setZoomingHarris(false);
   }
 
-  function applyCountyHighlight(countyKey: string, color: string) {
-    setCountyHighlights((prev) => ({ ...prev, [countyKey]: color }));
-    setCountyPicker(null);
+  async function toggleStafferAssignment(stafferId: number) {
+    if (!canEdit || !countyPicker || !onSaveCountyAssignments || countyPicker.saving) return;
+
+    const previousIds = countyPicker.assignedStafferIds;
+    const nextIds = previousIds.includes(stafferId)
+      ? previousIds.filter((id) => id !== stafferId)
+      : [...previousIds, stafferId].sort((a, b) => a - b);
+
+    setCountyPicker((prev) =>
+      prev ? { ...prev, assignedStafferIds: nextIds, saving: true } : prev
+    );
+
+    try {
+      await onSaveCountyAssignments(countyPicker.countyName, nextIds);
+      setCountyPicker((prev) => (prev ? { ...prev, saving: false } : prev));
+    } catch (err) {
+      setCountyPicker((prev) =>
+        prev ? { ...prev, assignedStafferIds: previousIds, saving: false } : prev
+      );
+      window.alert(err instanceof Error ? err.message : "Failed to save county assignment");
+    }
   }
 
-  function clearCountyHighlight(countyKey: string) {
-    setCountyHighlights((prev) => {
-      const next = { ...prev };
-      delete next[countyKey];
-      return next;
-    });
-    setCountyPicker(null);
-  }
-
-  function countyFill(countyKey: string, stafferNames: string[]) {
-    const highlight = countyHighlights[countyKey];
-    if (highlight) return highlight;
+  function countyFill(stafferNames: string[]) {
     if (stafferNames.length === 1) {
       return colorByName.get(stafferNames[0]) ?? STAFFER_MAP_UNASSIGNED;
     }
@@ -289,8 +343,10 @@ export function StafferMap({
             <h2 className="staffer-map-title">TGA staffer territories</h2>
             <p className="staffer-map-subtitle">
               {assignedCount} of {pathEntries.length} counties assigned · county-based staffers only
-              {highlightedCount > 0 ? ` · ${highlightedCount} highlighted` : ""}
-              · click a county to highlight · click Harris for house districts
+              {canEdit
+                ? " · click a county to assign staffers"
+                : " · click a county to view assignments"}
+              · click Harris for house districts
             </p>
           </div>
           <button
@@ -340,8 +396,7 @@ export function StafferMap({
           {pathEntries.map(([fips, entry]) => {
             const key = canonicalCountyKey(entry.name);
             const stafferNames = staffersByCountyKey.get(key) ?? [];
-            const fill = countyFill(key, stafferNames);
-            const isHighlighted = Boolean(countyHighlights[key]);
+            const fill = countyFill(stafferNames);
             const isPickerTarget = countyPicker?.countyKey === key;
 
             return (
@@ -351,7 +406,7 @@ export function StafferMap({
                 fill={fill}
                 stroke={isPickerTarget ? "#ffffff" : "#1a2332"}
                 strokeWidth={isPickerTarget ? 1.2 : 0.5}
-                className={`staffer-map-county${isHighlighted ? " staffer-map-county-highlighted" : ""}${key === HARRIS_COUNTY_KEY ? " staffer-map-county-harris" : ""}`}
+                className={`staffer-map-county${key !== HARRIS_COUNTY_KEY ? " staffer-map-county-editable" : ""}${key === HARRIS_COUNTY_KEY ? " staffer-map-county-harris" : ""}`}
                 onMouseEnter={(e) => showTooltip(e, entry.name, stafferNames)}
                 onMouseMove={(e) => showTooltip(e, entry.name, stafferNames)}
                 onMouseLeave={() => setTooltip(null)}
@@ -388,7 +443,9 @@ export function StafferMap({
             <strong>{tooltip.countyName}</strong>
             {tooltip.countyName === "Harris" ? (
               <div className="staffer-map-tooltip-hint">Click to view house districts</div>
-            ) : null}
+            ) : (
+              <div className="staffer-map-tooltip-hint">Click to view staffer assignments</div>
+            )}
             {tooltip.staffers.length ? (
               <div>{tooltip.staffers.join(", ")}</div>
             ) : (
@@ -399,34 +456,40 @@ export function StafferMap({
         {countyPicker ? (
           <div
             ref={pickerRef}
-            className="staffer-map-color-picker"
+            className="staffer-map-assign-picker"
             style={{ left: countyPicker.x + 12, top: countyPicker.y + 12 }}
             role="dialog"
-            aria-label={`Highlight ${countyPicker.countyName}`}
+            aria-label={`Assign staffers to ${countyPicker.countyName}`}
           >
             <strong>{countyPicker.countyName}</strong>
-            <p className="staffer-map-color-picker-hint">Choose a highlight color</p>
-            <div className="staffer-map-color-options">
-              {highlightColors.map((color) => (
-                <button
-                  key={color}
-                  type="button"
-                  className="staffer-map-color-option"
-                  style={{ background: color }}
-                  aria-label={`Highlight ${countyPicker.countyName} ${color}`}
-                  onClick={() => applyCountyHighlight(countyPicker.countyKey, color)}
-                />
-              ))}
+            <p className="staffer-map-assign-picker-hint">
+              {countyPicker.saving
+                ? "Saving…"
+                : canEdit
+                  ? "Assign staffers to this county"
+                  : "Staff edit or admin login required to edit"}
+            </p>
+            <div className="staffer-map-assign-options">
+              {sortedAllStaffers.map((staffer) => {
+                const checked = countyPicker.assignedStafferIds.includes(staffer.id);
+                const color = pickerColorByName.get(staffer.name) ?? STAFFER_MAP_UNASSIGNED;
+                return (
+                  <label
+                    key={staffer.id}
+                    className={`staffer-map-assign-option${checked ? " staffer-map-assign-option-checked" : ""}${canEdit ? "" : " staffer-map-assign-option-readonly"}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={!canEdit || countyPicker.saving}
+                      onChange={() => void toggleStafferAssignment(staffer.id)}
+                    />
+                    <span className="staffer-map-legend-swatch" style={{ background: color }} />
+                    <span>{staffer.name}</span>
+                  </label>
+                );
+              })}
             </div>
-            {countyHighlights[countyPicker.countyKey] ? (
-              <button
-                type="button"
-                className="staffer-map-color-clear"
-                onClick={() => clearCountyHighlight(countyPicker.countyKey)}
-              >
-                Clear highlight
-              </button>
-            ) : null}
           </div>
         ) : null}
       </div>

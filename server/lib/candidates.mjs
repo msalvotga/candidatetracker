@@ -22,7 +22,7 @@ export async function fetchCandidateIdentity(db, candidateId) {
 export async function loadCandidatesForCategory(db, category, cycleYear) {
   return db
     .prepare(
-      `SELECT c.id, c.office_id, o.office_code, o.office_name, o.district,
+      `SELECT c.id, c.office_id, o.office_code, o.office_name, o.district, o.sort_order,
               c.name, c.party, c.is_incumbent, c.vuid,
               c.filed, c.tec_filer_id, c.consultant, c.endorsements, c.notes,
               c.website, c.social_media, c.running_for_reelection, c.race_category
@@ -82,6 +82,7 @@ export function buildRacesFromCandidates(storedRows, metricsByOffice, metricFiel
         office_code: row.office_code,
         office_name: row.office_name,
         district: row.district,
+        sort_order: row.sort_order,
         metrics: metricFields.map((field) => {
           const winningParty = uncontestedMap.get(`${row.office_id}|${field.key}`) ?? null;
           return {

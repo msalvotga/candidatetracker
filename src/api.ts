@@ -87,6 +87,22 @@ export async function fetchStafferMap(): Promise<StafferMapResponse> {
   return res.json();
 }
 
+export async function saveCountyStafferAssignments(
+  countyName: string,
+  stafferIds: number[]
+): Promise<StafferMapResponse> {
+  const res = await apiFetch("/api/tga-staffers/county-assignments", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ county_name: countyName, staffer_ids: stafferIds }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Failed to save county assignments (${res.status})`);
+  }
+  return res.json();
+}
+
 export async function saveOfficeMetric(officeId: number, key: string, value: number | null) {
   const res = await apiFetch(`/api/offices/${officeId}/metrics`, {
     method: "PATCH",
@@ -267,6 +283,46 @@ export async function bulkImportFinance(rows: Record<string, string>[]) {
     throw new Error(body.error ?? "Bulk import failed");
   }
   return res.json() as Promise<{ imported: number; errors: { row: number; error: string }[] }>;
+}
+
+export async function bulkImportElectionResults(rows: Record<string, string>[]) {
+  const res = await apiFetch("/api/admin/election-results/bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rows }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "Bulk import failed");
+  }
+  return res.json() as Promise<{
+    processed: number;
+    imported: number;
+    inserted: number;
+    updated: number;
+    unchanged: number;
+    errors: { row: number; error: string }[];
+  }>;
+}
+
+export async function bulkImportElectionResultsCsv(csvText: string) {
+  const res = await apiFetch("/api/admin/election-results/bulk-csv", {
+    method: "POST",
+    headers: { "Content-Type": "text/csv" },
+    body: csvText,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "Bulk import failed");
+  }
+  return res.json() as Promise<{
+    processed: number;
+    imported: number;
+    inserted: number;
+    updated: number;
+    unchanged: number;
+    errors: { row: number; error: string }[];
+  }>;
 }
 
 export async function saveCandidateConsultants(candidateId: number, consultant_keys: string[]) {

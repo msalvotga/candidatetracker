@@ -603,6 +603,34 @@ h2 {
   font-size: 0.85rem;
 }
 
+.admin-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  flex-shrink: 0;
+  padding-top: 0.75rem;
+}
+
+.admin-pagination-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.admin-pagination-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.admin-pagination-size select {
+  min-width: 5rem;
+}
+
 .admin-data-header {
   display: flex;
   justify-content: space-between;
@@ -620,6 +648,11 @@ h2 {
 
 .admin-file-button {
   cursor: pointer;
+}
+
+.admin-file-button-busy {
+  opacity: 0.7;
+  cursor: wait;
 }
 
 .admin-data-filters {
@@ -2183,10 +2216,13 @@ body.race-layout-resizing .race-layout-resizer {
   user-select: none;
 }
 
-.staffer-map-color-picker {
+.staffer-map-assign-picker {
   position: absolute;
   z-index: 3;
-  min-width: 10rem;
+  min-width: 12rem;
+  max-width: 16rem;
+  max-height: min(20rem, 70vh);
+  overflow: auto;
   background: rgba(15, 20, 25, 0.97);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2195,50 +2231,61 @@ body.race-layout-resizing .race-layout-resizer {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
-.staffer-map-color-picker strong {
+.staffer-map-assign-picker strong {
   display: block;
   margin-bottom: 0.15rem;
 }
 
-.staffer-map-color-picker-hint {
+.staffer-map-assign-picker-hint {
   margin: 0 0 0.45rem;
   color: var(--muted);
   font-size: 0.75rem;
 }
 
-.staffer-map-color-options {
-  display: grid;
-  grid-template-columns: repeat(3, 1.15rem);
-  gap: 0.35rem;
+.staffer-map-assign-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
 }
 
-.staffer-map-color-option {
-  width: 1.15rem;
-  height: 1.15rem;
-  padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  border-radius: 3px;
+.staffer-map-assign-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.15rem;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.staffer-map-assign-option:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.staffer-map-assign-option-checked {
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.staffer-map-assign-option input {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.staffer-map-assign-option-readonly {
+  cursor: default;
+  opacity: 0.92;
+}
+
+.staffer-map-assign-option-readonly:hover {
+  background: transparent;
+}
+
+.staffer-map-county-editable {
   cursor: pointer;
 }
 
-.staffer-map-color-option:hover {
-  transform: scale(1.08);
-  border-color: #fff;
-}
-
-.staffer-map-color-clear {
-  margin-top: 0.45rem;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--accent);
-  font: inherit;
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-
-.staffer-map-color-clear:hover {
-  text-decoration: underline;
+.staffer-map-county-editable:hover {
+  filter: brightness(1.08);
 }
 
 .staffer-map-tooltip-empty {

@@ -27,6 +27,7 @@
     "db:seed-bootstrap-admin": "node server/seed-bootstrap-admin.mjs",
     "db:seed-tga-staffers": "node server/seed-tga-staffers.mjs",
     "db:normalize-tec-filer-ids": "node server/normalize-tec-filer-ids.mjs",
+    "db:export-election-results": "node server/export-election-results.mjs",
     "db:gen-harris-hd-paths": "node server/scripts/gen-harris-hd-paths.mjs",
     "db:sync-contest-metrics": "node server/sync-contest-metrics.mjs",
     "db:migrate-from-sqlite": "node server/migrate-sqlite-to-pg.mjs",

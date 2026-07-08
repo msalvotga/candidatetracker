@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { addFinanceReport, fetchCounties, fetchMetricContest, fetchRaces, fetchStafferMap, saveCandidateConsultants } from "./api";
+import { addFinanceReport, fetchCounties, fetchMetricContest, fetchRaces, fetchStafferMap, saveCandidateConsultants, saveCountyStafferAssignments } from "./api";
 import { AdminDataPanel } from "./components/AdminData";
 import { AdminUsersPanel } from "./components/AdminUsers";
 import { CandidateDetailModal, CandidateSummary } from "./components/CandidateDetailModal";
@@ -31,6 +31,7 @@ import {
   isOfficeFlagTrue,
   matchesSeatHolderFilter,
   matchesTrumpSwingFilter,
+  compareRaces,
   raceSeatHolder,
   raceCurrentHolderLabel,
   raceGopCandidateLabel,
@@ -52,6 +53,7 @@ import type {
   RaceMetric,
   StafferDistrictEntry,
   StafferMapEntry,
+  StafferOption,
   TargetingOrganization,
 } from "./types";
 
@@ -79,6 +81,21 @@ const COUNTY_ELECTIONS: { id: CountyElection; label: string }[] = [
   { id: "cruz_2024", label: "2024 Cruz" },
   { id: "abbott_2022", label: "2022 Abbott" },
 ];
+
+function stafferOptionsFromMapData(
+  allStaffers: StafferOption[] | undefined,
+  staffers: StafferMapEntry[],
+  districtStaffers: StafferDistrictEntry[]
+): StafferOption[] {
+  if (Array.isArray(allStaffers) && allStaffers.length > 0) return allStaffers;
+  const byId = new Map<number, StafferOption>();
+  for (const entry of [...staffers, ...districtStaffers]) {
+    if (!byId.has(entry.id)) {
+      byId.set(entry.id, { id: entry.id, name: entry.name, map_color: entry.map_color ?? null });
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
 
 function partyLabel(party: string) {
   if (party === "R") return "GOP";
@@ -181,6 +198,7 @@ export default function App() {
   const [counties, setCounties] = useState<Awaited<ReturnType<typeof fetchCounties>>["counties"]>([]);
   const [stafferMap, setStafferMap] = useState<StafferMapEntry[]>([]);
   const [stafferDistrictMap, setStafferDistrictMap] = useState<StafferDistrictEntry[]>([]);
+  const [allStaffers, setAllStaffers] = useState<StafferOption[]>([]);
   const [stafferColorMap, setStafferColorMap] = useState<Record<string, string>>({});
   const [selectedOfficeId, setSelectedOfficeId] = useState<number | null>(
     INITIAL_TAB_FILTERS.race.selectedOfficeId
@@ -527,18 +545,35 @@ export default function App() {
     setError("");
     try {
       const data = await fetchStafferMap();
-      setStafferMap(data.staffers ?? []);
-      setStafferDistrictMap(data.districtStaffers ?? []);
+      const nextStaffers = data.staffers ?? [];
+      const nextDistrictStaffers = data.districtStaffers ?? [];
+      setStafferMap(nextStaffers);
+      setStafferDistrictMap(nextDistrictStaffers);
+      setAllStaffers(stafferOptionsFromMapData(data.allStaffers, nextStaffers, nextDistrictStaffers));
       setStafferColorMap(data.stafferColors ?? {});
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load staffer map");
       setStafferMap([]);
       setStafferDistrictMap([]);
+      setAllStaffers([]);
       setStafferColorMap({});
     } finally {
       setLoading(false);
     }
   }, [tab]);
+
+  const handleSaveCountyStafferAssignments = useCallback(
+    async (countyName: string, stafferIds: number[]) => {
+      const data = await saveCountyStafferAssignments(countyName, stafferIds);
+      const nextStaffers = data.staffers ?? [];
+      const nextDistrictStaffers = data.districtStaffers ?? [];
+      setStafferMap(nextStaffers);
+      setStafferDistrictMap(nextDistrictStaffers);
+      setAllStaffers(stafferOptionsFromMapData(data.allStaffers, nextStaffers, nextDistrictStaffers));
+      setStafferColorMap(data.stafferColors ?? {});
+    },
+    []
+  );
 
   useEffect(() => {
     if (tab !== "staffers") return;
@@ -603,7 +638,7 @@ export default function App() {
       if (!matchesConsultantFilter(race, consultantFilter)) return false;
 
       return true;
-    });
+    }).sort(compareRaces);
   }, [
     races,
     filter,
@@ -962,16 +997,23 @@ export default function App() {
         <AdminUsersPanel />
       ) : tab === "staffers" ? (
         <div className="staffers-panel">
-          {stafferMap.length === 0 ? (
+          {allStaffers.length === 0 &&
+          stafferMap.length === 0 &&
+          stafferDistrictMap.length === 0 ? (
             <p className="loading">
-              No staffer county assignments yet. Add staffers and counties in the Data tab, or run{" "}
+              No TGA staffers yet. Add staffers in the Data tab, or run{" "}
               <code>npm run db:seed-tga-staffers</code>.
             </p>
           ) : (
             <StafferMap
               staffers={stafferMap}
               districtStaffers={stafferDistrictMap}
+              allStaffers={allStaffers}
               stafferColors={stafferColorMap}
+              canEdit={permissions.canEditStafferMap}
+              onSaveCountyAssignments={
+                permissions.canEditStafferMap ? handleSaveCountyStafferAssignments : undefined
+              }
             />
           )}
         </div>

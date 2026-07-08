@@ -16,6 +16,7 @@ import {
   loadAdminMultiSelectOptions,
   deleteAdminTableRow,
 } from "./lib/adminData.mjs";
+import { bulkImportElectionResults, ELECTION_RESULTS_BULK_TEMPLATE, parseElectionResultsCsv } from "./lib/electionResultsImport.mjs";
 import { listConsultants, loadCandidateConsultantsMap, attachConsultantsToRaces, addConsultant, syncCandidateConsultants, parseKeyList } from "./lib/consultants.mjs";
 import { buildRacesFromCandidates, updateCandidateVuid, loadCandidatesForCategory } from "./lib/candidates.mjs";
 import { addFinanceReport, attachFinanceHistoryToRaces, bulkImportFinanceReports, loadFinanceHistoryMap } from "./lib/financeReports.mjs";
@@ -27,7 +28,11 @@ import { seedOfficesIfEmpty } from "./seed-offices.mjs";
 import {
   attachSeatHoldersToRaces,
 } from "./lib/seatHolder.mjs";
-import { attachTgaStaffersToRaces, fetchStafferMapData } from "./lib/tgaStaffers.mjs";
+import {
+  attachTgaStaffersToRaces,
+  fetchStafferMapData,
+  syncCountyStafferAssignments,
+} from "./lib/tgaStaffers.mjs";
 import { seedHouseOfficeCounties } from "./seed-house-office-counties.mjs";
 import {
   addTargetingOrganization,
@@ -35,7 +40,7 @@ import {
   listTargetingOrganizations,
   loadOfficeTargetsByOffice,
 } from "./lib/targeting.mjs";
-import { resolveAuth, requireAdmin, requireAuth, loginUser, logoutUser, initAuth, clientIp } from "./lib/auth.mjs";
+import { resolveAuth, requireAdmin, requireAuth, requireStafferMapEdit, loginUser, logoutUser, initAuth, clientIp } from "./lib/auth.mjs";
 import { ensureBootstrapAdmin } from "./lib/bootstrapAdmin.mjs";
 import { createAppUser, deleteAppUser, listAppUsers, updateAppUser } from "./lib/users.mjs";
 
@@ -46,7 +51,8 @@ const app = express();
 
 app.set("trust proxy", true);
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "25mb" }));
+app.use(express.text({ type: ["text/csv", "text/plain", "application/csv"], limit: "25mb" }));
 
 app.use(async (req, _res, next) => {
   try {
@@ -205,7 +211,7 @@ async function expandRacesWithAllOffices(db, races, metricsByOffice, category, u
 
   const offices = await db
     .prepare(
-      `SELECT id AS office_id, office_code, office_name, district
+      `SELECT id AS office_id, office_code, office_name, district, sort_order
        FROM offices
        WHERE category = ?
        ORDER BY sort_order, district, office_code`
@@ -217,7 +223,7 @@ async function expandRacesWithAllOffices(db, races, metricsByOffice, category, u
 
   return offices.map((office) => {
     const existing = byOfficeId.get(office.office_id);
-    if (existing) return existing;
+    if (existing) return { ...existing, sort_order: office.sort_order };
 
     const metrics = metricsByOffice.get(office.office_id) ?? {};
     return {
@@ -225,6 +231,7 @@ async function expandRacesWithAllOffices(db, races, metricsByOffice, category, u
       office_code: office.office_code,
       office_name: office.office_name,
       district: office.district,
+      sort_order: office.sort_order,
       metrics: metricFields.map((field) => {
         const winningParty = uncontestedMap.get(`${office.office_id}|${field.key}`) ?? null;
         return {
@@ -371,6 +378,27 @@ app.get("/api/tga-staffers/map", async (_req, res) => {
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message ?? "failed to load staffer map" });
+  }
+});
+
+app.patch("/api/tga-staffers/county-assignments", requireStafferMapEdit, async (req, res) => {
+  const countyName = String(req.body?.county_name ?? "").trim();
+  const stafferIds = Array.isArray(req.body?.staffer_ids) ? req.body.staffer_ids : null;
+  if (!countyName) {
+    res.status(400).json({ error: "county_name is required" });
+    return;
+  }
+  if (!stafferIds) {
+    res.status(400).json({ error: "staffer_ids must be an array" });
+    return;
+  }
+  try {
+    const db = getDb();
+    await syncCountyStafferAssignments(db, countyName, stafferIds);
+    const data = await fetchStafferMapData(db);
+    res.json(data);
+  } catch (err) {
+    res.status(400).json({ error: err.message ?? "failed to save county assignments" });
   }
 });
 
@@ -679,7 +707,8 @@ app.get("/api/admin/export/:tableName.csv", async (req, res) => {
     const db = getDb();
     const csv = await exportTableCsv(db, tableName, { cycleYear, category });
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="${tableName}.csv"`);
+    const downloadName = tableName === "metric_contest_candidates" ? "election-results" : tableName;
+    res.setHeader("Content-Disposition", `attachment; filename="${downloadName}.csv"`);
     res.send(csv);
   } catch (err) {
     res.status(400).json({ error: err.message ?? "export failed" });
@@ -692,6 +721,12 @@ app.get("/api/admin/finance/template.csv", (_req, res) => {
   res.send(`${FINANCE_BULK_TEMPLATE}\n`);
 });
 
+app.get("/api/admin/election-results/template.csv", (_req, res) => {
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="election-results-import-template.csv"');
+  res.send(`${ELECTION_RESULTS_BULK_TEMPLATE}\n`);
+});
+
 app.post("/api/admin/finance/bulk", async (req, res) => {
   const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
   if (!rows?.length) {
@@ -701,6 +736,33 @@ app.post("/api/admin/finance/bulk", async (req, res) => {
   const db = getDb();
   const result = await bulkImportFinanceReports(db, rows);
   res.json(result);
+});
+
+app.post("/api/admin/election-results/bulk", async (req, res) => {
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+  if (!rows?.length) {
+    res.status(400).json({ error: "body.rows must be a non-empty array" });
+    return;
+  }
+  const db = getDb();
+  const result = await bulkImportElectionResults(db, rows);
+  res.json(result);
+});
+
+app.post("/api/admin/election-results/bulk-csv", async (req, res) => {
+  const csvText = typeof req.body === "string" ? req.body : "";
+  const rows = parseElectionResultsCsv(csvText);
+  if (!rows.length) {
+    res.status(400).json({ error: "CSV has no data rows" });
+    return;
+  }
+  try {
+    const db = getDb();
+    const result = await bulkImportElectionResults(db, rows);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message ?? "import failed" });
+  }
 });
 
 app.patch("/api/admin/candidates/:candidateId/vuid", async (req, res) => {

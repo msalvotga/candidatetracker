@@ -1,6 +1,6 @@
 export type OfficeCategory = "house" | "senate" | "sboe" | "statewide" | "congressional";
 export type AppTab = "races" | "counties" | "staffers" | "data" | "admin";
-export type UserRole = "admin" | "viewer";
+export type UserRole = "admin" | "viewer" | "staff_edit";
 
 export interface AppUser {
   id: number;
@@ -16,6 +16,7 @@ export interface AppPermissions {
   isAdmin: boolean;
   canAccessData: boolean;
   canEdit: boolean;
+  canEditStafferMap: boolean;
   canManageUsers: boolean;
 }
 
@@ -99,6 +100,8 @@ export interface Race {
   office_code: string;
   office_name: string;
   district: number | null;
+  /** Ballot order for statewide offices (from offices.sort_order). */
+  sort_order?: number | null;
   /** Set when races from multiple categories are loaded together. */
   category?: OfficeCategory;
   metrics: RaceMetric[];
@@ -206,8 +209,15 @@ export interface StafferDistrictEntry {
   map_color?: string | null;
 }
 
+export interface StafferOption {
+  id: number;
+  name: string;
+  map_color?: string | null;
+}
+
 export interface StafferMapResponse {
   staffers: StafferMapEntry[];
   districtStaffers: StafferDistrictEntry[];
+  allStaffers?: StafferOption[];
   stafferColors?: Record<string, string>;
 }
