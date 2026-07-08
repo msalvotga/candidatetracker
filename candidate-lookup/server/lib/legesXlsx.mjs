@@ -1,4 +1,5 @@
 import { canonicalReportEndForPeriod, loadFilingPeriodMaps } from "./filingPeriods.mjs";
+import { normalizeTecFilerId } from "./tecFilerId.mjs";
 import { SENATE_DISTRICTS } from "../data/senate-districts.mjs";
 import { SBOE_DISTRICTS } from "../data/sboe-districts.mjs";
 
@@ -314,7 +315,7 @@ export function parseSheetRows(sheetRows, config) {
       candidateName,
       candidateParty: normalizeParty(cell(row, c.candidateParty)),
       filed: parseFiled(cell(row, c.filed)),
-      tecFilerId: str(cell(row, c.tecFilerId)) || null,
+      tecFilerId: normalizeTecFilerId(str(cell(row, c.tecFilerId))),
       consultant: str(cell(row, c.consultant)) || null,
       endorsements: str(cell(row, c.endorsements)) || null,
       notes: str(cell(row, c.notes)) || null,

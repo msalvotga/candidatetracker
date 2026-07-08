@@ -3,7 +3,10 @@ import { syncCandidateConsultants, parseKeyList, formatKeyList, listConsultants 
 import { syncOfficeTargets } from "./targeting.mjs";
 import { listTexasCountyOptions } from "../data/texas-counties.mjs";
 import { parseLegMargin } from "./benchmarkMargin.mjs";
+import { normalizeTecFilerId } from "./tecFilerId.mjs";
+import { normalizeMapColor } from "./stafferMapColor.mjs";
 import { enrichElectionResultRows, syncContestMargin } from "./contestMetrics.mjs";
+import { fetchElectionResultsForExport, ELECTION_RESULTS_EXPORT_COLUMNS } from "./electionResultsImport.mjs";
 import { enrichOfficeRowsWithCounties, syncOfficeCounties } from "./officeCounties.mjs";
 import {
   candidateIdentityFieldsTouched,
@@ -168,7 +171,7 @@ const ADMIN_TABLES = {
       (await adminQueryTable(db, "offices", { ...filters, limit: 100000, offset: 0 })).rows,
   },
   targeting_organizations: {
-    label: "Targeting organizations",
+    label: "Targets",
     query: async (db, { limit, offset }) => {
       const rows = await db
         .prepare(
@@ -201,7 +204,7 @@ const ADMIN_TABLES = {
     query: async (db, { limit, offset }) => {
       const rows = await db
         .prepare(
-          `SELECT s.id, s.name
+          `SELECT s.id, s.name, s.map_color
            FROM tga_staffers s
            ORDER BY s.name COLLATE NOCASE, s.id
            LIMIT @limit OFFSET @offset`
@@ -243,34 +246,7 @@ const ADMIN_TABLES = {
         .get(params)).count;
       return { rows, total };
     },
-    exportQuery: async (db, filters) =>
-      (await adminQueryTable(db, "metric_contest_candidates", { ...filters, limit: 100000, offset: 0 })).rows,
-  },
-  office_metrics: {
-    label: "Benchmark margins",
-    query: async (db, { category, limit, offset }) => {
-      const params = { limit, offset };
-      let where = "WHERE 1=1";
-      if (category) {
-        where += " AND o.category = @category";
-        params.category = category;
-      }
-      const rows = await db
-        .prepare(
-          `SELECT o.id, o.office_code, o.office_name, o.category, o.district,
-                  m.trump_2024, m.cruz_2024, m.abbott_2022
-           FROM offices o
-           LEFT JOIN office_metrics m ON m.office_id = o.id
-           ${where}
-           ORDER BY o.category, o.sort_order, o.district, o.office_code
-           LIMIT @limit OFFSET @offset`
-        )
-        .all(params);
-      const total = (await db.prepare(`SELECT COUNT(*) AS count FROM offices o ${where}`).get(params)).count;
-      return { rows, total };
-    },
-    exportQuery: async (db, filters) =>
-      (await adminQueryTable(db, "office_metrics", { ...filters, limit: 100000, offset: 0 })).rows,
+    exportQuery: async (db, filters) => fetchElectionResultsForExport(db, filters),
   },
 };
 
@@ -366,6 +342,12 @@ function coerceAdminValue(column, value) {
   }
   if (column === "contest_margin") {
     return parseLegMargin(value);
+  }
+  if (column === "tec_filer_id") {
+    return normalizeTecFilerId(value);
+  }
+  if (column === "map_color") {
+    return normalizeMapColor(value);
   }
   if (REAL_COLUMNS.has(column)) {
     const num = Number(String(value).replace(/[$,%\s]/g, ""));
@@ -773,7 +755,10 @@ export async function exportTableCsv(db, tableName, filters = {}) {
   if (!table) throw new Error("unknown table");
   const rows = await table.exportQuery(db, filters);
   if (rows.length === 0) return "";
-  const headers = Object.keys(rows[0]);
+  const headers =
+    tableName === "metric_contest_candidates"
+      ? ELECTION_RESULTS_EXPORT_COLUMNS.filter((column) => column in rows[0])
+      : Object.keys(rows[0]);
   const lines = [headers.join(",")];
   for (const row of rows) {
     lines.push(headers.map((h) => csvEscape(row[h])).join(","));

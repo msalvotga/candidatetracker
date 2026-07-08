@@ -2,7 +2,7 @@ import { TEXAS_COUNTIES } from "../data/texas-counties.mjs";
 import { parseKeyList } from "./consultants.mjs";
 import { loadOfficeCountiesMap } from "./officeCounties.mjs";
 
-export const TGA_STAFFER_EDITABLE_COLUMNS = ["name", "office_ids", "county_names"];
+export const TGA_STAFFER_EDITABLE_COLUMNS = ["name", "map_color", "office_ids", "county_names"];
 
 export async function syncStafferOffices(db, stafferId, officeIds) {
   const ids = [
@@ -20,6 +20,33 @@ export async function syncStafferOffices(db, stafferId, officeIds) {
       const office = await db.prepare(`SELECT id FROM offices WHERE id = ? AND category != 'statewide'`).get(officeId);
       if (!office) throw new Error(`office ${officeId} not found or is statewide`);
       await insert.run(stafferId, officeId);
+    }
+  });
+  await apply();
+}
+
+export async function syncCountyStafferAssignments(db, countyName, stafferIds) {
+  const name = String(countyName ?? "").trim();
+  if (!TEXAS_COUNTIES.includes(name)) throw new Error(`invalid county: ${name}`);
+
+  const ids = [
+    ...new Set(
+      stafferIds
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    ),
+  ];
+
+  for (const stafferId of ids) {
+    const staffer = await db.prepare(`SELECT id FROM tga_staffers WHERE id = ?`).get(stafferId);
+    if (!staffer) throw new Error(`staffer ${stafferId} not found`);
+  }
+
+  const apply = db.transaction(async () => {
+    await db.prepare(`DELETE FROM tga_staffer_counties WHERE county_name = ?`).run(name);
+    const insert = db.prepare(`INSERT INTO tga_staffer_counties (staffer_id, county_name) VALUES (?, ?)`);
+    for (const stafferId of ids) {
+      await insert.run(stafferId, name);
     }
   });
   await apply();
@@ -92,6 +119,7 @@ export async function enrichTgaStafferRows(db, rows) {
     return {
       id: row.id,
       name: row.name,
+      map_color: row.map_color ?? null,
       office_ids: offices.map((office) => String(office.office_id)).join(","),
       office_codes: offices.map((office) => office.office_code).join(", "),
       office_labels: offices.map((office) => `${office.office_code} — ${office.office_name}`).join("; "),
@@ -102,10 +130,89 @@ export async function enrichTgaStafferRows(db, rows) {
 }
 
 export async function fetchTgaStafferRow(db, stafferId) {
-  const row = await db.prepare(`SELECT id, name FROM tga_staffers WHERE id = ?`).get(stafferId);
+  const row = await db.prepare(`SELECT id, name, map_color FROM tga_staffers WHERE id = ?`).get(stafferId);
   if (!row) return null;
   const [enriched] = await enrichTgaStafferRows(db, [row]);
   return enriched;
+}
+
+/** Harris County Texas House districts shown on the staffer map drill-down. */
+export const HARRIS_HOUSE_DISTRICTS = [
+  126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145,
+  146, 147, 148, 149, 150,
+];
+
+/** County coverage for the staffer map (direct county assignments only). */
+export async function fetchStafferMapData(db) {
+  const stafferRows = await db.prepare(`SELECT id, name, map_color FROM tga_staffers ORDER BY name`).all();
+  if (!stafferRows.length) {
+    return { staffers: [], districtStaffers: [], allStaffers: [], stafferColors: {} };
+  }
+
+  const enriched = await enrichTgaStafferRows(db, stafferRows);
+
+  const houseOffices = await db
+    .prepare(`SELECT id, district FROM offices WHERE category = 'house'`)
+    .all();
+  const districtByOfficeId = new Map(
+    houseOffices.map((office) => [String(office.id), Number(office.district)])
+  );
+
+  const staffers = [];
+  const districtStaffers = [];
+  for (const row of enriched) {
+    const counties = [...new Set(parseKeyList(row.county_names))].sort((a, b) => a.localeCompare(b));
+    if (counties.length) {
+      staffers.push({
+        id: row.id,
+        name: row.name,
+        counties,
+        map_color: row.map_color ?? null,
+      });
+    }
+
+    const officeIds = parseKeyList(row.office_ids);
+    const districts = [
+      ...new Set(
+        officeIds
+          .map((officeId) => districtByOfficeId.get(officeId))
+          .filter((district) => Number.isInteger(district) && district > 0)
+      ),
+    ].sort((a, b) => a - b);
+    if (districts.length) {
+      districtStaffers.push({
+        id: row.id,
+        name: row.name,
+        districts,
+        map_color: row.map_color ?? null,
+      });
+    }
+  }
+
+  const allStaffers = stafferRows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    map_color: row.map_color ?? null,
+  }));
+
+  return {
+    staffers,
+    districtStaffers,
+    allStaffers,
+    stafferColors: await fetchStafferColorMap(db),
+  };
+}
+
+/** All staffer map colors from the database (authoritative for legend and map). */
+export async function fetchStafferColorMap(db) {
+  const rows = await db
+    .prepare(`SELECT name, map_color FROM tga_staffers WHERE map_color IS NOT NULL AND TRIM(map_color) != ''`)
+    .all();
+  const stafferColors = {};
+  for (const row of rows) {
+    stafferColors[row.name] = row.map_color;
+  }
+  return stafferColors;
 }
 
 function staffersForOffice(officeId, stafferRows, officeCountiesMap) {
@@ -139,7 +246,7 @@ export async function attachTgaStaffersToRaces(db, races, category) {
   if (!races.length || category === "statewide") return races;
 
   try {
-    const stafferRows = await db.prepare(`SELECT id, name FROM tga_staffers ORDER BY name`).all();
+    const stafferRows = await db.prepare(`SELECT id, name, map_color FROM tga_staffers ORDER BY name`).all();
     if (!stafferRows.length) return races;
 
     const enriched = await enrichTgaStafferRows(db, stafferRows);

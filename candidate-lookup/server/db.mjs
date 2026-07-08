@@ -1,11 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import dotenv from "dotenv";
 import pg from "pg";
 import { bindSql } from "./sql.mjs";
+import { seedDefaultStafferMapColors } from "./lib/stafferMapColor.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const schemaPath = path.join(__dirname, "..", "schema-postgres.sql");
+const projectRoot = path.join(__dirname, "..");
+dotenv.config({ path: path.join(projectRoot, ".env") });
+const schemaPath = path.join(projectRoot, "schema-postgres.sql");
 
 let pool;
 let dbWrapper;
@@ -90,6 +94,7 @@ export async function initDb() {
   const schema = fs.readFileSync(schemaPath, "utf8");
   await pool.query(schema);
   await runMigrations(pool);
+  await seedDefaultStafferMapColors(dbWrapper);
   return dbWrapper;
 }
 
@@ -109,6 +114,10 @@ async function runMigrations(pool) {
       name TEXT NOT NULL,
       office_id INTEGER REFERENCES offices(id) ON DELETE SET NULL
     )
+  `);
+  await pool.query(`
+    ALTER TABLE tga_staffers
+    ADD COLUMN IF NOT EXISTS map_color TEXT
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tga_staffer_offices (

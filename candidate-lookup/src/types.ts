@@ -1,5 +1,5 @@
 export type OfficeCategory = "house" | "senate" | "sboe" | "statewide" | "congressional";
-export type AppTab = OfficeCategory | "counties" | "data" | "admin";
+export type AppTab = "races" | "counties" | "staffers" | "data" | "admin";
 export type UserRole = "admin" | "viewer";
 
 export interface AppUser {
@@ -24,6 +24,7 @@ export interface AuthMeResponse {
   permissions: AppPermissions;
   authenticated: boolean;
   guestAccess?: boolean;
+  clientIp?: string;
 }
 export type CountyElection = "pres_2024" | "cruz_2024" | "abbott_2022";
 
@@ -98,6 +99,10 @@ export interface Race {
   office_code: string;
   office_name: string;
   district: number | null;
+  /** Ballot order for statewide offices (from offices.sort_order). */
+  sort_order?: number | null;
+  /** Set when races from multiple categories are loaded together. */
+  category?: OfficeCategory;
   metrics: RaceMetric[];
   candidates: RaceCandidate[];
   seat_holder?: SeatHolder | null;
@@ -187,4 +192,31 @@ export interface MetricContest {
   note?: string;
   source?: string;
   candidates: MetricContestCandidate[];
+}
+
+export interface StafferMapEntry {
+  id: number;
+  name: string;
+  counties: string[];
+  map_color?: string | null;
+}
+
+export interface StafferDistrictEntry {
+  id: number;
+  name: string;
+  districts: number[];
+  map_color?: string | null;
+}
+
+export interface StafferOption {
+  id: number;
+  name: string;
+  map_color?: string | null;
+}
+
+export interface StafferMapResponse {
+  staffers: StafferMapEntry[];
+  districtStaffers: StafferDistrictEntry[];
+  allStaffers?: StafferOption[];
+  stafferColors?: Record<string, string>;
 }

@@ -23,25 +23,68 @@ export function permissionsForRole(role) {
   };
 }
 
+function stripPort(ip) {
+  if (ip.startsWith("[")) {
+    const end = ip.indexOf("]");
+    return end > 0 ? ip.slice(1, end) : ip;
+  }
+  const colonCount = (ip.match(/:/g) ?? []).length;
+  if (colonCount === 1 && ip.includes(".")) {
+    return ip.split(":")[0] ?? ip;
+  }
+  return ip;
+}
+
 function normalizeClientIp(raw) {
-  const ip = String(raw ?? "").trim();
+  let ip = String(raw ?? "").trim();
+  if (!ip) return "";
+  ip = stripPort(ip);
   if (ip.startsWith("::ffff:")) return ip.slice(7);
   return ip;
 }
 
-export function clientIp(req) {
+function addIpCandidate(raw, seen, candidates) {
+  const ip = normalizeClientIp(raw);
+  if (!ip || seen.has(ip)) return;
+  seen.add(ip);
+  candidates.push(ip);
+}
+
+/** All plausible client IPs from proxy headers (office NAT may appear after an internal hop). */
+export function clientIpCandidates(req) {
+  const seen = new Set();
+  const candidates = [];
+
+  if (req.ip) addIpCandidate(req.ip, seen, candidates);
+  if (Array.isArray(req.ips)) {
+    for (const ip of req.ips) addIpCandidate(ip, seen, candidates);
+  }
+
   const forwarded = req.headers["x-forwarded-for"];
   if (forwarded) {
-    const first = String(forwarded).split(",")[0]?.trim();
-    if (first) return normalizeClientIp(first);
+    for (const part of String(forwarded).split(",")) {
+      addIpCandidate(part, seen, candidates);
+    }
   }
-  const realIp = req.headers["x-real-ip"];
-  if (realIp) return normalizeClientIp(String(realIp).trim());
-  return normalizeClientIp(req.socket?.remoteAddress ?? "");
+
+  for (const header of ["x-real-ip", "cf-connecting-ip", "true-client-ip", "fastly-client-ip"]) {
+    const value = req.headers[header];
+    if (value) addIpCandidate(String(value).split(",")[0], seen, candidates);
+  }
+
+  addIpCandidate(req.socket?.remoteAddress ?? "", seen, candidates);
+  return candidates;
+}
+
+export function clientIp(req) {
+  return clientIpCandidates(req)[0] ?? "";
 }
 
 function guestIpAllowlist() {
-  const configured = String(process.env.AUTH_GUEST_IPS ?? DEFAULT_GUEST_IPS.join(","))
+  const raw = process.env.AUTH_GUEST_IPS;
+  const source =
+    raw != null && String(raw).trim() !== "" ? String(raw) : DEFAULT_GUEST_IPS.join(",");
+  const configured = source
     .split(/[,;\s]+/)
     .map((ip) => normalizeClientIp(ip))
     .filter(Boolean);
@@ -49,8 +92,9 @@ function guestIpAllowlist() {
 }
 
 export function isGuestIp(req) {
-  const ip = clientIp(req);
-  return ip !== "" && guestIpAllowlist().has(ip);
+  const allowlist = guestIpAllowlist();
+  if (allowlist.size === 0) return false;
+  return clientIpCandidates(req).some((ip) => allowlist.has(ip));
 }
 
 const DEV_ADMIN_USER = {
