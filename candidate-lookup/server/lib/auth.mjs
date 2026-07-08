@@ -15,10 +15,12 @@ const DEFAULT_GUEST_IPS = ["12.42.214.58", "127.0.0.1", "::1"];
 
 export function permissionsForRole(role) {
   const isAdmin = role === "admin";
+  const canEditStafferMap = isAdmin || role === "staff_edit";
   return {
     isAdmin,
     canAccessData: isAdmin,
     canEdit: isAdmin,
+    canEditStafferMap,
     canManageUsers: isAdmin,
   };
 }
@@ -169,6 +171,14 @@ export function requireAdmin(req, res, next) {
     return;
   }
   res.status(403).json({ error: "admin access required" });
+}
+
+export function requireStafferMapEdit(req, res, next) {
+  if (req.auth?.permissions?.canEditStafferMap) {
+    next();
+    return;
+  }
+  res.status(403).json({ error: "staffer map edit access required" });
 }
 
 export function requireAuth(req, res, next) {

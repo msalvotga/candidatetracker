@@ -40,7 +40,7 @@ import {
   listTargetingOrganizations,
   loadOfficeTargetsByOffice,
 } from "./lib/targeting.mjs";
-import { resolveAuth, requireAdmin, requireAuth, loginUser, logoutUser, initAuth, clientIp } from "./lib/auth.mjs";
+import { resolveAuth, requireAdmin, requireAuth, requireStafferMapEdit, loginUser, logoutUser, initAuth, clientIp } from "./lib/auth.mjs";
 import { ensureBootstrapAdmin } from "./lib/bootstrapAdmin.mjs";
 import { createAppUser, deleteAppUser, listAppUsers, updateAppUser } from "./lib/users.mjs";
 
@@ -381,7 +381,7 @@ app.get("/api/tga-staffers/map", async (_req, res) => {
   }
 });
 
-app.patch("/api/tga-staffers/county-assignments", requireAdmin, async (req, res) => {
+app.patch("/api/tga-staffers/county-assignments", requireStafferMapEdit, async (req, res) => {
   const countyName = String(req.body?.county_name ?? "").trim();
   const stafferIds = Array.isArray(req.body?.staffer_ids) ? req.body.staffer_ids : null;
   if (!countyName) {

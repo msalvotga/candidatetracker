@@ -1010,8 +1010,10 @@ export default function App() {
               districtStaffers={stafferDistrictMap}
               allStaffers={allStaffers}
               stafferColors={stafferColorMap}
-              canEdit={permissions.canEdit}
-              onSaveCountyAssignments={permissions.canEdit ? handleSaveCountyStafferAssignments : undefined}
+              canEdit={permissions.canEditStafferMap}
+              onSaveCountyAssignments={
+                permissions.canEditStafferMap ? handleSaveCountyStafferAssignments : undefined
+              }
             />
           )}
         </div>

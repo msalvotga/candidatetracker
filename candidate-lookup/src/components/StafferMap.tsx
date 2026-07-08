@@ -467,7 +467,7 @@ export function StafferMap({
                 ? "Saving…"
                 : canEdit
                   ? "Assign staffers to this county"
-                  : "Log in as admin to edit assignments"}
+                  : "Staff edit or admin login required to edit"}
             </p>
             <div className="staffer-map-assign-options">
               {sortedAllStaffers.map((staffer) => {

@@ -1,6 +1,6 @@
 import { hashPassword } from "./password.mjs";
 
-export const USER_ROLES = new Set(["admin", "viewer"]);
+export const USER_ROLES = new Set(["admin", "viewer", "staff_edit"]);
 
 function normalizeUsername(value) {
   return String(value ?? "")

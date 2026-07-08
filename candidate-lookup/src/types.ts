@@ -1,6 +1,6 @@
 export type OfficeCategory = "house" | "senate" | "sboe" | "statewide" | "congressional";
 export type AppTab = "races" | "counties" | "staffers" | "data" | "admin";
-export type UserRole = "admin" | "viewer";
+export type UserRole = "admin" | "viewer" | "staff_edit";
 
 export interface AppUser {
   id: number;
@@ -16,6 +16,7 @@ export interface AppPermissions {
   isAdmin: boolean;
   canAccessData: boolean;
   canEdit: boolean;
+  canEditStafferMap: boolean;
   canManageUsers: boolean;
 }
 
