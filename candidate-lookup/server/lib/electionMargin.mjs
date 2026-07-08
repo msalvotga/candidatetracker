@@ -105,12 +105,12 @@ export function storedMarginForMetricKey(metricKey, stats) {
   return signedContestMargin(stats);
 }
 
-/** Prefer vote-derived margin; fall back to stored contest_margin. */
+/** Prefer stored contest_margin (CSV/import); fall back to vote-derived margin. */
 export function contestMarginFromRows(rows, metricKey) {
+  const stored = rows.find((row) => row.contest_margin != null)?.contest_margin ?? null;
+  if (stored != null) return stored;
   const stats = computeContestStats(rows);
-  const margin = storedMarginForMetricKey(metricKey, stats);
-  if (margin != null) return margin;
-  return rows.find((row) => row.contest_margin != null)?.contest_margin ?? null;
+  return storedMarginForMetricKey(metricKey, stats);
 }
 
 export function formatPartyTotals(partyTotals) {

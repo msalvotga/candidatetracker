@@ -427,15 +427,16 @@ export async function bulkImportElectionResults(db, rows) {
         else if (outcome.action === "updated") results.updated += 1;
         else results.unchanged += 1;
 
-        if (!outcome.changed) continue;
-
         const key = contestKey(outcome.officeId, outcome.metricKey);
-        contests.set(key, { officeId: outcome.officeId, metricKey: outcome.metricKey });
-        if (outcome.marginOverride != null) {
-          marginOverrides.set(key, outcome.marginOverride);
-        }
-        if (outcome.recomputeVotePct) {
-          recomputeVotePctContests.add(key);
+        const csvMargin =
+          row.contest_margin !== undefined && String(row.contest_margin).trim() !== ""
+            ? parseExportedContestMargin(row.contest_margin)
+            : null;
+
+        if (outcome.changed || csvMargin != null) {
+          contests.set(key, { officeId: outcome.officeId, metricKey: outcome.metricKey });
+          if (csvMargin != null) marginOverrides.set(key, csvMargin);
+          if (outcome.recomputeVotePct) recomputeVotePctContests.add(key);
         }
       } catch (err) {
         results.errors.push({ row: index + 1, error: err.message });
@@ -449,7 +450,6 @@ export async function bulkImportElectionResults(db, rows) {
     const key = contestKey(officeId, metricKey);
     const recomputeVotePct = recomputeVotePctContests.has(key);
     const marginOverride = marginOverrides.get(key) ?? null;
-    if (!recomputeVotePct && marginOverride == null) continue;
     await recomputeContestDerivedFields(db, officeId, metricKey, {
       marginOverride,
       recomputeVotePct,
