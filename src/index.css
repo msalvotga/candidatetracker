@@ -2102,6 +2102,71 @@ body.race-layout-resizing .race-layout-resizer {
   gap: 0.35rem;
 }
 
+.staffer-map-legend-item-edit,
+.staffer-map-legend-add {
+  gap: 0.3rem;
+  padding: 0.15rem 0.25rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.staffer-map-legend-color-label {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.staffer-map-legend-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+.staffer-map-legend-name-input {
+  min-width: 7rem;
+  max-width: 11rem;
+  padding: 0.15rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.staffer-map-legend-name-input:focus {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent);
+}
+
+.staffer-map-legend-add-btn {
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.staffer-map-legend-add-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.staffer-map-legend-add-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .staffer-map-legend-overlap {
   color: var(--muted);
 }

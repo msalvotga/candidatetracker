@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { addFinanceReport, fetchCounties, fetchMetricContest, fetchRaces, fetchStafferMap, saveCandidateConsultants, saveCountyStafferAssignments } from "./api";
+import { addFinanceReport, createStaffer, fetchCounties, fetchMetricContest, fetchRaces, fetchStafferMap, saveCandidateConsultants, saveCountyStafferAssignments, updateStaffer } from "./api";
 import { AdminDataPanel } from "./components/AdminData";
 import { AdminUsersPanel } from "./components/AdminUsers";
 import { CandidateDetailModal, CandidateSummary } from "./components/CandidateDetailModal";
@@ -539,18 +539,22 @@ export default function App() {
     }
   }, [tab, countyElection]);
 
+  const applyStafferMapData = useCallback((data: Awaited<ReturnType<typeof fetchStafferMap>>) => {
+    const nextStaffers = data.staffers ?? [];
+    const nextDistrictStaffers = data.districtStaffers ?? [];
+    setStafferMap(nextStaffers);
+    setStafferDistrictMap(nextDistrictStaffers);
+    setAllStaffers(stafferOptionsFromMapData(data.allStaffers, nextStaffers, nextDistrictStaffers));
+    setStafferColorMap(data.stafferColors ?? {});
+  }, []);
+
   const loadStafferMap = useCallback(async () => {
     if (tab !== "staffers") return;
     setLoading(true);
     setError("");
     try {
       const data = await fetchStafferMap();
-      const nextStaffers = data.staffers ?? [];
-      const nextDistrictStaffers = data.districtStaffers ?? [];
-      setStafferMap(nextStaffers);
-      setStafferDistrictMap(nextDistrictStaffers);
-      setAllStaffers(stafferOptionsFromMapData(data.allStaffers, nextStaffers, nextDistrictStaffers));
-      setStafferColorMap(data.stafferColors ?? {});
+      applyStafferMapData(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load staffer map");
       setStafferMap([]);
@@ -560,19 +564,30 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [tab]);
+  }, [tab, applyStafferMapData]);
 
   const handleSaveCountyStafferAssignments = useCallback(
     async (countyName: string, stafferIds: number[]) => {
       const data = await saveCountyStafferAssignments(countyName, stafferIds);
-      const nextStaffers = data.staffers ?? [];
-      const nextDistrictStaffers = data.districtStaffers ?? [];
-      setStafferMap(nextStaffers);
-      setStafferDistrictMap(nextDistrictStaffers);
-      setAllStaffers(stafferOptionsFromMapData(data.allStaffers, nextStaffers, nextDistrictStaffers));
-      setStafferColorMap(data.stafferColors ?? {});
+      applyStafferMapData(data);
     },
-    []
+    [applyStafferMapData]
+  );
+
+  const handleCreateStaffer = useCallback(
+    async (name: string, mapColor?: string | null) => {
+      const data = await createStaffer({ name, map_color: mapColor });
+      applyStafferMapData(data);
+    },
+    [applyStafferMapData]
+  );
+
+  const handleUpdateStaffer = useCallback(
+    async (stafferId: number, fields: { name?: string; map_color?: string | null }) => {
+      const data = await updateStaffer(stafferId, fields);
+      applyStafferMapData(data);
+    },
+    [applyStafferMapData]
   );
 
   useEffect(() => {
@@ -999,7 +1014,8 @@ export default function App() {
         <div className="staffers-panel">
           {allStaffers.length === 0 &&
           stafferMap.length === 0 &&
-          stafferDistrictMap.length === 0 ? (
+          stafferDistrictMap.length === 0 &&
+          !permissions.canEditStafferMap ? (
             <p className="loading">
               No TGA staffers yet. Add staffers in the Data tab, or run{" "}
               <code>npm run db:seed-tga-staffers</code>.
@@ -1014,6 +1030,8 @@ export default function App() {
               onSaveCountyAssignments={
                 permissions.canEditStafferMap ? handleSaveCountyStafferAssignments : undefined
               }
+              onCreateStaffer={permissions.canEditStafferMap ? handleCreateStaffer : undefined}
+              onUpdateStaffer={permissions.canEditStafferMap ? handleUpdateStaffer : undefined}
             />
           )}
         </div>

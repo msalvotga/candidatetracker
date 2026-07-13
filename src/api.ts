@@ -103,6 +103,38 @@ export async function saveCountyStafferAssignments(
   return res.json();
 }
 
+export async function createStaffer(fields: {
+  name: string;
+  map_color?: string | null;
+}): Promise<StafferMapResponse> {
+  const res = await apiFetch("/api/tga-staffers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Failed to create staffer (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function updateStaffer(
+  stafferId: number,
+  fields: { name?: string; map_color?: string | null }
+): Promise<StafferMapResponse> {
+  const res = await apiFetch(`/api/tga-staffers/${stafferId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Failed to update staffer (${res.status})`);
+  }
+  return res.json();
+}
+
 export async function saveOfficeMetric(officeId: number, key: string, value: number | null) {
   const res = await apiFetch(`/api/offices/${officeId}/metrics`, {
     method: "PATCH",
