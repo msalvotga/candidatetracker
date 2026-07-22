@@ -213,6 +213,26 @@ async function runMigrations(pool) {
     ALTER TABLE app_users
     ADD CONSTRAINT app_users_role_check CHECK (role IN ('admin', 'viewer', 'staff_edit'))
   `);
+  await pool.query(`
+    ALTER TABLE finance_reports
+    ADD COLUMN IF NOT EXISTS tec_filer_id TEXT NOT NULL DEFAULT ''
+  `);
+  await pool.query(`
+    ALTER TABLE finance_reports
+    DROP CONSTRAINT IF EXISTS finance_reports_candidate_id_report_period_end_report_type_key
+  `);
+  await pool.query(`
+    DROP INDEX IF EXISTS finance_reports_candidate_id_report_period_end_report_type_key
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS finance_reports_candidate_period_type_filer_key
+    ON finance_reports (candidate_id, report_period_end, report_type, tec_filer_id)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_finance_tec_filer
+    ON finance_reports (tec_filer_id)
+    WHERE tec_filer_id != ''
+  `);
 }
 
 export function getDb() {

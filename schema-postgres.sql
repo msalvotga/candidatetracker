@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS candidates (
   withdrew INTEGER NOT NULL DEFAULT 0 CHECK (withdrew IN (0, 1)),
   filed INTEGER NOT NULL DEFAULT 0 CHECK (filed IN (0, 1)),
   running_for_reelection TEXT,
-  tec_filer_id TEXT,
+  tec_filer_id TEXT, -- one or more TEC filer IDs, comma-separated
   consultant TEXT,
   endorsements TEXT,
   notes TEXT,
@@ -72,13 +72,14 @@ CREATE TABLE IF NOT EXISTS finance_reports (
   period_key TEXT REFERENCES filing_periods(period_key),
   report_period_end TEXT NOT NULL,
   report_type TEXT NOT NULL DEFAULT 'TEC',
+  tec_filer_id TEXT NOT NULL DEFAULT '', -- per-filer row; '' for legacy / unknown
   total_raised DOUBLE PRECISION,
   total_spent DOUBLE PRECISION,
   cash_on_hand DOUBLE PRECISION,
   debt DOUBLE PRECISION,
   filed_at TEXT,
   source_url TEXT,
-  UNIQUE (candidate_id, report_period_end, report_type)
+  UNIQUE (candidate_id, report_period_end, report_type, tec_filer_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_finance_candidate ON finance_reports(candidate_id);

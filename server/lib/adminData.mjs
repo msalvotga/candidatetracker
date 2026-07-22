@@ -112,7 +112,7 @@ const ADMIN_TABLES = {
         .prepare(
           `SELECT f.id, f.candidate_id, c.name AS candidate_name, c.party, c.is_incumbent,
                   o.office_code, c.cycle_year, f.period_key, fp.label AS period_label,
-                  f.report_period_end, f.report_type,
+                  f.report_period_end, f.report_type, f.tec_filer_id,
                   f.total_raised, f.total_spent, f.cash_on_hand
            FROM finance_reports f
            JOIN candidates c ON c.id = f.candidate_id
@@ -255,7 +255,7 @@ const ADMIN_TABLE_NAMES = new Set(Object.keys(ADMIN_TABLES));
 export const EDITABLE_COLUMNS = {
   filing_periods: ["label", "sort_order", "default_report_period_end"],
   candidates: ["vuid", "name", "party", "is_incumbent", "running_for_reelection", "tec_filer_id", "filed", "consultant_keys", "notes"],
-  finance_reports: ["period_key", "report_period_end", "total_raised", "total_spent", "cash_on_hand"],
+  finance_reports: ["period_key", "report_period_end", "tec_filer_id", "total_raised", "total_spent", "cash_on_hand"],
   offices: [
     "office_name",
     "district",

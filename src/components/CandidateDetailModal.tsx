@@ -97,7 +97,7 @@ export function CandidateDetailModal({
                 </dd>
               </div>
               <div>
-                <dt>TEC filer ID</dt>
+                <dt>TEC filer ID(s)</dt>
                 <dd>{displayValue(candidate.tec_filer_id)}</dd>
               </div>
               <div>

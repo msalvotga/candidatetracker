@@ -409,9 +409,9 @@ async function upsertFinance(database, candidateId, periodKey, finance, prefix) 
 
   await database
     .prepare(
-      `INSERT INTO finance_reports (candidate_id, period_key, report_period_end, report_type, total_raised, total_spent, cash_on_hand)
-       VALUES (@candidateId, @periodKey, @reportEnd, 'TEC', @raised, @spent, @coh)
-       ON CONFLICT(candidate_id, report_period_end, report_type) DO UPDATE SET
+      `INSERT INTO finance_reports (candidate_id, period_key, report_period_end, report_type, tec_filer_id, total_raised, total_spent, cash_on_hand)
+       VALUES (@candidateId, @periodKey, @reportEnd, 'TEC', '', @raised, @spent, @coh)
+       ON CONFLICT(candidate_id, report_period_end, report_type, tec_filer_id) DO UPDATE SET
          period_key = excluded.period_key,
          total_raised = excluded.total_raised,
          total_spent = excluded.total_spent,
