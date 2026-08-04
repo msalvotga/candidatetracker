@@ -9,7 +9,8 @@ import {
 import {
   buildStafferColorMap,
   buildStafferColorOverrideMap,
-  mergeStaffersForLegend,
+  countyStaffersForLegend,
+  isVacantStafferName,
   STAFFER_MAP_UNASSIGNED,
 } from "../lib/stafferColors";
 import { canonicalCountyKey } from "../lib/countyKeys";
@@ -68,6 +69,8 @@ export function StafferMap({
   stafferColors,
   canEdit = false,
   onSaveCountyAssignments,
+  onCreateStaffer,
+  onUpdateStaffer,
 }: {
   staffers: StafferMapEntry[];
   districtStaffers: StafferDistrictEntry[];
@@ -78,6 +81,11 @@ export function StafferMap({
     countyName: string,
     stafferIds: number[]
   ) => Promise<void>;
+  onCreateStaffer?: (name: string, mapColor?: string | null) => Promise<void>;
+  onUpdateStaffer?: (
+    stafferId: number,
+    fields: { name?: string; map_color?: string | null }
+  ) => Promise<void>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -87,21 +95,35 @@ export function StafferMap({
   const [exportingPdf, setExportingPdf] = useState(false);
   const [harrisView, setHarrisView] = useState(false);
   const [zoomingHarris, setZoomingHarris] = useState(false);
+  const [legendDrafts, setLegendDrafts] = useState<Record<number, string>>({});
+  const [legendSavingId, setLegendSavingId] = useState<number | null>(null);
+  const [newStafferName, setNewStafferName] = useState("");
+  const [newStafferColor, setNewStafferColor] = useState("#2563eb");
+  const [addingStaffer, setAddingStaffer] = useState(false);
+  const [showVacants, setShowVacants] = useState(false);
+
+  const stafferOptions = useMemo(() => (Array.isArray(allStaffers) ? allStaffers : []), [allStaffers]);
 
   const legendStaffers = useMemo(
-    () => mergeStaffersForLegend(staffers, districtStaffers),
-    [staffers, districtStaffers]
+    () => countyStaffersForLegend(staffers, stafferOptions, { includeVacants: showVacants }),
+    [staffers, stafferOptions, showVacants]
   );
 
   const colorByName = useMemo(() => {
     const names = new Set<string>();
     for (const staffer of legendStaffers) names.add(staffer.name);
     for (const staffer of harrisDistrictStaffersForMap(districtStaffers)) names.add(staffer.name);
-    const overrides = buildStafferColorOverrideMap(stafferColors, staffers, districtStaffers);
+    for (const staffer of stafferOptions) names.add(staffer.name);
+    const overrides = {
+      ...buildStafferColorOverrideMap(stafferColors, staffers, districtStaffers),
+      ...Object.fromEntries(
+        stafferOptions
+          .filter((staffer) => staffer.map_color)
+          .map((staffer) => [staffer.name, staffer.map_color as string])
+      ),
+    };
     return buildStafferColorMap([...names], overrides);
-  }, [legendStaffers, staffers, districtStaffers, stafferColors]);
-
-  const stafferOptions = useMemo(() => (Array.isArray(allStaffers) ? allStaffers : []), [allStaffers]);
+  }, [legendStaffers, staffers, districtStaffers, stafferColors, stafferOptions]);
 
   const pickerColorByName = useMemo(() => {
     const names = new Set<string>();
@@ -134,6 +156,17 @@ export function StafferMap({
     return map;
   }, [staffers]);
 
+  /** County → staffer names for map fill / legend / counts (vacants optional). */
+  const visibleStaffersByCountyKey = useMemo(() => {
+    if (showVacants) return staffersByCountyKey;
+    const map = new Map<string, string[]>();
+    for (const [key, names] of staffersByCountyKey) {
+      const filtered = names.filter((name) => !isVacantStafferName(name));
+      if (filtered.length) map.set(key, filtered);
+    }
+    return map;
+  }, [staffersByCountyKey, showVacants]);
+
   const stafferIdsByCountyKey = useMemo(() => {
     const map = new Map<string, number[]>();
     for (const staffer of staffers) {
@@ -151,12 +184,12 @@ export function StafferMap({
 
   const overlapPairs = useMemo(() => {
     const pairs = new Map<string, string[]>();
-    for (const names of staffersByCountyKey.values()) {
+    for (const names of visibleStaffersByCountyKey.values()) {
       if (names.length < 2) continue;
       pairs.set(patternKey(names), names);
     }
     return [...pairs.entries()];
-  }, [staffersByCountyKey]);
+  }, [visibleStaffersByCountyKey]);
 
   const pathEntries = useMemo(
     () => Object.entries(texasPaths.counties as Record<string, { name: string; path: string }>),
@@ -171,10 +204,10 @@ export function StafferMap({
   const assignedCount = useMemo(() => {
     let count = 0;
     for (const [, entry] of pathEntries) {
-      if (staffersByCountyKey.has(canonicalCountyKey(entry.name))) count += 1;
+      if (visibleStaffersByCountyKey.has(canonicalCountyKey(entry.name))) count += 1;
     }
     return count;
-  }, [pathEntries, staffersByCountyKey]);
+  }, [pathEntries, visibleStaffersByCountyKey]);
 
   const sortedAllStaffers = useMemo(
     () => [...stafferOptions].sort((a, b) => a.name.localeCompare(b.name)),
@@ -280,6 +313,67 @@ export function StafferMap({
     }
   }
 
+  function legendNameDraft(staffer: { id: number; name: string }) {
+    return legendDrafts[staffer.id] ?? staffer.name;
+  }
+
+  async function commitStafferName(staffer: { id: number; name: string }) {
+    if (!canEdit || !onUpdateStaffer || legendSavingId != null) return;
+    const nextName = legendNameDraft(staffer).trim();
+    if (!nextName || nextName === staffer.name) {
+      setLegendDrafts((prev) => {
+        const next = { ...prev };
+        delete next[staffer.id];
+        return next;
+      });
+      return;
+    }
+    setLegendSavingId(staffer.id);
+    try {
+      await onUpdateStaffer(staffer.id, { name: nextName });
+      setLegendDrafts((prev) => {
+        const next = { ...prev };
+        delete next[staffer.id];
+        return next;
+      });
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Failed to rename staffer");
+      setLegendDrafts((prev) => ({ ...prev, [staffer.id]: staffer.name }));
+    } finally {
+      setLegendSavingId(null);
+    }
+  }
+
+  async function commitStafferColor(staffer: { id: number; name: string }, color: string) {
+    if (!canEdit || !onUpdateStaffer || legendSavingId != null) return;
+    const current = (colorByName.get(staffer.name) ?? "").toLowerCase();
+    if (color.toLowerCase() === current) return;
+    setLegendSavingId(staffer.id);
+    try {
+      await onUpdateStaffer(staffer.id, { map_color: color });
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Failed to update staffer color");
+    } finally {
+      setLegendSavingId(null);
+    }
+  }
+
+  async function handleAddStaffer() {
+    if (!canEdit || !onCreateStaffer || addingStaffer) return;
+    const name = newStafferName.trim();
+    if (!name) return;
+    setAddingStaffer(true);
+    try {
+      await onCreateStaffer(name, newStafferColor);
+      setNewStafferName("");
+      setNewStafferColor("#2563eb");
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Failed to create staffer");
+    } finally {
+      setAddingStaffer(false);
+    }
+  }
+
   function countyFill(stafferNames: string[]) {
     if (stafferNames.length === 1) {
       return colorByName.get(stafferNames[0]) ?? STAFFER_MAP_UNASSIGNED;
@@ -299,7 +393,9 @@ export function StafferMap({
     try {
       const { exportStafferMapPdf } = await import("../lib/stafferMapPdf");
       await exportStafferMapPdf({
-        staffers,
+        staffers: showVacants
+          ? staffers
+          : staffers.filter((staffer) => !isVacantStafferName(staffer.name)),
         districtStaffers,
         stafferColors,
         svg,
@@ -344,25 +440,78 @@ export function StafferMap({
             <p className="staffer-map-subtitle">
               {assignedCount} of {pathEntries.length} counties assigned · county-based staffers only
               {canEdit
-                ? " · click a county to assign staffers"
+                ? " · edit legend names/colors · click a county to assign staffers"
                 : " · click a county to view assignments"}
               · click Harris for house districts
             </p>
           </div>
-          <button
-            type="button"
-            className="filter-chip staffer-map-pdf-btn"
-            onClick={() => void handleExportPdf()}
-            disabled={exportingPdf || zoomingHarris}
-          >
-            {exportingPdf ? "Creating PDF…" : "Download PDF"}
-          </button>
+          <div className="staffer-map-header-actions">
+            <label className="staffer-map-vacant-toggle">
+              <input
+                type="checkbox"
+                checked={showVacants}
+                onChange={(e) => setShowVacants(e.target.checked)}
+              />
+              <span>Show Vacant 1–3</span>
+            </label>
+            <button
+              type="button"
+              className="filter-chip staffer-map-pdf-btn"
+              onClick={() => void handleExportPdf()}
+              disabled={exportingPdf || zoomingHarris}
+            >
+              {exportingPdf ? "Creating PDF…" : "Download PDF"}
+            </button>
+          </div>
         </div>
       </header>
 
       <div className="staffer-map-legend" aria-label="Staffer legend">
         {legendStaffers.map((staffer) => {
           const color = colorByName.get(staffer.name) ?? STAFFER_MAP_UNASSIGNED;
+          if (canEdit && onUpdateStaffer) {
+            const saving = legendSavingId === staffer.id;
+            return (
+              <span key={staffer.id} className="staffer-map-legend-item staffer-map-legend-item-edit">
+                <label className="staffer-map-legend-color-label" title={`Color for ${staffer.name}`}>
+                  <span className="staffer-map-legend-swatch" style={{ background: color }} />
+                  <input
+                    type="color"
+                    className="staffer-map-legend-color-input"
+                    value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#3a3d47"}
+                    disabled={saving}
+                    onChange={(e) => void commitStafferColor(staffer, e.target.value)}
+                    aria-label={`Color for ${staffer.name}`}
+                  />
+                </label>
+                <input
+                  type="text"
+                  className="staffer-map-legend-name-input"
+                  value={legendNameDraft(staffer)}
+                  disabled={saving}
+                  aria-label={`Name for ${staffer.name}`}
+                  onChange={(e) =>
+                    setLegendDrafts((prev) => ({ ...prev, [staffer.id]: e.target.value }))
+                  }
+                  onBlur={() => void commitStafferName(staffer)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      (e.target as HTMLInputElement).blur();
+                    }
+                    if (e.key === "Escape") {
+                      setLegendDrafts((prev) => {
+                        const next = { ...prev };
+                        delete next[staffer.id];
+                        return next;
+                      });
+                      (e.target as HTMLInputElement).blur();
+                    }
+                  }}
+                />
+              </span>
+            );
+          }
           return (
             <span key={`${staffer.id}-${staffer.name}`} className="staffer-map-legend-item">
               <span className="staffer-map-legend-swatch" style={{ background: color }} />
@@ -374,6 +523,44 @@ export function StafferMap({
           <span className="staffer-map-legend-swatch" style={{ background: STAFFER_MAP_UNASSIGNED }} />
           Unassigned
         </span>
+        {canEdit && onCreateStaffer ? (
+          <span className="staffer-map-legend-item staffer-map-legend-add">
+            <label className="staffer-map-legend-color-label" title="New staffer color">
+              <span className="staffer-map-legend-swatch" style={{ background: newStafferColor }} />
+              <input
+                type="color"
+                className="staffer-map-legend-color-input"
+                value={newStafferColor}
+                disabled={addingStaffer}
+                onChange={(e) => setNewStafferColor(e.target.value)}
+                aria-label="New staffer color"
+              />
+            </label>
+            <input
+              type="text"
+              className="staffer-map-legend-name-input"
+              value={newStafferName}
+              disabled={addingStaffer}
+              placeholder="Add staffer…"
+              aria-label="New staffer name"
+              onChange={(e) => setNewStafferName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void handleAddStaffer();
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="staffer-map-legend-add-btn"
+              disabled={addingStaffer || !newStafferName.trim()}
+              onClick={() => void handleAddStaffer()}
+            >
+              {addingStaffer ? "Adding…" : "Add"}
+            </button>
+          </span>
+        ) : null}
       </div>
 
       <div className={`staffer-map-canvas county-heatmap${zoomingHarris ? " staffer-map-canvas-zooming" : ""}`} ref={containerRef}>
@@ -395,7 +582,7 @@ export function StafferMap({
           </defs>
           {pathEntries.map(([fips, entry]) => {
             const key = canonicalCountyKey(entry.name);
-            const stafferNames = staffersByCountyKey.get(key) ?? [];
+            const stafferNames = visibleStaffersByCountyKey.get(key) ?? [];
             const fill = countyFill(stafferNames);
             const isPickerTarget = countyPicker?.countyKey === key;
 

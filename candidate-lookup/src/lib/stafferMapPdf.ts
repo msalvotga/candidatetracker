@@ -3,7 +3,7 @@ import type { StafferDistrictEntry, StafferMapEntry } from "../types";
 import {
   buildStafferColorMap,
   buildStafferColorOverrideMap,
-  mergeStaffersForLegend,
+  countyStaffersForLegend,
   STAFFER_MAP_UNASSIGNED,
 } from "./stafferColors";
 
@@ -193,7 +193,7 @@ export async function exportStafferMapPdf(options: {
     totalCounties,
     colorByName: colorByNameInput,
   } = options;
-  const legendStaffers = mergeStaffersForLegend(staffers, districtStaffers);
+  const legendStaffers = countyStaffersForLegend(staffers);
   const colorByName =
     colorByNameInput ??
     buildStafferColorMap(

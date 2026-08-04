@@ -1,8 +1,58 @@
 import { TEXAS_COUNTIES } from "../data/texas-counties.mjs";
 import { parseKeyList } from "./consultants.mjs";
 import { loadOfficeCountiesMap } from "./officeCounties.mjs";
+import { normalizeMapColor } from "./stafferMapColor.mjs";
 
 export const TGA_STAFFER_EDITABLE_COLUMNS = ["name", "map_color", "office_ids", "county_names"];
+
+export async function createTgaStaffer(db, { name, map_color } = {}) {
+  const trimmed = String(name ?? "").trim();
+  if (!trimmed) throw new Error("name is required");
+
+  const existing = await db
+    .prepare(`SELECT id FROM tga_staffers WHERE LOWER(name) = LOWER(?)`)
+    .get(trimmed);
+  if (existing) throw new Error(`staffer already exists: ${trimmed}`);
+
+  const color = map_color !== undefined ? normalizeMapColor(map_color) : null;
+  const result = await db
+    .prepare(`INSERT INTO tga_staffers (name, map_color) VALUES (@name, @map_color) RETURNING id`)
+    .run({ name: trimmed, map_color: color });
+
+  return fetchTgaStafferRow(db, result.lastInsertRowid);
+}
+
+export async function updateTgaStaffer(db, stafferId, fields = {}) {
+  const id = Number(stafferId);
+  if (!Number.isInteger(id) || id < 1) throw new Error("invalid staffer id");
+
+  const existing = await db.prepare(`SELECT id, name, map_color FROM tga_staffers WHERE id = ?`).get(id);
+  if (!existing) throw new Error("staffer not found");
+
+  const setParts = [];
+  const params = { id };
+
+  if (Object.prototype.hasOwnProperty.call(fields, "name")) {
+    const trimmed = String(fields.name ?? "").trim();
+    if (!trimmed) throw new Error("name cannot be empty");
+    const conflict = await db
+      .prepare(`SELECT id FROM tga_staffers WHERE LOWER(name) = LOWER(?) AND id != ?`)
+      .get(trimmed, id);
+    if (conflict) throw new Error(`staffer already exists: ${trimmed}`);
+    setParts.push("name = @name");
+    params.name = trimmed;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(fields, "map_color")) {
+    setParts.push("map_color = @map_color");
+    params.map_color = normalizeMapColor(fields.map_color);
+  }
+
+  if (setParts.length === 0) throw new Error("no fields to update");
+
+  await db.prepare(`UPDATE tga_staffers SET ${setParts.join(", ")} WHERE id = @id`).run(params);
+  return fetchTgaStafferRow(db, id);
+}
 
 export async function syncStafferOffices(db, stafferId, officeIds) {
   const ids = [

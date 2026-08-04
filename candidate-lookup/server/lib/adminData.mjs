@@ -703,7 +703,7 @@ export async function loadAdminMultiSelectOptions(db, refTable, { cycleYear, cat
       where += " AND category = @category";
       params.category = category;
     }
-    return await db
+    const rows = await db
       .prepare(
         `SELECT id AS value, office_code || ' — ' || office_name AS label
          FROM offices
@@ -711,6 +711,8 @@ export async function loadAdminMultiSelectOptions(db, refTable, { cycleYear, cat
          ORDER BY category, sort_order, district, office_code`
       )
       .all(params);
+    // Coerce ids to strings so they match comma-separated office_ids from enrichTgaStafferRows.
+    return rows.map((row) => ({ value: String(row.value), label: row.label }));
   }
   if (refTable === "texas_counties") {
     return listTexasCountyOptions();

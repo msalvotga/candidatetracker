@@ -30,8 +30,10 @@ import {
 } from "./lib/seatHolder.mjs";
 import {
   attachTgaStaffersToRaces,
+  createTgaStaffer,
   fetchStafferMapData,
   syncCountyStafferAssignments,
+  updateTgaStaffer,
 } from "./lib/tgaStaffers.mjs";
 import { seedHouseOfficeCounties } from "./seed-house-office-counties.mjs";
 import {
@@ -399,6 +401,31 @@ app.patch("/api/tga-staffers/county-assignments", requireStafferMapEdit, async (
     res.json(data);
   } catch (err) {
     res.status(400).json({ error: err.message ?? "failed to save county assignments" });
+  }
+});
+
+app.post("/api/tga-staffers", requireStafferMapEdit, async (req, res) => {
+  try {
+    const db = getDb();
+    await createTgaStaffer(db, req.body ?? {});
+    const data = await fetchStafferMapData(db);
+    res.json(data);
+  } catch (err) {
+    const status = /already exists/i.test(err.message ?? "") ? 409 : 400;
+    res.status(status).json({ error: err.message ?? "failed to create staffer" });
+  }
+});
+
+app.patch("/api/tga-staffers/:stafferId", requireStafferMapEdit, async (req, res) => {
+  try {
+    const db = getDb();
+    await updateTgaStaffer(db, req.params.stafferId, req.body ?? {});
+    const data = await fetchStafferMapData(db);
+    res.json(data);
+  } catch (err) {
+    const message = err.message ?? "failed to update staffer";
+    const status = message === "staffer not found" ? 404 : /already exists/i.test(message) ? 409 : 400;
+    res.status(status).json({ error: message });
   }
 });
 
