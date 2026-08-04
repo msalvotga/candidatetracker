@@ -220,7 +220,12 @@ export async function fetchMultiSelectOptions(
   const res = await apiFetch(`/api/admin/multi-select/${encodeURIComponent(refTable)}?${params}`);
   if (!res.ok) return [];
   const body = await res.json();
-  return (body.options ?? []) as { value: string; label: string; count?: number }[];
+  return ((body.options ?? []) as { value: string | number; label: string; count?: number }[]).map(
+    (option) => ({
+      ...option,
+      value: String(option.value),
+    })
+  );
 }
 
 export async function saveAdminTableRows(

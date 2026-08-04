@@ -165,27 +165,46 @@ export function buildStafferColorOverrideMap(
   };
 }
 
-export function mergeStaffersForLegend(
+const VACANT_STAFFER_NAMES = new Set(["Vacant 1", "Vacant 2", "Vacant 3"]);
+
+export function isVacantStafferName(name: string) {
+  return VACANT_STAFFER_NAMES.has(name);
+}
+
+/**
+ * Statewide staffer-map legend: anyone assigned to at least one county.
+ * Vacant 1–3 are optional (off by default on the map). House-district-only
+ * staffers belong on the Harris County drill-down legend.
+ */
+export function countyStaffersForLegend(
   countyStaffers: StafferMapEntry[],
-  districtStaffers: StafferDistrictEntry[]
+  allStaffers: Iterable<{ id: number; name: string; map_color?: string | null }> = [],
+  { includeVacants = false }: { includeVacants?: boolean } = {}
 ) {
   const byName = new Map<string, { id: number; name: string; map_color?: string | null }>();
   for (const staffer of countyStaffers) {
+    if (!includeVacants && isVacantStafferName(staffer.name)) continue;
     byName.set(staffer.name, { id: staffer.id, name: staffer.name, map_color: staffer.map_color });
   }
-  for (const staffer of districtStaffers) {
-    const existing = byName.get(staffer.name);
-    if (existing) {
-      if (!existing.map_color && staffer.map_color) existing.map_color = staffer.map_color;
-      continue;
+  if (includeVacants) {
+    for (const staffer of allStaffers) {
+      if (!isVacantStafferName(staffer.name) || byName.has(staffer.name)) continue;
+      byName.set(staffer.name, {
+        id: staffer.id,
+        name: staffer.name,
+        map_color: staffer.map_color,
+      });
     }
-    byName.set(staffer.name, {
-      id: staffer.id,
-      name: staffer.name,
-      map_color: staffer.map_color,
-    });
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** @deprecated Prefer countyStaffersForLegend — district staffers are not shown on the statewide legend. */
+export function mergeStaffersForLegend(
+  countyStaffers: StafferMapEntry[],
+  _districtStaffers: StafferDistrictEntry[] = []
+) {
+  return countyStaffersForLegend(countyStaffers);
 }
 
 /** Colors reserved for manual county highlighting (not used in the staffer legend). */

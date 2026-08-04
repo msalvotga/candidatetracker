@@ -971,34 +971,58 @@ function AdminTableCell({
   }
 
   if (multiSelectRef && multiSelectOptions) {
-    const optionKeys = new Set(multiSelectOptions.map((option) => option.value));
-    const selected = new Set(parseKeyList(value).filter((key) => optionKeys.has(key)));
-    const orphanKeys = parseKeyList(value).filter((key) => !optionKeys.has(key));
+    // Office ids arrive as numbers from Postgres JSON; stored values are comma-separated strings.
+    const normalizedOptions = multiSelectOptions.map((option) => ({
+      value: String(option.value),
+      label: option.label,
+    }));
+    const optionByValue = new Map(normalizedOptions.map((option) => [option.value, option]));
+    const selected = new Set(parseKeyList(value).map(String).filter((key) => optionByValue.has(key)));
+    const orphanKeys = parseKeyList(value).map(String).filter((key) => !optionByValue.has(key));
+    const selectedLabels = [...selected]
+      .sort((a, b) => Number(a) - Number(b) || a.localeCompare(b))
+      .map((key) => {
+        const label = optionByValue.get(key)?.label ?? key;
+        const code = label.split(" — ")[0]?.trim();
+        return code || label;
+      });
     const compact = multiSelectRef === "offices_non_statewide";
     return (
-      <div className={`admin-multi-select${changed ? " admin-multi-select-changed" : ""}${compact ? " admin-multi-select-compact" : ""}`}>
+      <div className={`admin-multi-select-wrap${changed ? " admin-multi-select-changed" : ""}`}>
+        <div
+          className={`admin-multi-select-selected${selectedLabels.length === 0 ? " admin-add-hint" : ""}`}
+          title={selectedLabels.join(", ")}
+        >
+          {selectedLabels.length > 0 ? `Selected: ${selectedLabels.join(", ")}` : "None selected"}
+        </div>
         {orphanKeys.length > 0 ? (
           <span className="admin-add-hint">Unlisted: {orphanKeys.join(", ")}</span>
         ) : null}
-        {multiSelectOptions.length === 0 ? (
-          <span className="admin-add-hint">Add entries in {multiSelectRef} first</span>
-        ) : (
-          multiSelectOptions.map((option) => (
-            <label key={option.value} className="admin-multi-select-item">
-              <input
-                type="checkbox"
-                checked={selected.has(option.value)}
-                onChange={() => {
-                  const next = new Set(selected);
-                  if (next.has(option.value)) next.delete(option.value);
-                  else next.add(option.value);
-                  onChange([...next].sort().join(","));
-                }}
-              />
-              <span>{option.label}</span>
-            </label>
-          ))
-        )}
+        <div className={`admin-multi-select${compact ? " admin-multi-select-compact" : ""}`}>
+          {normalizedOptions.length === 0 ? (
+            <span className="admin-add-hint">Add entries in {multiSelectRef} first</span>
+          ) : (
+            normalizedOptions.map((option) => (
+              <label key={option.value} className="admin-multi-select-item">
+                <input
+                  type="checkbox"
+                  checked={selected.has(option.value)}
+                  onChange={() => {
+                    const next = new Set(selected);
+                    if (next.has(option.value)) next.delete(option.value);
+                    else next.add(option.value);
+                    onChange(
+                      [...next]
+                        .sort((a, b) => Number(a) - Number(b) || a.localeCompare(b))
+                        .join(",")
+                    );
+                  }}
+                />
+                <span>{option.label}</span>
+              </label>
+            ))
+          )}
+        </div>
       </div>
     );
   }

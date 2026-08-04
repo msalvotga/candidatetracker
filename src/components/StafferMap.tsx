@@ -9,7 +9,8 @@ import {
 import {
   buildStafferColorMap,
   buildStafferColorOverrideMap,
-  mergeStaffersForLegend,
+  countyStaffersForLegend,
+  isVacantStafferName,
   STAFFER_MAP_UNASSIGNED,
 } from "../lib/stafferColors";
 import { canonicalCountyKey } from "../lib/countyKeys";
@@ -99,15 +100,14 @@ export function StafferMap({
   const [newStafferName, setNewStafferName] = useState("");
   const [newStafferColor, setNewStafferColor] = useState("#2563eb");
   const [addingStaffer, setAddingStaffer] = useState(false);
+  const [showVacants, setShowVacants] = useState(false);
 
   const stafferOptions = useMemo(() => (Array.isArray(allStaffers) ? allStaffers : []), [allStaffers]);
 
-  const legendStaffers = useMemo(() => {
-    if (canEdit && stafferOptions.length) {
-      return [...stafferOptions].sort((a, b) => a.name.localeCompare(b.name));
-    }
-    return mergeStaffersForLegend(staffers, districtStaffers);
-  }, [canEdit, stafferOptions, staffers, districtStaffers]);
+  const legendStaffers = useMemo(
+    () => countyStaffersForLegend(staffers, stafferOptions, { includeVacants: showVacants }),
+    [staffers, stafferOptions, showVacants]
+  );
 
   const colorByName = useMemo(() => {
     const names = new Set<string>();
@@ -156,6 +156,17 @@ export function StafferMap({
     return map;
   }, [staffers]);
 
+  /** County → staffer names for map fill / legend / counts (vacants optional). */
+  const visibleStaffersByCountyKey = useMemo(() => {
+    if (showVacants) return staffersByCountyKey;
+    const map = new Map<string, string[]>();
+    for (const [key, names] of staffersByCountyKey) {
+      const filtered = names.filter((name) => !isVacantStafferName(name));
+      if (filtered.length) map.set(key, filtered);
+    }
+    return map;
+  }, [staffersByCountyKey, showVacants]);
+
   const stafferIdsByCountyKey = useMemo(() => {
     const map = new Map<string, number[]>();
     for (const staffer of staffers) {
@@ -173,12 +184,12 @@ export function StafferMap({
 
   const overlapPairs = useMemo(() => {
     const pairs = new Map<string, string[]>();
-    for (const names of staffersByCountyKey.values()) {
+    for (const names of visibleStaffersByCountyKey.values()) {
       if (names.length < 2) continue;
       pairs.set(patternKey(names), names);
     }
     return [...pairs.entries()];
-  }, [staffersByCountyKey]);
+  }, [visibleStaffersByCountyKey]);
 
   const pathEntries = useMemo(
     () => Object.entries(texasPaths.counties as Record<string, { name: string; path: string }>),
@@ -193,10 +204,10 @@ export function StafferMap({
   const assignedCount = useMemo(() => {
     let count = 0;
     for (const [, entry] of pathEntries) {
-      if (staffersByCountyKey.has(canonicalCountyKey(entry.name))) count += 1;
+      if (visibleStaffersByCountyKey.has(canonicalCountyKey(entry.name))) count += 1;
     }
     return count;
-  }, [pathEntries, staffersByCountyKey]);
+  }, [pathEntries, visibleStaffersByCountyKey]);
 
   const sortedAllStaffers = useMemo(
     () => [...stafferOptions].sort((a, b) => a.name.localeCompare(b.name)),
@@ -382,7 +393,9 @@ export function StafferMap({
     try {
       const { exportStafferMapPdf } = await import("../lib/stafferMapPdf");
       await exportStafferMapPdf({
-        staffers,
+        staffers: showVacants
+          ? staffers
+          : staffers.filter((staffer) => !isVacantStafferName(staffer.name)),
         districtStaffers,
         stafferColors,
         svg,
@@ -432,14 +445,24 @@ export function StafferMap({
               · click Harris for house districts
             </p>
           </div>
-          <button
-            type="button"
-            className="filter-chip staffer-map-pdf-btn"
-            onClick={() => void handleExportPdf()}
-            disabled={exportingPdf || zoomingHarris}
-          >
-            {exportingPdf ? "Creating PDF…" : "Download PDF"}
-          </button>
+          <div className="staffer-map-header-actions">
+            <label className="staffer-map-vacant-toggle">
+              <input
+                type="checkbox"
+                checked={showVacants}
+                onChange={(e) => setShowVacants(e.target.checked)}
+              />
+              <span>Show Vacant 1–3</span>
+            </label>
+            <button
+              type="button"
+              className="filter-chip staffer-map-pdf-btn"
+              onClick={() => void handleExportPdf()}
+              disabled={exportingPdf || zoomingHarris}
+            >
+              {exportingPdf ? "Creating PDF…" : "Download PDF"}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -559,7 +582,7 @@ export function StafferMap({
           </defs>
           {pathEntries.map(([fips, entry]) => {
             const key = canonicalCountyKey(entry.name);
-            const stafferNames = staffersByCountyKey.get(key) ?? [];
+            const stafferNames = visibleStaffersByCountyKey.get(key) ?? [];
             const fill = countyFill(stafferNames);
             const isPickerTarget = countyPicker?.countyKey === key;
 

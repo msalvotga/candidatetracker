@@ -695,6 +695,13 @@ h2 {
   min-width: 10rem;
 }
 
+.admin-multi-select-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 10rem;
+}
+
 .admin-multi-select-changed {
   outline: 1px solid var(--accent, #3b82f6);
   border-radius: 4px;
@@ -823,6 +830,16 @@ h2 {
   max-height: 12rem;
   overflow: auto;
   min-width: 14rem;
+}
+
+.admin-multi-select-selected {
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: normal;
+  line-height: 1.35;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.15rem;
 }
 
 .admin-vuid-cell {
@@ -2067,6 +2084,30 @@ body.race-layout-resizing .race-layout-resizer {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
+}
+
+.staffer-map-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.staffer-map-vacant-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.staffer-map-vacant-toggle input {
+  margin: 0;
+  accent-color: var(--accent, #3b82f6);
 }
 
 .staffer-map-pdf-btn {
