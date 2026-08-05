@@ -1,5 +1,17 @@
 import type { StafferDistrictEntry } from "../types";
 
+/** Harris County Texas House districts (PLANH2316). HD-136 is Travis/Williamson, not Harris. */
+export const HARRIS_HOUSE_DISTRICTS = [
+  126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149,
+  150,
+] as const;
+
+const HARRIS_HOUSE_DISTRICT_SET = new Set<number>(HARRIS_HOUSE_DISTRICTS);
+
+export function isHarrisHouseDistrict(district: number) {
+  return HARRIS_HOUSE_DISTRICT_SET.has(district);
+}
+
 /** Harris County HD staffers from tga-staffers seed (used when API district data is unavailable). */
 export const HARRIS_DISTRICT_STAFFER_FALLBACK: StafferDistrictEntry[] = [
   { id: -1, name: "Howard Barker", districts: [126] },
@@ -21,7 +33,7 @@ export const HARRIS_DISTRICT_STAFFER_FALLBACK: StafferDistrictEntry[] = [
 
 export function harrisDistrictStaffersForMap(districtStaffers: StafferDistrictEntry[]) {
   const hasHarrisAssignments = districtStaffers.some((staffer) =>
-    staffer.districts.some((district) => district >= 126 && district <= 150)
+    staffer.districts.some((district) => isHarrisHouseDistrict(district))
   );
   return hasHarrisAssignments ? districtStaffers : HARRIS_DISTRICT_STAFFER_FALLBACK;
 }

@@ -10,7 +10,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const COUNTY_GEOJSON_URL =
   "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json";
 const HD_QUERY_URL =
-  "https://gis.lja.com/arcgis/rest/services/AWBD/TLC_Congressional_Senate_House/FeatureServer/0/query?where=DISTRICT%3E%3D126+AND+DISTRICT%3C%3D150&outFields=DISTRICT&f=geojson&outSR=4326";
+  "https://gis.lja.com/arcgis/rest/services/AWBD/TLC_Congressional_Senate_House/FeatureServer/0/query?where=DISTRICT%3E%3D126+AND+DISTRICT%3C%3D150+AND+DISTRICT%3C%3E136&outFields=DISTRICT&f=geojson&outSR=4326";
+
+const HARRIS_HOUSE_DISTRICTS = new Set([
+  126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149,
+  150,
+]);
 
 const WIDTH = 920;
 const HEIGHT = 860;
@@ -101,7 +106,7 @@ const harrisBBox = pathBBox(harrisPath);
 const districts = {};
 for (const feature of hdGeo.features ?? []) {
   const district = Number(feature.properties?.DISTRICT);
-  if (!Number.isInteger(district)) continue;
+  if (!Number.isInteger(district) || !HARRIS_HOUSE_DISTRICTS.has(district)) continue;
   districts[String(district)] = {
     district,
     path: featureToPath(feature, project),

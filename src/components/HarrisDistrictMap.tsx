@@ -8,6 +8,8 @@ import {
 
   harrisDistrictStaffersForMap,
 
+  isHarrisHouseDistrict,
+
   staffersByHouseDistrict,
 
 } from "../lib/harrisDistrictStaffers";
@@ -114,11 +116,9 @@ export function HarrisDistrictMap({
 
     () =>
 
-      Object.entries(harrisPaths.districts as Record<string, { district: number; path: string }>).sort(
-
-        ([a], [b]) => Number(a) - Number(b)
-
-      ),
+      Object.entries(harrisPaths.districts as Record<string, { district: number; path: string }>)
+        .filter(([key]) => isHarrisHouseDistrict(Number(key)))
+        .sort(([a], [b]) => Number(a) - Number(b)),
 
     []
 
