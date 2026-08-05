@@ -82,7 +82,11 @@ export function HarrisDistrictMap({
 
   const containerRef = useRef<HTMLDivElement>(null);
 
+  const svgRef = useRef<SVGSVGElement>(null);
+
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+
+  const [exportingPdf, setExportingPdf] = useState(false);
 
 
 
@@ -208,6 +212,35 @@ export function HarrisDistrictMap({
 
 
 
+  async function handleExportPdf() {
+    const svg = svgRef.current;
+    if (!svg || exportingPdf) return;
+    setTooltip(null);
+    setExportingPdf(true);
+    try {
+      const { exportHarrisDistrictMapPdf } = await import("../lib/stafferMapPdf");
+      const harrisDistricts = new Set(districtEntries.map(([key]) => Number(key)));
+      await exportHarrisDistrictMapPdf({
+        districtStaffers: harrisStafferSource
+          .map((staffer) => ({
+            ...staffer,
+            districts: staffer.districts.filter((district) => harrisDistricts.has(district)),
+          }))
+          .filter((staffer) => staffer.districts.length > 0),
+        svg,
+        assignedCount,
+        totalDistricts: districtEntries.length,
+        colorByName,
+        legendNames: harrisStaffers,
+      });
+    } catch (err) {
+      console.error("Harris staffer map PDF export failed:", err);
+      window.alert(err instanceof Error ? err.message : "Failed to create PDF");
+    } finally {
+      setExportingPdf(false);
+    }
+  }
+
   function showTooltip(e: React.MouseEvent, district: number, stafferNames: string[]) {
 
     const rect = containerRef.current?.getBoundingClientRect();
@@ -236,17 +269,37 @@ export function HarrisDistrictMap({
 
       <div className="staffer-map-harris-toolbar">
 
-        <button type="button" className="staffer-map-harris-back" onClick={onBack}>
+        <div className="staffer-map-harris-toolbar-left">
 
-          ← Back to Texas map
+          <button type="button" className="staffer-map-harris-back" onClick={onBack}>
+
+            ← Back to Texas map
+
+          </button>
+
+          <p className="staffer-map-harris-summary">
+
+            {assignedCount} of {districtEntries.length} Harris County house districts assigned
+
+          </p>
+
+        </div>
+
+        <button
+
+          type="button"
+
+          className="filter-chip staffer-map-pdf-btn"
+
+          onClick={() => void handleExportPdf()}
+
+          disabled={exportingPdf}
+
+        >
+
+          {exportingPdf ? "Creating PDF…" : "Download PDF"}
 
         </button>
-
-        <p className="staffer-map-harris-summary">
-
-          {assignedCount} of {districtEntries.length} Harris County house districts assigned
-
-        </p>
 
       </div>
 
@@ -303,6 +356,8 @@ export function HarrisDistrictMap({
       <div className="staffer-map-canvas county-heatmap staffer-map-harris-canvas" ref={containerRef}>
 
         <svg
+
+          ref={svgRef}
 
           viewBox={harrisPaths.countyViewBox}
 

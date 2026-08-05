@@ -12,6 +12,7 @@ const MARGIN = 40;
 const LEGEND_LINE_HEIGHT = 14;
 const LEGEND_SWATCH = 8;
 const LEGEND_GAP = 12;
+const MAP_EXPORT_MIN_WIDTH = 2400;
 
 function hexToRgb(hex: string): [number, number, number] {
   const normalized = hex.replace("#", "");
@@ -22,19 +23,44 @@ function hexToRgb(hex: string): [number, number, number] {
   ];
 }
 
-function prepareSvgForExport(svg: SVGSVGElement): SVGSVGElement {
+function prepareSvgForExport(svg: SVGSVGElement, pixelWidth: number, pixelHeight: number): SVGSVGElement {
   const clone = svg.cloneNode(true) as SVGSVGElement;
   clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
   const viewBox = svg.viewBox.baseVal;
   if (viewBox.width > 0 && viewBox.height > 0) {
-    clone.setAttribute("width", String(viewBox.width));
-    clone.setAttribute("height", String(viewBox.height));
+    clone.setAttribute("viewBox", `${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`);
   }
+  clone.setAttribute("width", String(pixelWidth));
+  clone.setAttribute("height", String(pixelHeight));
+  const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
+  style.textContent = `
+    .staffer-map-county-label, .staffer-map-hd-label {
+      fill: #e8edf4;
+      stroke: #0f1419;
+      stroke-width: 0.35px;
+      paint-order: stroke fill;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      font-weight: 500;
+    }
+    .staffer-map-hd-label { stroke-width: 0.2px; }
+  `;
+  clone.insertBefore(style, clone.firstChild);
   return clone;
 }
 
+function svgAspectRatio(svg: SVGSVGElement, fallback = MAP_ASPECT) {
+  const viewBox = svg.viewBox.baseVal;
+  if (viewBox.width > 0 && viewBox.height > 0) return viewBox.height / viewBox.width;
+  return fallback;
+}
+
 async function svgToPngDataUrl(svg: SVGSVGElement): Promise<string> {
-  const exportSvg = prepareSvgForExport(svg);
+  const viewBox = svg.viewBox.baseVal;
+  const vbWidth = viewBox.width || 920;
+  const vbHeight = viewBox.height || 860;
+  const pixelWidth = Math.max(MAP_EXPORT_MIN_WIDTH, Math.round(vbWidth * 2));
+  const pixelHeight = Math.round(pixelWidth * (vbHeight / vbWidth));
+  const exportSvg = prepareSvgForExport(svg, pixelWidth, pixelHeight);
   const serialized = new XMLSerializer().serializeToString(exportSvg);
   const blob = new Blob([serialized], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -47,19 +73,15 @@ async function svgToPngDataUrl(svg: SVGSVGElement): Promise<string> {
       img.src = url;
     });
 
-    const width = exportSvg.viewBox.baseVal.width || 920;
-    const height = exportSvg.viewBox.baseVal.height || 860;
-    const scale = 2;
     const canvas = document.createElement("canvas");
-    canvas.width = width * scale;
-    canvas.height = height * scale;
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("Failed to create map image");
 
-    ctx.scale(scale, scale);
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, width, height);
-    ctx.drawImage(image, 0, 0, width, height);
+    ctx.fillRect(0, 0, pixelWidth, pixelHeight);
+    ctx.drawImage(image, 0, 0, pixelWidth, pixelHeight);
     return canvas.toDataURL("image/png");
   } finally {
     URL.revokeObjectURL(url);
@@ -280,4 +302,107 @@ export async function exportStafferMapPdf(options: {
 
   const stamp = new Date().toISOString().slice(0, 10);
   doc.save(`tga-staffer-territories-${stamp}.pdf`);
+}
+
+function formatHouseDistrict(district: number) {
+  return `HD-${String(district).padStart(3, "0")}`;
+}
+
+export async function exportHarrisDistrictMapPdf(options: {
+  districtStaffers: StafferDistrictEntry[];
+  svg: SVGSVGElement;
+  assignedCount: number;
+  totalDistricts: number;
+  colorByName: Map<string, string>;
+  legendNames: string[];
+}) {
+  const { districtStaffers, svg, assignedCount, totalDistricts, colorByName, legendNames } = options;
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const contentWidth = pageWidth - MARGIN * 2;
+  let y = MARGIN;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(18);
+  doc.text("Harris County House Districts", MARGIN, y);
+  y += 22;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(80, 80, 80);
+  const dateLabel = new Date().toLocaleDateString(undefined, { dateStyle: "long" });
+  doc.text(
+    `${assignedCount} of ${totalDistricts} Harris County house districts assigned · ${dateLabel}`,
+    MARGIN,
+    y
+  );
+  doc.setTextColor(0, 0, 0);
+  y += 20;
+
+  const legendEntries: { label: string; color: string }[] = [
+    ...legendNames.map((name) => ({
+      label: name,
+      color: colorByName.get(name) ?? STAFFER_MAP_UNASSIGNED,
+    })),
+    { label: "Unassigned", color: STAFFER_MAP_UNASSIGNED },
+  ];
+
+  const legendLayout = measureLegendLayout(doc, legendEntries, contentWidth);
+  const mapDataUrl = await svgToPngDataUrl(svg);
+  const mapAspect = svgAspectRatio(svg);
+  const maxMapHeight = pageBottom(doc) - y - legendLayout.totalHeight - LEGEND_GAP;
+  let mapWidth = contentWidth;
+  let mapHeight = mapWidth * mapAspect;
+
+  if (mapHeight > maxMapHeight) {
+    mapHeight = Math.max(120, maxMapHeight);
+    mapWidth = mapHeight / mapAspect;
+  }
+  if (mapWidth > contentWidth) {
+    mapWidth = contentWidth;
+    mapHeight = mapWidth * mapAspect;
+  }
+
+  const mapX = MARGIN + (contentWidth - mapWidth) / 2;
+  doc.addImage(mapDataUrl, "PNG", mapX, y, mapWidth, mapHeight);
+  y += mapHeight + LEGEND_GAP;
+  drawLegendBlock(doc, y, legendLayout);
+
+  doc.addPage();
+  y = MARGIN;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.text("Staffer district assignments", MARGIN, y);
+  y += 18;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("Staffer", MARGIN, y);
+  doc.text("Districts", MARGIN + 150, y);
+  y += 12;
+
+  doc.setFont("helvetica", "normal");
+  const districtsColumnWidth = contentWidth - 150;
+  const sortedStaffers = [...districtStaffers]
+    .map((staffer) => ({
+      ...staffer,
+      districts: [...staffer.districts].sort((a, b) => a - b),
+    }))
+    .filter((staffer) => staffer.districts.length > 0)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  for (const staffer of sortedStaffers) {
+    const districtLabel = staffer.districts.map(formatHouseDistrict).join(", ");
+    const districtLines = doc.splitTextToSize(districtLabel, districtsColumnWidth) as string[];
+    const blockHeight = Math.max(LEGEND_LINE_HEIGHT, districtLines.length * 11 + 2);
+    y = ensureSpace(doc, y, blockHeight);
+
+    drawLegendSwatch(doc, MARGIN, y, colorByName.get(staffer.name) ?? STAFFER_MAP_UNASSIGNED);
+    doc.text(staffer.name, MARGIN + 12, y);
+    doc.text(districtLines, MARGIN + 150, y);
+    y += blockHeight;
+  }
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  doc.save(`harris-house-district-staffers-${stamp}.pdf`);
 }
