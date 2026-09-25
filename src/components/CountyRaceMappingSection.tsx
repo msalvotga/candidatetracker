@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ManualCountyVotesSection } from "./ManualCountyVotesSection";
 import { SettingsCollapse } from "./SettingsCollapse";
 import {
   deleteCountyRaceLink,
@@ -139,7 +138,7 @@ export function CountyRaceMappingSection({
         tabs). Suggestions treat <strong>REP</strong> / <strong>DEM</strong> in county contest names as the ballot party. After linking,
         ingest uses <strong>Auto</strong> by default: for each county and race it compares total votes on the SOS county file vs your
         county feed and applies whichever is higher. Override with <strong>SOS</strong>, <strong>County feed</strong>, or{" "}
-        <strong>Manual</strong> if needed.
+        <strong>Manual</strong> if needed. Type early, election day, and mail votes in <strong>Vote counts</strong> above.
       </p>
       <button type="button" className="enr-secondaryBtn" disabled={busy || loading} onClick={() => void reload()}>
         {loading ? "Loading…" : "Reload mapping"}
@@ -295,23 +294,6 @@ export function CountyRaceMappingSection({
       )}
       </SettingsCollapse>
 
-      <SettingsCollapse
-        title="Manual county votes"
-        badge={
-          data?.manualVotes?.length
-            ? `${new Set(data.manualVotes.map((m) => m.countyKey)).size} counties`
-            : undefined
-        }
-      >
-        <ManualCountyVotesSection
-          electionId={electionId}
-          busy={busy}
-          sosRaces={data?.sosRaces ?? []}
-          manualVotes={data?.manualVotes ?? []}
-          onMessage={onMessage}
-          onReload={reload}
-        />
-      </SettingsCollapse>
     </SettingsCollapse>
   );
 }

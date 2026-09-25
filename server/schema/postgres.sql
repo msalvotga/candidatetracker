@@ -155,10 +155,18 @@ CREATE TABLE IF NOT EXISTS vote_update_history (
   election_day_votes BIGINT NOT NULL DEFAULT 0,
   total_votes BIGINT NOT NULL DEFAULT 0,
   percent_of_votes TEXT,
+  mail_votes BIGINT NOT NULL DEFAULT 0,
+  county_key TEXT NOT NULL DEFAULT '',
+  sos_race_id TEXT NOT NULL DEFAULT '',
   captured_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')
 );
+ALTER TABLE vote_update_history ADD COLUMN IF NOT EXISTS mail_votes BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE vote_update_history ADD COLUMN IF NOT EXISTS county_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE vote_update_history ADD COLUMN IF NOT EXISTS sos_race_id TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_vote_update_history_lookup
   ON vote_update_history(election_id, source_key, contest_name, choice_name, party_name, captured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vote_update_history_race
+  ON vote_update_history(election_id, sos_race_id, captured_at DESC);
 
 CREATE TABLE IF NOT EXISTS county_harris_results (
   id BIGSERIAL PRIMARY KEY,
@@ -346,9 +354,11 @@ CREATE TABLE IF NOT EXISTS county_sos_manual_votes (
   early_votes BIGINT NOT NULL DEFAULT 0,
   election_day_votes BIGINT NOT NULL DEFAULT 0,
   total_votes BIGINT NOT NULL DEFAULT 0,
+  mail_votes BIGINT NOT NULL DEFAULT 0,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
   PRIMARY KEY (election_id, county_key, sos_race_id, sos_candidate_id)
 );
+ALTER TABLE county_sos_manual_votes ADD COLUMN IF NOT EXISTS mail_votes BIGINT NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS county_sos_race_vote_source (
   election_id TEXT NOT NULL,

@@ -222,12 +222,16 @@ export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPa
           if (!target) continue;
           const cell = raceBlock.C[String(target.ID)];
           if (!cell) continue;
+          const early = Number(m.earlyVotes ?? 0);
+          const day = Number(m.electionDayVotes ?? 0);
+          const mail = Number(m.mailVotes ?? 0);
+          const summed = early + day + mail;
           applyVoteRowToCell(
             cell,
             {
-              totalVotes: m.totalVotes,
-              earlyVotes: m.earlyVotes,
-              electionDayVotes: m.electionDayVotes,
+              totalVotes: Math.max(Number(m.totalVotes ?? 0), summed),
+              earlyVotes: early + mail,
+              electionDayVotes: day,
             },
             true,
           );

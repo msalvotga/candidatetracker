@@ -1591,6 +1591,121 @@ button.enr-electionOpenBtn:disabled {
   margin-bottom: 0;
 }
 
+.enr-voteDesk__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: flex-end;
+  margin: 12px 0;
+}
+
+.enr-voteDesk__toolbar .enr-field {
+  min-width: 220px;
+  margin: 0;
+}
+
+.enr-voteDesk__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.enr-voteDesk__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--tx-border, #d5dbe3);
+  background: #fff;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.enr-voteDesk__chip span {
+  font-variant-numeric: tabular-nums;
+  color: var(--tx-muted, #5c6b7a);
+}
+
+.enr-voteDesk__chip.is-on {
+  border-color: var(--tx-navy, #0f2747);
+  background: #eef3f8;
+  font-weight: 700;
+}
+
+.enr-voteDesk__gridWrap {
+  max-height: min(70vh, 640px);
+}
+
+.enr-voteDesk__grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fff;
+}
+
+.enr-voteDesk__grid thead tr:nth-child(2) th {
+  top: 2.1rem;
+}
+
+.enr-voteDesk__badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.enr-voteDesk__badge--manual {
+  background: #fff4d6;
+  color: #7a4e00;
+}
+
+.enr-voteDesk__badge--county_feed {
+  background: #e5f6ea;
+  color: #0d5c2e;
+}
+
+.enr-voteDesk__badge--sos {
+  background: #e7f0fa;
+  color: #0f3d73;
+}
+
+.enr-voteDesk__badge--empty {
+  background: #f3f4f6;
+  color: #5c6b7a;
+}
+
+.enr-voteDesk__unlinked {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #8a5a00;
+}
+
+.enr-voteDesk__total {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.enr-voteDesk__rowDirty {
+  background: #fffaf0;
+}
+
+.enr-voteDesk__pager {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0 16px;
+}
+
+.enr-voteDesk__historyWrap {
+  max-height: 360px;
+  overflow: auto;
+}
+
 .enr-miniBtn--danger {
   color: #b00020;
   border-color: #f0b4b4;

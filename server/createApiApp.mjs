@@ -98,6 +98,7 @@ import {
 import { catalogIdForSourceConfig, resolveDefaultCatalogId } from "./lib/electionCatalogId.mjs";
 import { buildCountyRaceMappingView } from "./lib/countyRaceMappingView.mjs";
 import { buildCountyRaceSourcesView } from "./lib/countyRaceSourcesView.mjs";
+import { buildCountyVoteDesk } from "./lib/countyVoteDesk.mjs";
 import { collectCivixSosRaces } from "./lib/civixSosRaces.mjs";
 import { inferElectionPartyFromConfig } from "./lib/countySosRaceMatch.mjs";
 import { mergeLinkedCountyOverridesIntoCivix } from "./lib/mergeLinkedCountyIntoCivix.mjs";
@@ -1062,6 +1063,7 @@ export function createApiApp() {
           await appendVoteHistoryIfChanged({
             electionId: String(electionId),
             sourceKey: `county:${seg.countyId}`,
+            countyKey: seg.countyId,
             capturedAt: countyBatchAt,
             rows: seg.rows ?? [],
           });
@@ -1633,12 +1635,79 @@ export function createApiApp() {
       if (!electionId || !countyKey || !sosRaceId) {
         return res.status(400).json({ error: "countyKey and sosRaceId required" });
       }
+      const raceName = String(req.body?.raceName ?? "").trim();
       if (sosCandidateId) {
-        await deleteCountySosManualVote(electionId, countyKey, sosRaceId, sosCandidateId);
+        await deleteCountySosManualVote(electionId, countyKey, sosRaceId, sosCandidateId, { raceName });
       } else {
-        await deleteCountySosManualVotesForCountyRace(electionId, countyKey, sosRaceId);
+        await deleteCountySosManualVotesForCountyRace(electionId, countyKey, sosRaceId, { raceName });
       }
       res.json({ ok: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/elections/:electionId/vote-desk", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      const sosRaceId = String(req.query?.sosRaceId ?? "").trim();
+      if (!electionId) return res.status(400).json({ error: "electionId required" });
+      const num = Number(electionId);
+      if (!Number.isFinite(num)) {
+        return res.status(400).json({ error: "Vote desk requires a Civix numeric election id" });
+      }
+      const cfg = await getElectionIngestConfig(num);
+      const bundle = await loadCivixBundleWithCacheFallback(num, cfg.sosCountyInfoUrl);
+      const sosRaces = collectCivixSosRaces(bundle.election);
+      const view = await buildCountyVoteDesk(electionId, sosRaceId, sosRaces);
+      res.json({ electionId, ...view });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.put("/api/elections/:electionId/vote-desk/manual", async (req, res) => {
+    try {
+      await ensureDb();
+      const electionId = String(req.params.electionId ?? "").trim();
+      const sosRaceId = String(req.body?.sosRaceId ?? "").trim();
+      const raceName = String(req.body?.raceName ?? "").trim();
+      const counties = Array.isArray(req.body?.counties) ? req.body.counties : [];
+      if (!electionId || !sosRaceId) {
+        return res.status(400).json({ error: "sosRaceId required" });
+      }
+      if (!counties.length) return res.status(400).json({ error: "counties required" });
+      let saved = 0;
+      for (const county of counties) {
+        const countyKey = String(county?.countyKey ?? "").toLowerCase().trim();
+        if (!countyKey) continue;
+        const candidates = Array.isArray(county.candidates) ? county.candidates : [];
+        for (const c of candidates) {
+          const sosCandidateId = String(c?.sosCandidateId ?? "").trim();
+          if (!sosCandidateId) continue;
+          await upsertCountySosManualVote(electionId, {
+            countyKey,
+            sosRaceId,
+            sosCandidateId,
+            choiceName: c.choiceName,
+            partyName: c.partyName,
+            raceName,
+            earlyVotes: c.earlyVotes,
+            electionDayVotes: c.electionDayVotes,
+            mailVotes: c.mailVotes ?? 0,
+          });
+          saved += 1;
+        }
+        await upsertCountySosRaceVoteSource(electionId, {
+          countyKey,
+          sosRaceId,
+          voteSource: "manual",
+        });
+      }
+      res.json({ ok: true, saved });
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: String(e?.message || e) });

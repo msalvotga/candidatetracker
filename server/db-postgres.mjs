@@ -753,7 +753,8 @@ export async function listCountySosManualVotes(electionId) {
   const r = await pool.request().input("election_id", String(electionId)).query(`
     SELECT county_key AS countyKey, sos_race_id AS sosRaceId, sos_candidate_id AS sosCandidateId,
            choice_name AS choiceName, party_name AS partyName, early_votes AS earlyVotes,
-           election_day_votes AS electionDayVotes, total_votes AS totalVotes, updated_at AS updatedAt
+           election_day_votes AS electionDayVotes, mail_votes AS mailVotes, total_votes AS totalVotes,
+           updated_at AS updatedAt
     FROM dbo.county_sos_manual_votes WHERE election_id = @election_id
     ORDER BY county_key, sos_race_id, sos_candidate_id
   `);
@@ -765,19 +766,81 @@ export async function listCountySosManualVotes(electionId) {
     partyName: String(row.partyName ?? ""),
     earlyVotes: Number(row.earlyVotes ?? 0),
     electionDayVotes: Number(row.electionDayVotes ?? 0),
+    mailVotes: Number(row.mailVotes ?? 0),
     totalVotes: Number(row.totalVotes ?? 0),
     updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt ?? ""),
   }));
 }
 
-export async function deleteCountySosManualVote(electionId, countyKey, sosRaceId, sosCandidateId) {
+function asVoteCount(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(n);
+}
+
+async function recordManualVoteHistory(electionId, row) {
+  const countyKey = String(row.countyKey ?? "").toLowerCase().trim();
+  const sosRaceId = String(row.sosRaceId ?? "").trim();
+  if (!countyKey || !sosRaceId) return;
+  await appendVoteHistoryIfChanged({
+    electionId: String(electionId),
+    sourceKey: `manual:${countyKey}`,
+    countyKey,
+    sosRaceId,
+    capturedAt: new Date(),
+    rows: [
+      {
+        contestName: String(row.raceName ?? sosRaceId),
+        choiceName: String(row.choiceName ?? ""),
+        partyName: row.partyName ?? "",
+        earlyVotes: asVoteCount(row.earlyVotes),
+        electionDayVotes: asVoteCount(row.electionDayVotes),
+        mailVotes: asVoteCount(row.mailVotes),
+        totalVotes: asVoteCount(row.totalVotes),
+        countyKey,
+        sosRaceId,
+      },
+    ],
+  });
+}
+
+export async function deleteCountySosManualVote(electionId, countyKey, sosRaceId, sosCandidateId, meta = {}) {
   const pool = await ensureDb();
+  const ck = String(countyKey).toLowerCase().trim();
+  const raceId = String(sosRaceId).trim();
+  const candId = String(sosCandidateId).trim();
+  const existing = await pool
+    .request()
+    .input("election_id", String(electionId))
+    .input("county_key", ck)
+    .input("sos_race_id", raceId)
+    .input("sos_candidate_id", candId)
+    .query(`
+      SELECT choice_name AS choiceName, party_name AS partyName
+      FROM dbo.county_sos_manual_votes
+      WHERE election_id = @election_id AND county_key = @county_key AND sos_race_id = @sos_race_id
+        AND sos_candidate_id = @sos_candidate_id
+    `);
+  const prev = existing.recordset?.[0];
+  if (prev) {
+    await recordManualVoteHistory(electionId, {
+      countyKey: ck,
+      sosRaceId: raceId,
+      raceName: meta.raceName,
+      choiceName: prev.choiceName,
+      partyName: prev.partyName,
+      earlyVotes: 0,
+      electionDayVotes: 0,
+      mailVotes: 0,
+      totalVotes: 0,
+    });
+  }
   await pool
     .request()
     .input("election_id", String(electionId))
-    .input("county_key", String(countyKey).toLowerCase().trim())
-    .input("sos_race_id", String(sosRaceId).trim())
-    .input("sos_candidate_id", String(sosCandidateId).trim())
+    .input("county_key", ck)
+    .input("sos_race_id", raceId)
+    .input("sos_candidate_id", candId)
     .query(`
       DELETE FROM dbo.county_sos_manual_votes
       WHERE election_id = @election_id AND county_key = @county_key AND sos_race_id = @sos_race_id
@@ -785,13 +848,38 @@ export async function deleteCountySosManualVote(electionId, countyKey, sosRaceId
     `);
 }
 
-export async function deleteCountySosManualVotesForCountyRace(electionId, countyKey, sosRaceId) {
+export async function deleteCountySosManualVotesForCountyRace(electionId, countyKey, sosRaceId, meta = {}) {
   const pool = await ensureDb();
+  const ck = String(countyKey).toLowerCase().trim();
+  const raceId = String(sosRaceId).trim();
+  const existing = await pool
+    .request()
+    .input("election_id", String(electionId))
+    .input("county_key", ck)
+    .input("sos_race_id", raceId)
+    .query(`
+      SELECT choice_name AS choiceName, party_name AS partyName
+      FROM dbo.county_sos_manual_votes
+      WHERE election_id = @election_id AND county_key = @county_key AND sos_race_id = @sos_race_id
+    `);
+  for (const prev of existing.recordset ?? []) {
+    await recordManualVoteHistory(electionId, {
+      countyKey: ck,
+      sosRaceId: raceId,
+      raceName: meta.raceName,
+      choiceName: prev.choiceName,
+      partyName: prev.partyName,
+      earlyVotes: 0,
+      electionDayVotes: 0,
+      mailVotes: 0,
+      totalVotes: 0,
+    });
+  }
   await pool
     .request()
     .input("election_id", String(electionId))
-    .input("county_key", String(countyKey).toLowerCase().trim())
-    .input("sos_race_id", String(sosRaceId).trim())
+    .input("county_key", ck)
+    .input("sos_race_id", raceId)
     .query(`
       DELETE FROM dbo.county_sos_manual_votes
       WHERE election_id = @election_id AND county_key = @county_key AND sos_race_id = @sos_race_id
@@ -800,26 +888,61 @@ export async function deleteCountySosManualVotesForCountyRace(electionId, county
 
 export async function upsertCountySosManualVote(electionId, row) {
   const pool = await ensureDb();
+  const countyKey = String(row.countyKey ?? "").toLowerCase().trim();
+  const sosRaceId = String(row.sosRaceId ?? "").trim();
+  const sosCandidateId = String(row.sosCandidateId ?? "").trim();
+  const existingR = await pool
+    .request()
+    .input("election_id", String(electionId))
+    .input("county_key", countyKey)
+    .input("sos_race_id", sosRaceId)
+    .input("sos_candidate_id", sosCandidateId)
+    .query(`
+      SELECT mail_votes AS mailVotes
+      FROM dbo.county_sos_manual_votes
+      WHERE election_id = @election_id AND county_key = @county_key AND sos_race_id = @sos_race_id
+        AND sos_candidate_id = @sos_candidate_id
+    `);
+  const existing = existingR.recordset?.[0];
+  const earlyVotes = asVoteCount(row.earlyVotes);
+  const electionDayVotes = asVoteCount(row.electionDayVotes);
+  const mailProvided = row.mailVotes != null && row.mailVotes !== "";
+  const mailVotes = mailProvided ? asVoteCount(row.mailVotes) : asVoteCount(existing?.mailVotes);
+  const totalVotes = mailProvided
+    ? earlyVotes + electionDayVotes + mailVotes
+    : asVoteCount(row.totalVotes ?? earlyVotes + electionDayVotes + mailVotes);
   await pool
     .request()
     .input("election_id", String(electionId))
-    .input("county_key", String(row.countyKey ?? "").toLowerCase().trim())
-    .input("sos_race_id", String(row.sosRaceId ?? "").trim())
-    .input("sos_candidate_id", String(row.sosCandidateId ?? "").trim())
+    .input("county_key", countyKey)
+    .input("sos_race_id", sosRaceId)
+    .input("sos_candidate_id", sosCandidateId)
     .input("choice_name", String(row.choiceName ?? "").trim())
     .input("party_name", String(row.partyName ?? "").trim())
-    .input("early_votes", Number(row.earlyVotes ?? 0))
-    .input("election_day_votes", Number(row.electionDayVotes ?? 0))
-    .input("total_votes", Number(row.totalVotes ?? 0))
+    .input("early_votes", earlyVotes)
+    .input("election_day_votes", electionDayVotes)
+    .input("mail_votes", mailVotes)
+    .input("total_votes", totalVotes)
     .query(`
       MERGE dbo.county_sos_manual_votes AS t
       USING (SELECT @election_id AS election_id, @county_key AS county_key, @sos_race_id AS sos_race_id, @sos_candidate_id AS sos_candidate_id) AS s
       ON t.election_id = s.election_id AND t.county_key = s.county_key AND t.sos_race_id = s.sos_race_id AND t.sos_candidate_id = s.sos_candidate_id
       WHEN MATCHED THEN UPDATE SET choice_name = @choice_name, party_name = @party_name, early_votes = @early_votes,
-        election_day_votes = @election_day_votes, total_votes = @total_votes, updated_at = SYSUTCDATETIME()
-      WHEN NOT MATCHED THEN INSERT (election_id, county_key, sos_race_id, sos_candidate_id, choice_name, party_name, early_votes, election_day_votes, total_votes)
-        VALUES (@election_id, @county_key, @sos_race_id, @sos_candidate_id, @choice_name, @party_name, @early_votes, @election_day_votes, @total_votes);
+        election_day_votes = @election_day_votes, mail_votes = @mail_votes, total_votes = @total_votes, updated_at = SYSUTCDATETIME()
+      WHEN NOT MATCHED THEN INSERT (election_id, county_key, sos_race_id, sos_candidate_id, choice_name, party_name, early_votes, election_day_votes, mail_votes, total_votes)
+        VALUES (@election_id, @county_key, @sos_race_id, @sos_candidate_id, @choice_name, @party_name, @early_votes, @election_day_votes, @mail_votes, @total_votes);
     `);
+  await recordManualVoteHistory(electionId, {
+    countyKey,
+    sosRaceId,
+    raceName: row.raceName,
+    choiceName: row.choiceName,
+    partyName: row.partyName,
+    earlyVotes,
+    electionDayVotes,
+    mailVotes,
+    totalVotes,
+  });
 }
 
 export async function listCountySosRaceVoteSources(electionId) {
@@ -1556,19 +1679,26 @@ export async function deleteElectionSourceConfig(electionId) {
   return { deleted: true, electionId: id };
 }
 
-export async function appendVoteHistoryIfChanged({ electionId, sourceKey, capturedAt, rows }) {
+export async function appendVoteHistoryIfChanged({ electionId, sourceKey, capturedAt, rows, countyKey, sosRaceId }) {
   const pool = await ensureDb();
   const electionKey = String(electionId ?? "56181");
   const source = String(sourceKey ?? "unknown");
   const captured = capturedAt != null ? new Date(capturedAt) : new Date();
+  const fallbackCounty = String(countyKey ?? "").toLowerCase().trim();
+  const fallbackRaceId = String(sosRaceId ?? "").trim();
   for (const row of rows ?? []) {
     const contestName = String(row.contestName ?? "");
     const choiceName = String(row.choiceName ?? "");
     const partyName = row.partyName == null ? null : String(row.partyName);
     const earlyVotes = Number(row.earlyVotes ?? 0);
     const electionDayVotes = Number(row.electionDayVotes ?? 0);
+    const mailVotes = Number(row.mailVotes ?? 0);
     const totalVotes = Number(row.totalVotes ?? 0);
     const percentOfVotes = row.percentOfVotes == null ? null : String(row.percentOfVotes);
+    let rowCounty = String(row.countyKey ?? fallbackCounty).toLowerCase().trim();
+    if (!rowCounty && source.startsWith("county:")) rowCounty = source.slice("county:".length).toLowerCase();
+    if (!rowCounty && source.startsWith("manual:")) rowCounty = source.slice("manual:".length).toLowerCase();
+    const rowRaceId = String(row.sosRaceId ?? fallbackRaceId).trim();
     const prev = await pool
       .request()
       .input("election_id", electionKey)
@@ -1577,7 +1707,8 @@ export async function appendVoteHistoryIfChanged({ electionId, sourceKey, captur
       .input("choice_name", choiceName)
       .input("party_name", partyName)
       .query(`
-        SELECT TOP 1 early_votes AS earlyVotes, election_day_votes AS electionDayVotes, total_votes AS totalVotes, percent_of_votes AS percentOfVotes
+        SELECT TOP 1 early_votes AS earlyVotes, election_day_votes AS electionDayVotes, mail_votes AS mailVotes,
+               total_votes AS totalVotes, percent_of_votes AS percentOfVotes
         FROM dbo.vote_update_history
         WHERE election_id = @election_id AND source_key = @source_key AND contest_name = @contest_name AND choice_name = @choice_name
           AND COALESCE(party_name, '') = COALESCE(@party_name, '')
@@ -1588,6 +1719,7 @@ export async function appendVoteHistoryIfChanged({ electionId, sourceKey, captur
       !p ||
       Number(p.earlyVotes ?? 0) !== earlyVotes ||
       Number(p.electionDayVotes ?? 0) !== electionDayVotes ||
+      Number(p.mailVotes ?? 0) !== mailVotes ||
       Number(p.totalVotes ?? 0) !== totalVotes ||
       String(p.percentOfVotes ?? "") !== String(percentOfVotes ?? "");
     if (!changed) continue;
@@ -1600,16 +1732,100 @@ export async function appendVoteHistoryIfChanged({ electionId, sourceKey, captur
       .input("party_name", partyName)
       .input("early_votes", earlyVotes)
       .input("election_day_votes", electionDayVotes)
+      .input("mail_votes", mailVotes)
       .input("total_votes", totalVotes)
       .input("percent_of_votes", percentOfVotes)
+      .input("county_key", rowCounty)
+      .input("sos_race_id", rowRaceId)
       .input("captured_at", captured)
       .query(`
         INSERT INTO dbo.vote_update_history
-          (election_id, source_key, contest_name, choice_name, party_name, early_votes, election_day_votes, total_votes, percent_of_votes, captured_at)
+          (election_id, source_key, contest_name, choice_name, party_name, early_votes, election_day_votes, mail_votes, total_votes, percent_of_votes, county_key, sos_race_id, captured_at)
         VALUES
-          (@election_id, @source_key, @contest_name, @choice_name, @party_name, @early_votes, @election_day_votes, @total_votes, @percent_of_votes, @captured_at)
+          (@election_id, @source_key, @contest_name, @choice_name, @party_name, @early_votes, @election_day_votes, @mail_votes, @total_votes, @percent_of_votes, @county_key, @sos_race_id, @captured_at)
       `);
   }
+}
+
+export async function listVoteHistoryForRace(electionId, { sosRaceId, raceName, isGovernor, limit = 200 } = {}) {
+  const pool = await ensureDb();
+  const lim = Math.max(1, Math.min(500, Number(limit) || 200));
+  const r = await pool
+    .request()
+    .input("election_id", String(electionId))
+    .input("sos_race_id", String(sosRaceId ?? ""))
+    .input("race_name", String(raceName ?? "").trim())
+    .input("is_governor", isGovernor ? 1 : 0)
+    .input("lim", lim)
+    .query(`
+      SELECT TOP (@lim)
+        id AS id,
+        source_key AS sourceKey,
+        county_key AS countyKey,
+        sos_race_id AS sosRaceId,
+        contest_name AS contestName,
+        choice_name AS choiceName,
+        party_name AS partyName,
+        early_votes AS earlyVotes,
+        election_day_votes AS electionDayVotes,
+        mail_votes AS mailVotes,
+        total_votes AS totalVotes,
+        previous_total AS previousTotal,
+        captured_at AS capturedAt
+      FROM (
+        SELECT
+          h.id,
+          h.source_key,
+          h.county_key,
+          h.sos_race_id,
+          h.contest_name,
+          h.choice_name,
+          h.party_name,
+          h.early_votes,
+          h.election_day_votes,
+          h.mail_votes,
+          h.total_votes,
+          h.captured_at,
+          LAG(h.total_votes) OVER (
+            PARTITION BY h.source_key, h.county_key, h.contest_name, h.choice_name, COALESCE(h.party_name, '')
+            ORDER BY h.captured_at, h.id
+          ) AS previous_total
+        FROM dbo.vote_update_history h
+        WHERE h.election_id = @election_id
+          AND (
+            (@sos_race_id <> '' AND h.sos_race_id = @sos_race_id)
+            OR lower(h.contest_name) = lower(@race_name)
+            OR (
+              @is_governor = 1
+              AND lower(h.contest_name) LIKE '%governor%'
+              AND lower(h.contest_name) NOT LIKE '%lieutenant%'
+            )
+          )
+      ) ranked
+      ORDER BY captured_at DESC, id DESC
+    `);
+  return (r.recordset ?? []).map((row) => {
+    let countyKey = String(row.countyKey ?? "").trim().toLowerCase();
+    const sourceKey = String(row.sourceKey ?? "");
+    if (!countyKey && sourceKey.startsWith("county:")) countyKey = sourceKey.slice("county:".length).toLowerCase();
+    if (!countyKey && sourceKey.startsWith("manual:")) countyKey = sourceKey.slice("manual:".length).toLowerCase();
+    const previous = row.previousTotal == null ? null : Number(row.previousTotal);
+    return {
+      id: Number(row.id),
+      sourceKey,
+      countyKey,
+      sosRaceId: String(row.sosRaceId ?? ""),
+      contestName: String(row.contestName ?? ""),
+      choiceName: String(row.choiceName ?? ""),
+      partyName: String(row.partyName ?? ""),
+      earlyVotes: Number(row.earlyVotes ?? 0),
+      electionDayVotes: Number(row.electionDayVotes ?? 0),
+      mailVotes: Number(row.mailVotes ?? 0),
+      totalVotes: Number(row.totalVotes ?? 0),
+      previousTotal: Number.isFinite(previous) ? previous : null,
+      capturedAt: row.capturedAt instanceof Date ? row.capturedAt.toISOString() : String(row.capturedAt ?? ""),
+    };
+  });
 }
 
 const SOURCE_IMPORT_LOG_CAP = 500;

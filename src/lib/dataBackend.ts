@@ -509,6 +509,7 @@ export interface CountyRaceMappingPayload {
     partyName: string;
     earlyVotes: number;
     electionDayVotes: number;
+    mailVotes?: number;
     totalVotes: number;
     updatedAt: string;
   }>;
@@ -604,6 +605,82 @@ export async function deleteCountyRaceManualVote(
 ): Promise<void> {
   const r = await apiFetch(`/api/elections/${encodeURIComponent(electionId)}/county-race-mapping/manual-vote`, {
     method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const j = (await r.json().catch(() => ({}))) as { error?: string };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+}
+
+export type VoteDeskOrigin = "manual" | "county_feed" | "sos" | "empty";
+
+export type VoteDeskPayload = {
+  electionId: string;
+  race: {
+    id: string;
+    name: string;
+    section?: string;
+    candidates: Array<{ id: string; name: string; party: string }>;
+  } | null;
+  races: Array<{ id: string; name: string; section?: string }>;
+  counties: Array<{
+    countyKey: string;
+    voteSource: CountyVoteSource;
+    origin: VoteDeskOrigin;
+    linked: boolean;
+    candidates: Array<{
+      sosCandidateId: string;
+      earlyVotes: number;
+      electionDayVotes: number;
+      mailVotes: number;
+      totalVotes: number;
+    }>;
+  }>;
+  history: Array<{
+    id: number;
+    sourceKey: string;
+    countyKey: string;
+    sosRaceId: string;
+    contestName: string;
+    choiceName: string;
+    partyName: string;
+    earlyVotes: number;
+    electionDayVotes: number;
+    mailVotes: number;
+    totalVotes: number;
+    previousTotal: number | null;
+    capturedAt: string;
+  }>;
+};
+
+export async function fetchVoteDesk(electionId: string, sosRaceId?: string): Promise<VoteDeskPayload> {
+  const q = sosRaceId ? `?sosRaceId=${encodeURIComponent(sosRaceId)}` : "";
+  const r = await apiFetch(`/api/elections/${encodeURIComponent(electionId)}/vote-desk${q}`, { cache: "no-store" });
+  const j = (await r.json().catch(() => ({}))) as VoteDeskPayload & { error?: string };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+
+export async function saveVoteDeskManual(
+  electionId: string,
+  body: {
+    sosRaceId: string;
+    raceName: string;
+    counties: Array<{
+      countyKey: string;
+      candidates: Array<{
+        sosCandidateId: string;
+        choiceName: string;
+        partyName: string;
+        earlyVotes: number;
+        electionDayVotes: number;
+        mailVotes: number;
+      }>;
+    }>;
+  },
+): Promise<void> {
+  const r = await apiFetch(`/api/elections/${encodeURIComponent(electionId)}/vote-desk/manual`, {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });

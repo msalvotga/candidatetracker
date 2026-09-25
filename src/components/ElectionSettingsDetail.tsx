@@ -24,6 +24,7 @@ import {
 } from "./IngestProgressStatus";
 import type { IngestStepTiming } from "../lib/dataBackend";
 import { CountyRaceMappingSection } from "./CountyRaceMappingSection";
+import { CountyVoteDesk } from "./CountyVoteDesk";
 import { CountyRaceSourcesSection } from "./CountyRaceSourcesSection";
 import { SettingsCollapse } from "./SettingsCollapse";
 import { TX_CIVIX_DEFAULT_COUNTYINFO_PREFIX, civixDefaultCountyInfoUrl } from "../lib/civix/urls";
@@ -129,6 +130,7 @@ export function ElectionSettingsDetail({
   const electionId = cfg.electionId;
   const [busy, setBusy] = useState(false);
   const [forceRefreshing, setForceRefreshing] = useState(false);
+  const [voteDeskRefresh, setVoteDeskRefresh] = useState(0);
   const [ingestProgress, setIngestProgress] = useState<IngestProgress | null>(null);
   const [lastIngestTimings, setLastIngestTimings] = useState<IngestStepTiming[] | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -555,6 +557,7 @@ export function ElectionSettingsDetail({
       stopPoll();
       setForceRefreshing(false);
       setIngestProgress(null);
+      setVoteDeskRefresh((n) => n + 1);
     }
   }
 
@@ -728,6 +731,14 @@ export function ElectionSettingsDetail({
               <IngestResultTimings stepTimings={lastIngestTimings} />
             ) : null}
           </section>
+
+          <CountyVoteDesk
+            electionId={electionId}
+            usesCivixSos={usesCivixSos}
+            busy={busy || forceRefreshing}
+            refreshToken={voteDeskRefresh}
+            onMessage={setMsg}
+          />
 
           <SettingsCollapse
             title="County feeds"
