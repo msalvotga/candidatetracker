@@ -186,10 +186,10 @@ export async function fetchTgaStafferRow(db, stafferId) {
   return enriched;
 }
 
-/** Harris County Texas House districts shown on the staffer map drill-down. */
+/** Harris County Texas House districts shown on the staffer map drill-down. HD-136 is not in Harris. */
 export const HARRIS_HOUSE_DISTRICTS = [
-  126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145,
-  146, 147, 148, 149, 150,
+  126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149,
+  150,
 ];
 
 /** County coverage for the staffer map (direct county assignments only). */

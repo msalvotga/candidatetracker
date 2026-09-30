@@ -111,6 +111,7 @@ export function CountyVoteDesk({
   const [page, setPage] = useState(0);
   const [drafts, setDrafts] = useState<Map<string, CountyDraft>>(new Map());
   const [loaded, setLoaded] = useState<Map<string, CountyDraft>>(new Map());
+  const [alwaysManual, setAlwaysManual] = useState<Map<string, boolean>>(new Map());
 
   const load = useCallback(async () => {
     if (!usesCivixSos || !/^\d+$/.test(String(electionId))) return;
@@ -126,6 +127,9 @@ export function CountyVoteDesk({
       }
       setDrafts(map);
       setLoaded(new Map(map));
+      const flags = new Map<string, boolean>();
+      for (const county of next.counties) flags.set(county.countyKey, county.voteSource === "manual");
+      setAlwaysManual(flags);
     } catch (e) {
       onMessage(e instanceof Error ? e.message : "Failed to load vote counts");
     } finally {
@@ -195,6 +199,8 @@ export function CountyVoteDesk({
   }
 
   function countyDirty(countyKey: string) {
+    const county = countyState.find((c) => c.key === countyKey);
+    if ((alwaysManual.get(countyKey) === true) !== (county?.voteSource === "manual")) return true;
     for (const c of candidates) {
       const d = draftFor(countyKey, c.id);
       const base = loaded.get(countyKey)?.[c.id] ?? zeroCell();
@@ -206,7 +212,7 @@ export function CountyVoteDesk({
   const dirtyKeys = useMemo(() => {
     const keys: string[] = [];
     for (const county of countyState) {
-      let dirty = false;
+      let dirty = (alwaysManual.get(county.key) === true) !== (county.voteSource === "manual");
       for (const c of candidates) {
         const d = drafts.get(county.key)?.[c.id] ?? loaded.get(county.key)?.[c.id] ?? zeroCell();
         const base = loaded.get(county.key)?.[c.id] ?? zeroCell();
@@ -215,7 +221,7 @@ export function CountyVoteDesk({
       if (dirty) keys.push(county.key);
     }
     return keys;
-  }, [countyState, drafts, loaded, candidates]);
+  }, [countyState, drafts, loaded, candidates, alwaysManual]);
 
   function updateCell(countyKey: string, candidateId: string, field: keyof CellDraft, value: string) {
     setDrafts((prev) => {
@@ -236,6 +242,7 @@ export function CountyVoteDesk({
         raceName: race.name,
         counties: keys.map((countyKey) => ({
           countyKey,
+          forceManual: alwaysManual.get(countyKey) === true,
           candidates: candidates.map((c) => {
             const cell = draftFor(countyKey, c.id);
             return {
@@ -263,7 +270,12 @@ export function CountyVoteDesk({
     setSavingKey(countyKey);
     try {
       await saveCountyRaceVoteSource(electionId, { countyKey, sosRaceId: race.id, voteSource: "auto" });
-      onMessage(`${countyLabel(countyKey)} is back on auto (county site or SOS, whichever has more votes).`);
+      setAlwaysManual((prev) => {
+        const next = new Map(prev);
+        next.set(countyKey, false);
+        return next;
+      });
+      onMessage(`${countyLabel(countyKey)} is back on auto. Manual numbers apply only when they are higher than SOS and the county site.`);
       await load();
     } catch (e) {
       onMessage(e instanceof Error ? e.message : "Could not switch to auto");
@@ -275,8 +287,9 @@ export function CountyVoteDesk({
   if (!usesCivixSos || !/^\d+$/.test(String(electionId))) {
     return (
       <section className="enr-panel enr-settings__section enr-voteDesk">
-        <h2>Vote counts</h2>
-        <p className="enr-muted">County vote entry is available for Civix / SOS elections.</p>
+        <SettingsCollapse title="Vote counts">
+          <p className="enr-muted">County vote entry is available for Civix / SOS elections.</p>
+        </SettingsCollapse>
       </section>
     );
   }
@@ -286,14 +299,13 @@ export function CountyVoteDesk({
 
   return (
     <section className="enr-panel enr-settings__section enr-voteDesk">
-      <h2>Vote counts</h2>
+      <SettingsCollapse title="Vote counts">
       <p className="enr-muted">
-        Pick a race — <strong>Governor</strong> is first — and review every Texas county.{" "}
-        <strong>Force update</strong> above pulls SOS and county election sites. When a county does not come in, type{" "}
-        <strong>Early</strong>, <strong>Election day</strong>, and <strong>Mail</strong> for each candidate and save.
-        Saving switches that county to manual. County sites and SOS usually fold mail into early voting; use the Mail
-        column when you are entering the three numbers yourself. Total is early + election day + mail. On the public
-        board, mail is counted with early voting.
+        Pick a race — <strong>Governor</strong> is first — and review every Texas county. Type{" "}
+        <strong>Early</strong>, <strong>Election day</strong>, and <strong>Mail</strong> when a county’s SOS or county-site
+        numbers are missing or behind. Saved manual totals replace the pulled numbers when they are higher. Check{" "}
+        <strong>Always use</strong> to keep the manual numbers even when they are lower. Mail is counted with early voting
+        on the tracker. The same entry is on the <strong>Manual votes</strong> tab.
       </p>
 
       <div className="enr-voteDesk__toolbar">
@@ -400,6 +412,22 @@ export function CountyVoteDesk({
                         ) : null}
                       </td>
                       <td className="enr-manualCountyGrid__actions">
+                        <label className="enr-voteDesk__always">
+                          <input
+                            type="checkbox"
+                            checked={alwaysManual.get(county.key) === true}
+                            disabled={locked}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setAlwaysManual((prev) => {
+                                const next = new Map(prev);
+                                next.set(county.key, checked);
+                                return next;
+                              });
+                            }}
+                          />
+                          Always use
+                        </label>
                         <button
                           type="button"
                           className="enr-miniBtn"
@@ -516,6 +544,7 @@ export function CountyVoteDesk({
             </table>
           </div>
         )}
+      </SettingsCollapse>
       </SettingsCollapse>
     </section>
   );

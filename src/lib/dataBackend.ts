@@ -163,6 +163,10 @@ export interface AppSettings {
   /** Paste Cookie header from DevTools on goelect (saved server-side, not echoed back). */
   civixCookie?: string;
   civixCookieConfigured?: boolean;
+  /** Civix election id whose early / mail / election-day numbers are entered on the Manual votes tab. */
+  manualVoteElectionId?: string;
+  /** When true, the Manual votes page lists only the Governor race. */
+  manualVoteGovernorOnly?: boolean;
 }
 
 export interface ElectionSourceConfig {
@@ -628,6 +632,27 @@ export type VoteDeskPayload = {
     voteSource: CountyVoteSource;
     origin: VoteDeskOrigin;
     linked: boolean;
+    sos?: Array<{
+      sosCandidateId: string;
+      earlyVotes: number;
+      electionDayVotes: number;
+      mailVotes: number;
+      totalVotes: number;
+    }>;
+    countyFeed?: Array<{
+      sosCandidateId: string;
+      earlyVotes: number;
+      electionDayVotes: number;
+      mailVotes: number;
+      totalVotes: number;
+    }>;
+    manual?: Array<{
+      sosCandidateId: string;
+      earlyVotes: number;
+      electionDayVotes: number;
+      mailVotes: number;
+      totalVotes: number;
+    }>;
     candidates: Array<{
       sosCandidateId: string;
       earlyVotes: number;
@@ -661,6 +686,30 @@ export async function fetchVoteDesk(electionId: string, sosRaceId?: string): Pro
   return j;
 }
 
+export type VoteDeskCountyBoard = {
+  electionId: string;
+  countyKey: string;
+  races: Array<{
+    id: string;
+    name: string;
+    section?: string;
+    candidates: Array<{ id: string; name: string; party: string }>;
+    voteSource: CountyVoteSource;
+    origin: VoteDeskOrigin;
+    sos?: VoteDeskPayload["counties"][number]["sos"];
+    countyFeed?: VoteDeskPayload["counties"][number]["countyFeed"];
+    manual?: VoteDeskPayload["counties"][number]["manual"];
+  }>;
+};
+
+export async function fetchVoteDeskCounty(electionId: string, countyKey: string): Promise<VoteDeskCountyBoard> {
+  const q = `?countyKey=${encodeURIComponent(countyKey)}`;
+  const r = await apiFetch(`/api/elections/${encodeURIComponent(electionId)}/vote-desk${q}`, { cache: "no-store" });
+  const j = (await r.json().catch(() => ({}))) as VoteDeskCountyBoard & { error?: string };
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+
 export async function saveVoteDeskManual(
   electionId: string,
   body: {
@@ -668,6 +717,8 @@ export async function saveVoteDeskManual(
     raceName: string;
     counties: Array<{
       countyKey: string;
+      /** When true, this county uses the typed numbers even if SOS or the county site is higher. */
+      forceManual?: boolean;
       candidates: Array<{
         sosCandidateId: string;
         choiceName: string;

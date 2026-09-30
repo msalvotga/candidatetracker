@@ -1,0 +1,912 @@
+import { createReadStream } from "node:fs";
+import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { parse } from "csv-parse";
+import JSZip from "jszip";
+import { datasetPath } from "./ballotScoreEv.mjs";
+import { bexarMailRosterDocument, BEXAR_FOLDER_ID, BEXAR_ROSTER_PAGE, parseBexarAbbmPdf } from "./bexarRoster.mjs";
+import { harrisBbmRosterLink, harrisRosterFrame, HARRIS_ROSTER_PAGE, parseHarrisBbmCsv } from "./harrisRoster.mjs";
+import { parseTravisRosterZip } from "./travisEvRosterParse.mjs";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = path.join(HERE, "../data/county-rosters");
+const STATUS_PATH = path.join(DATA_DIR, "status.json");
+const VOTERS_PATH = path.join(DATA_DIR, "voters.json");
+
+const TRAVIS_HUB = "https://votetravis.gov/current-election-information/current-election/";
+const TRAVIS_G26_ROSTER_ZIP_URL = "https://votetravis.gov/wp-content/uploads/G26-Voter-Rosters.zip";
+
+export const COUNTY_ROSTER_PROFILES = {
+  travis: {
+    key: "travis",
+    label: "Travis County",
+    trained: true,
+    fileKinds: "General-election ZIP",
+    notes:
+      "One Excel file per day a ballot was received. The vote date comes from the file name. Each row has a VUID, name, and precinct. The table starts on row 4.",
+    sourcePage: TRAVIS_HUB,
+  },
+  harris: {
+    key: "harris",
+    label: "Harris County",
+    trained: true,
+    fileKinds: "Cumulative ZIP",
+    notes:
+      "Each pull reads the election rosters page and takes the November 3, 2026 Unofficial BBM Roster. The link changes daily. The ZIP holds one cumulative CSV. Column E is the state VUID and column H is the vote date. A row with no state VUID is skipped until a later file includes it.",
+    sourcePage: HARRIS_ROSTER_PAGE,
+  },
+  bexar: {
+    key: "bexar",
+    label: "Bexar County",
+    trained: true,
+    fileKinds: "Mail-ballot PDF",
+    notes:
+      "Each pull reads the November 3, 2026 general-election document folder and takes the Received Mail Ballots PDF. The link changes daily. The first column is the VUID and the sixth column is the ballot received date.",
+    sourcePage: BEXAR_ROSTER_PAGE,
+  },
+};
+
+const ROSTER_PULL_GATE = "__enrRosterPullGate";
+
+function rosterGate() {
+  if (!globalThis[ROSTER_PULL_GATE]) {
+    globalThis[ROSTER_PULL_GATE] = { active: null, queue: [], lock: false };
+  }
+  return globalThis[ROSTER_PULL_GATE];
+}
+
+function emptyCountyStatus(key) {
+  return {
+    countyKey: key,
+    status: "idle",
+    pulledAt: null,
+    sourceUrl: null,
+    rows: 0,
+    uniqueVuids: 0,
+    fileCount: 0,
+    days: [],
+    earlyInPerson: 0,
+    mail: 0,
+    other: 0,
+    skippedMissingVuid: 0,
+    error: null,
+  };
+}
+
+async function ensureDir() {
+  await mkdir(DATA_DIR, { recursive: true });
+}
+
+async function readStore() {
+  try {
+    return JSON.parse(await readFile(STATUS_PATH, "utf8"));
+  } catch {
+    return { updatedAt: null, counties: {} };
+  }
+}
+
+async function writeStore(store) {
+  await ensureDir();
+  const tmp = `${STATUS_PATH}.tmp`;
+  await writeFile(tmp, JSON.stringify(store));
+  await rm(STATUS_PATH, { force: true });
+  await rename(tmp, STATUS_PATH);
+}
+
+export function summarizeRosterRows(rows) {
+  const vuids = new Set();
+  const byDay = new Map();
+  let earlyInPerson = 0;
+  let mail = 0;
+  let other = 0;
+  for (const row of rows) {
+    const vuid = String(row.vuid ?? "").trim();
+    if (vuid) vuids.add(vuid);
+    const method = String(row.votingMethod ?? "").toUpperCase();
+    if (method === "EV") earlyInPerson += 1;
+    else if (method === "AB") mail += 1;
+    else other += 1;
+    const date = String(row.activityDate ?? "").trim() || "Unknown";
+    const day = byDay.get(date) ?? { date, voters: 0, earlyInPerson: 0, mail: 0 };
+    day.voters += 1;
+    if (method === "EV") day.earlyInPerson += 1;
+    if (method === "AB") day.mail += 1;
+    byDay.set(date, day);
+  }
+  const days = [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
+  return {
+    rows: rows.length,
+    uniqueVuids: vuids.size,
+    days,
+    earlyInPerson,
+    mail,
+    other,
+  };
+}
+
+function voterKey(vuid, voteDate) {
+  return `${vuid}|${voteDate}`;
+}
+
+function blankVoter(vuid, voteDate, sourceCounty) {
+  return {
+    vuid,
+    voteDate,
+    sourceCounty,
+    matched: 0,
+    county: null,
+    txHouse: null,
+    txSenate: null,
+    usHouse: null,
+    score2022: null,
+    score2026: null,
+    registrationDate: null,
+    profile: null,
+  };
+}
+
+const LOOKUP_MODEL_KEYS = new Set(["vuid", "countyname", "ushouse", "txsenate", "txhouse", "score2022", "score2026"]);
+const REGISTRATION_ALIASES = new Set([
+  "registrationdate",
+  "registrationdateofvoter",
+  "regdate",
+  "dateofregistration",
+  "effectivedateofregistration",
+  "voterregistrationdate",
+]);
+
+function compactHeader(label) {
+  return String(label ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+export function voterProfileFromLookup(row) {
+  const fields = [];
+  for (const [key, value] of Object.entries(row)) {
+    const label = String(key).trim();
+    if (!label || LOOKUP_MODEL_KEYS.has(compactHeader(label))) continue;
+    const text = String(value ?? "").trim();
+    if (!text || /^null$/i.test(text)) continue;
+    fields.push({ label, value: text });
+  }
+  return fields;
+}
+
+export function registrationDateFromProfile(fields) {
+  const hit = (fields ?? []).find((field) => REGISTRATION_ALIASES.has(compactHeader(field.label)));
+  return hit ? normalizeRosterDate(hit.value) : null;
+}
+
+function normalizeRosterDate(raw) {
+  const text = String(raw ?? "").trim();
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const us = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  if (us) return `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}`;
+  return text || null;
+}
+
+export function sortRosterVoters(voters, sort = "voteDate", dir = "asc") {
+  const sign = dir === "desc" ? -1 : 1;
+  const tie = (a, b) => a.voteDate.localeCompare(b.voteDate) || a.vuid.localeCompare(b.vuid, undefined, { numeric: true });
+  return [...voters].sort((a, b) => {
+    if (sort === "registrationDate") {
+      const av = a.registrationDate || null;
+      const bv = b.registrationDate || null;
+      if (!av && !bv) return tie(a, b);
+      if (!av) return 1;
+      if (!bv) return -1;
+      if (av !== bv) return av.localeCompare(bv) * sign;
+      return tie(a, b);
+    }
+    const date = a.voteDate.localeCompare(b.voteDate);
+    if (date) return date * sign;
+    return a.vuid.localeCompare(b.vuid, undefined, { numeric: true });
+  });
+}
+
+function countyToken(raw) {
+  const text = String(raw ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z]/g, "");
+  return text || null;
+}
+
+/** The ballot county is the roster county. Districts stay only when the voter roll county matches. */
+export function tieVoteToCounty(row) {
+  const voted = countyToken(row.sourceCounty);
+  if (!row.registeredCounty && row.county) row.registeredCounty = String(row.county).trim();
+  const registered = countyToken(row.registeredCounty);
+  const same = Boolean(voted && registered && voted === registered);
+  if (voted) row.county = same && row.registeredCounty ? String(row.registeredCounty).trim().toUpperCase() : voted;
+  if (row.matched === 1 && registered && !same) {
+    row.txHouse = null;
+    row.txSenate = null;
+    row.usHouse = null;
+  }
+  return row;
+}
+
+function copyMatch(target, source) {
+  target.matched = 1;
+  target.registeredCounty = source.registeredCounty ?? source.county ?? null;
+  target.txHouse = source.txHouse ?? null;
+  target.txSenate = source.txSenate ?? null;
+  target.usHouse = source.usHouse ?? null;
+  target.score2022 = source.score2022 ?? null;
+  target.score2026 = source.score2026 ?? null;
+  target.registrationDate = source.registrationDate ?? null;
+  target.profile = source.profile ?? null;
+  tieVoteToCounty(target);
+}
+
+export function mergeRosterRecords(existing, incoming, sourceCounty) {
+  const byKey = new Map(existing.map((row) => [voterKey(row.vuid, row.voteDate), row]));
+  const known = new Map();
+  for (const row of existing) {
+    if (row.matched === 1) known.set(row.vuid, row);
+  }
+  let added = 0;
+  for (const raw of incoming) {
+    const vuid = String(raw.vuid ?? "").trim();
+    const voteDate = String(raw.activityDate ?? raw.voteDate ?? "").trim();
+    if (!vuid || !voteDate) continue;
+    const key = voterKey(vuid, voteDate);
+    if (byKey.has(key)) continue;
+    const row = blankVoter(vuid, voteDate, sourceCounty);
+    const prior = known.get(vuid);
+    if (prior) copyMatch(row, prior);
+    byKey.set(key, row);
+    added += 1;
+  }
+  const voters = [...byKey.values()];
+  const unmatchedVuids = [...new Set(voters.filter((row) => row.matched !== 1).map((row) => row.vuid))];
+  return { voters, added, unmatchedVuids };
+}
+
+function lookupField(row, name) {
+  const want = name.toLowerCase();
+  for (const [key, value] of Object.entries(row)) {
+    if (String(key).trim().toLowerCase() === want) return value;
+  }
+  return "";
+}
+
+function normDistrict(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text || /^null$/i.test(text)) return null;
+  const n = Number(text.replace(/[^\d.]/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return String(Math.trunc(n));
+}
+
+function parseModelScore(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text || /^null$/i.test(text)) return null;
+  const n = Number(text.replace(/,/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function vuidId(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text || /^null$/i.test(text)) return "";
+  return /^\d+$/.test(text) ? String(Number(text)) : text;
+}
+
+async function matchLookupVuids(need) {
+  const hits = new Map();
+  if (!need.size) return hits;
+  const filePath = datasetPath("lookup");
+  try {
+    await access(filePath);
+  } catch {
+    return hits;
+  }
+  const wanted = new Set([...need].map(vuidId));
+  await new Promise((resolve, reject) => {
+    const parser = createReadStream(filePath).pipe(
+      parse({ columns: true, bom: true, relax_quotes: true, relax_column_count: true }),
+    );
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    parser.on("data", (row) => {
+      const vuid = vuidId(lookupField(row, "VUID"));
+      if (!vuid || !wanted.has(vuid) || hits.has(vuid)) return;
+      const profile = voterProfileFromLookup(row);
+      hits.set(vuid, {
+        county: String(lookupField(row, "CountyName") ?? "").trim() || null,
+        usHouse: normDistrict(lookupField(row, "USHouse")),
+        txSenate: normDistrict(lookupField(row, "TXSenate")),
+        txHouse: normDistrict(lookupField(row, "TXHouse")),
+        score2022: parseModelScore(lookupField(row, "Score2022")),
+        score2026: parseModelScore(lookupField(row, "Score2026")),
+        registrationDate: registrationDateFromProfile(profile),
+        profile,
+      });
+      if (hits.size === wanted.size) parser.destroy();
+    });
+    parser.on("end", finish);
+    parser.on("close", finish);
+    parser.on("error", (error) => {
+      if (hits.size === wanted.size || error?.code === "ERR_STREAM_PREMATURE_CLOSE") finish();
+      else if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+  });
+  return hits;
+}
+
+export async function readRosterVoterRows() {
+  return readVoters();
+}
+
+async function readVoters() {
+  try {
+    const rows = JSON.parse(await readFile(VOTERS_PATH, "utf8"));
+    if (!Array.isArray(rows)) return [];
+    let changed = false;
+    for (const row of rows) {
+      const before = JSON.stringify(row);
+      tieVoteToCounty(row);
+      if (JSON.stringify(row) !== before) changed = true;
+    }
+    if (changed) await writeVoters(rows);
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
+async function writeVoters(voters) {
+  await ensureDir();
+  const tmp = `${VOTERS_PATH}.tmp`;
+  await writeFile(tmp, JSON.stringify(voters));
+  await rm(VOTERS_PATH, { force: true });
+  await rename(tmp, VOTERS_PATH);
+}
+
+async function saveRosterRows(incoming, sourceCounty) {
+  const existing = await readVoters();
+  const merged = mergeRosterRecords(existing, incoming, sourceCounty);
+  const started = Date.now();
+  if (merged.unmatchedVuids.length) {
+    console.log(`Matching ${merged.unmatchedVuids.length} roster VUIDs against the voter file`);
+  } else {
+    console.log("Roster VUIDs are already matched; skipping the voter file");
+  }
+  const hits = await matchLookupVuids(new Set(merged.unmatchedVuids));
+  if (merged.unmatchedVuids.length) {
+    console.log(`Voter file match finished in ${Date.now() - started}ms (${hits.size} found)`);
+  }
+  for (const row of merged.voters) {
+    if (row.matched === 1) continue;
+    const hit = hits.get(vuidId(row.vuid));
+    if (!hit) continue;
+    copyMatch(row, hit);
+  }
+  await writeVoters(merged.voters);
+  const matched = merged.voters.filter((row) => row.matched === 1).length;
+  return {
+    matched,
+    unmatched: merged.voters.length - matched,
+    added: merged.added,
+    lookupChecked: merged.unmatchedVuids.length,
+  };
+}
+
+function rosterTotals(voters) {
+  const vuids = new Set(voters.map((row) => row.vuid));
+  const matched = voters.filter((row) => row.matched === 1).length;
+  return {
+    total: voters.length,
+    uniqueVuids: vuids.size,
+    matched,
+    unmatched: voters.length - matched,
+  };
+}
+
+const PROFILE_STAMP_PATH = path.join(DATA_DIR, "lookup-profile.json");
+let profileEnriching = false;
+
+function lookupHeaderNames(headerLine) {
+  return String(headerLine ?? "")
+    .replace(/^\uFEFF/, "")
+    .split(",")
+    .map((name) => compactHeader(name.replace(/^"|"$/g, "")));
+}
+
+async function readLookupHeader(filePath) {
+  const file = await stat(filePath);
+  const header = await new Promise((resolve, reject) => {
+    const stream = createReadStream(filePath, { encoding: "utf8", start: 0, end: 8191 });
+    let buf = "";
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      stream.destroy();
+      resolve(value);
+    };
+    stream.on("data", (chunk) => {
+      buf += chunk;
+      const nl = buf.indexOf("\n");
+      if (nl >= 0) finish(buf.slice(0, nl));
+    });
+    stream.on("end", () => finish(buf));
+    stream.on("error", (error) => {
+      if (settled || error?.code === "ERR_STREAM_PREMATURE_CLOSE") return;
+      settled = true;
+      reject(error);
+    });
+  });
+  return { stamp: `${file.mtimeMs}:${file.size}`, header };
+}
+
+async function readProfileStamp() {
+  try {
+    return JSON.parse(await readFile(PROFILE_STAMP_PATH, "utf8"))?.stamp ?? "";
+  } catch {
+    return "";
+  }
+}
+
+async function writeProfileStamp(stamp) {
+  await ensureDir();
+  await writeFile(PROFILE_STAMP_PATH, JSON.stringify({ stamp }));
+}
+
+async function enrichMatchedRosterProfiles() {
+  const gate = rosterGate();
+  if (gate.active || gate.lock || gate.queue.length) return;
+  const filePath = datasetPath("lookup");
+  let lookup;
+  try {
+    lookup = await readLookupHeader(filePath);
+  } catch {
+    return;
+  }
+  if ((await readProfileStamp()) === lookup.stamp) return;
+  const names = lookupHeaderNames(lookup.header);
+  if (!names.some((name) => name && !LOOKUP_MODEL_KEYS.has(name))) {
+    await writeProfileStamp(lookup.stamp);
+    return;
+  }
+  const voters = await readVoters();
+  const need = new Set(voters.filter((row) => row.matched === 1).map((row) => vuidId(row.vuid)));
+  const hits = await matchLookupVuids(need);
+  if (rosterGate().active || rosterGate().lock) return;
+  for (const row of voters) {
+    if (row.matched !== 1) continue;
+    const hit = hits.get(vuidId(row.vuid));
+    if (!hit) continue;
+    row.registrationDate = hit.registrationDate;
+    row.profile = hit.profile;
+  }
+  await writeVoters(voters);
+  await writeProfileStamp(lookup.stamp);
+}
+
+function scheduleRosterProfileEnrich() {
+  if (profileEnriching) return;
+  profileEnriching = true;
+  void enrichMatchedRosterProfiles()
+    .catch((error) => console.error("Roster profile enrich", error))
+    .finally(() => {
+      profileEnriching = false;
+    });
+}
+
+export async function listRosterVoters({ offset = 0, limit = 100, sort = "voteDate", dir = "asc" } = {}) {
+  const voters = sortRosterVoters(await readVoters(), sort === "registrationDate" ? "registrationDate" : "voteDate", dir);
+  const start = Math.max(0, Number(offset) || 0);
+  const pageSize = Math.min(100, Math.max(1, Number(limit) || 100));
+  scheduleRosterProfileEnrich();
+  return {
+    ...rosterTotals(voters),
+    offset: start,
+    limit: pageSize,
+    sort: sort === "registrationDate" ? "registrationDate" : "voteDate",
+    dir: dir === "desc" ? "desc" : "asc",
+    rows: voters.slice(start, start + pageSize),
+  };
+}
+
+async function pullTravis() {
+  const sourceUrl = TRAVIS_G26_ROSTER_ZIP_URL;
+  const response = await fetch(sourceUrl, { headers: { "user-agent": "electionnighttracker" } });
+  if (!response.ok) {
+    throw new Error(`Travis roster file was not available (${response.status}). ${sourceUrl}`);
+  }
+  const zip = await JSZip.loadAsync(Buffer.from(await response.arrayBuffer()));
+  const fileCount = Object.keys(zip.files).filter((name) => !zip.files[name].dir && /\.xlsx$/i.test(name)).length;
+  const rows = await parseTravisRosterZip(zip, {
+    dateScope: "CUMULATIVE",
+    votingMethodScope: "ALL",
+    defaultCounty: "TRAVIS",
+    filePartyScope: "COMBINED",
+  });
+  const saved = await saveRosterRows(rows, "travis");
+  return { sourceUrl, fileCount, ...summarizeRosterRows(rows), ...saved };
+}
+
+async function harrisRosterHtml() {
+  const response = await fetch(HARRIS_ROSTER_PAGE, { headers: { "user-agent": "electionnighttracker" } });
+  if (!response.ok) {
+    throw new Error(`Harris roster page was not available (${response.status}). ${HARRIS_ROSTER_PAGE}`);
+  }
+  const html = await response.text();
+  if (harrisBbmRosterLink(html)) return html;
+  const frame = harrisRosterFrame(html);
+  if (!frame) return html;
+  const frameUrl = new URL(frame, HARRIS_ROSTER_PAGE).href;
+  const inner = await fetch(frameUrl, { headers: { "user-agent": "electionnighttracker" } });
+  if (!inner.ok) {
+    throw new Error(`Harris roster list was not available (${inner.status}). ${frameUrl}`);
+  }
+  return inner.text();
+}
+
+async function pullHarris() {
+  const html = await harrisRosterHtml();
+  const link = harrisBbmRosterLink(html);
+  if (!link) {
+    throw new Error("The November 3, 2026 Unofficial BBM Roster link was not on the Harris roster page.");
+  }
+  const response = await fetch(link.href, { headers: { "user-agent": "electionnighttracker" } });
+  if (!response.ok) {
+    throw new Error(`Harris roster file was not available (${response.status}). ${link.href}`);
+  }
+  const zip = await JSZip.loadAsync(Buffer.from(await response.arrayBuffer()));
+  const csvNames = Object.keys(zip.files).filter((name) => !zip.files[name].dir && /\.csv$/i.test(name));
+  if (!csvNames.length) throw new Error("Harris roster ZIP did not contain a CSV file.");
+  const parsed = { rows: [], skippedMissingVuid: 0, skippedMissingDate: 0 };
+  for (const name of csvNames) {
+    const text = await zip.files[name].async("string");
+    const next = parseHarrisBbmCsv(text);
+    parsed.rows.push(...next.rows);
+    parsed.skippedMissingVuid += next.skippedMissingVuid;
+    parsed.skippedMissingDate += next.skippedMissingDate;
+  }
+  const saved = await saveRosterRows(parsed.rows, "harris");
+  return {
+    sourceUrl: link.href,
+    fileCount: csvNames.length,
+    skippedMissingVuid: parsed.skippedMissingVuid,
+    ...summarizeRosterRows(parsed.rows),
+    ...saved,
+  };
+}
+
+function cookieHeader(response) {
+  return (response.headers.getSetCookie?.() ?? []).map((cookie) => cookie.split(";")[0]).join("; ");
+}
+
+async function pullBexar() {
+  const page = await fetch(BEXAR_ROSTER_PAGE, { headers: { "user-agent": "electionnighttracker" } });
+  if (!page.ok) {
+    throw new Error(`Bexar roster page was not available (${page.status}). ${BEXAR_ROSTER_PAGE}`);
+  }
+  const cookies = cookieHeader(page);
+  const body = {
+    folderId: BEXAR_FOLDER_ID,
+    getDocuments: 1,
+    imageRepo: false,
+    renderMode: 0,
+    loadSource: 7,
+    requestingModuleID: 75,
+    searchString: "",
+    pageNumber: 1,
+    rowsPerPage: 100,
+    sortColumn: "Name",
+    sortOrder: 0,
+  };
+  const list = await fetch(
+    "https://elections.bexar.gov/Admin/DocumentCenter/Home/Document_AjaxBinding?renderMode=0&loadSource=7",
+    {
+      method: "POST",
+      headers: {
+        "user-agent": "electionnighttracker",
+        "content-type": "application/json",
+        accept: "application/json",
+        cookie: cookies,
+        referer: BEXAR_ROSTER_PAGE,
+      },
+      body: JSON.stringify(body),
+    },
+  );
+  const payload = await list.json().catch(() => null);
+  const documents = payload?.Documents;
+  if (!list.ok || !Array.isArray(documents)) {
+    throw new Error("Bexar document list was not available.");
+  }
+  const link = bexarMailRosterDocument(documents);
+  if (!link) {
+    throw new Error("The November 3, 2026 mail-ballot roster PDF was not in the Bexar document folder.");
+  }
+  const file = await fetch(link.href, {
+    headers: { "user-agent": "electionnighttracker", cookie: cookies, referer: BEXAR_ROSTER_PAGE },
+  });
+  if (!file.ok) {
+    throw new Error(`Bexar roster file was not available (${file.status}). ${link.href}`);
+  }
+  const parsed = await parseBexarAbbmPdf(Buffer.from(await file.arrayBuffer()));
+  const saved = await saveRosterRows(parsed.rows, "bexar");
+  return {
+    sourceUrl: link.href,
+    fileCount: 1,
+    ...summarizeRosterRows(parsed.rows),
+    ...saved,
+  };
+}
+
+const PULLS = {
+  travis: pullTravis,
+  harris: pullHarris,
+  bexar: pullBexar,
+};
+
+const SCHEDULE_PATH = path.join(DATA_DIR, "schedule.json");
+
+export const DEFAULT_ROSTER_SCHEDULE = {
+  enabled: true,
+  intervalMinutes: 60,
+  startHour: 9,
+  endHour: 13,
+  timeZone: "America/Chicago",
+};
+
+let scheduleTimer = null;
+
+function trainedRosterKeys() {
+  return Object.values(COUNTY_ROSTER_PROFILES)
+    .filter((profile) => profile.trained && PULLS[profile.key])
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .map((profile) => profile.key);
+}
+
+function normalizeRosterSchedule(raw) {
+  const interval = Math.round(Number(raw?.intervalMinutes));
+  const startHour = Math.round(Number(raw?.startHour));
+  const endHour = Math.round(Number(raw?.endHour));
+  return {
+    enabled: raw?.enabled !== false,
+    intervalMinutes: Number.isFinite(interval) ? Math.min(24 * 60, Math.max(15, interval)) : DEFAULT_ROSTER_SCHEDULE.intervalMinutes,
+    startHour: Number.isFinite(startHour) ? Math.min(23, Math.max(0, startHour)) : DEFAULT_ROSTER_SCHEDULE.startHour,
+    endHour: Number.isFinite(endHour) ? Math.min(23, Math.max(0, endHour)) : DEFAULT_ROSTER_SCHEDULE.endHour,
+    timeZone: "America/Chicago",
+  };
+}
+
+export function zonedHour(date, timeZone = "America/Chicago") {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  if (!Number.isFinite(hour) || hour === 24) return 0;
+  return hour;
+}
+
+export function countiesDueForRosterPull(counties, schedule, now = new Date()) {
+  const rules = normalizeRosterSchedule(schedule);
+  if (!rules.enabled) return [];
+  const hour = zonedHour(now, rules.timeZone);
+  if (hour < rules.startHour || hour > rules.endHour) return [];
+  const intervalMs = rules.intervalMinutes * 60 * 1000;
+  return trainedRosterKeys().filter((key) => {
+    const pulledAt = counties?.[key]?.pulledAt;
+    if (!pulledAt) return true;
+    const age = now.getTime() - Date.parse(pulledAt);
+    return !Number.isFinite(age) || age >= intervalMs;
+  });
+}
+
+export async function readRosterSchedule() {
+  try {
+    return normalizeRosterSchedule(JSON.parse(await readFile(SCHEDULE_PATH, "utf8")));
+  } catch {
+    return { ...DEFAULT_ROSTER_SCHEDULE };
+  }
+}
+
+export async function updateRosterSchedule(patch) {
+  const next = normalizeRosterSchedule({ ...(await readRosterSchedule()), ...patch });
+  if (next.endHour < next.startHour) {
+    const error = new Error("The last pull hour has to be the same as or later than the first pull hour.");
+    error.statusCode = 400;
+    throw error;
+  }
+  await ensureDir();
+  const tmp = `${SCHEDULE_PATH}.tmp`;
+  await writeFile(tmp, JSON.stringify(next));
+  await rm(SCHEDULE_PATH, { force: true });
+  await rename(tmp, SCHEDULE_PATH);
+  return next;
+}
+
+export async function readCountyRosterBoard() {
+  const store = await readStore();
+  const gate = rosterGate();
+  let changed = false;
+  if (!gate.lock && !gate.active) {
+    for (const profile of Object.values(COUNTY_ROSTER_PROFILES)) {
+      const county = store.counties[profile.key];
+      if (county?.status === "running") {
+        county.status = county.pulledAt ? "ready" : "idle";
+        changed = true;
+      }
+    }
+  }
+  if (changed) await writeStore(store);
+  const counties = {};
+  for (const profile of Object.values(COUNTY_ROSTER_PROFILES)) {
+    counties[profile.key] = {
+      ...profile,
+      ...(store.counties[profile.key] ?? emptyCountyStatus(profile.key)),
+      running: gate.active?.countyKey === profile.key,
+    };
+  }
+  const pullingProfile = gate.active ? COUNTY_ROSTER_PROFILES[gate.active.countyKey] : null;
+  return {
+    updatedAt: store.updatedAt,
+    counties,
+    schedule: await readRosterSchedule(),
+    pulling: pullingProfile ? { key: pullingProfile.key, label: pullingProfile.label.replace(/ County$/, "") } : null,
+    pullQueue: gate.queue
+      .map((key) => COUNTY_ROSTER_PROFILES[key]?.label.replace(/ County$/, ""))
+      .filter(Boolean),
+  };
+}
+
+async function continueRosterQueue() {
+  const next = rosterGate().queue.shift();
+  if (!next) return;
+  try {
+    await startCountyRosterPull(next);
+  } catch (error) {
+    rosterGate().queue = [];
+    console.error("County roster queue", error);
+  }
+}
+
+export async function startCountyRosterPull(countyKey) {
+  const key = String(countyKey ?? "").trim().toLowerCase();
+  const profile = COUNTY_ROSTER_PROFILES[key];
+  if (!profile?.trained || !PULLS[key]) {
+    const error = new Error(`${profile?.label ?? "This county"} does not have a trained roster pull yet.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  if (rosterGate().active || rosterGate().lock) {
+    const error = new Error(`A roster pull is already running for ${rosterGate().active?.countyKey ?? "another county"}.`);
+    error.statusCode = 409;
+    throw error;
+  }
+  rosterGate().lock = true;
+
+  try {
+    const store = await readStore();
+    store.updatedAt = new Date().toISOString();
+    store.counties[key] = {
+      ...emptyCountyStatus(key),
+      ...(store.counties[key] ?? {}),
+      status: "running",
+      error: null,
+    };
+    await writeStore(store);
+
+    rosterGate().active = { countyKey: key };
+    void (async () => {
+      try {
+        const result = await PULLS[key]();
+        const next = await readStore();
+        next.updatedAt = new Date().toISOString();
+        next.counties[key] = {
+          ...emptyCountyStatus(key),
+          status: "ready",
+          pulledAt: next.updatedAt,
+          sourceUrl: result.sourceUrl,
+          rows: result.rows,
+          uniqueVuids: result.uniqueVuids,
+          fileCount: result.fileCount,
+          days: result.days,
+          earlyInPerson: result.earlyInPerson,
+          mail: result.mail,
+          other: result.other,
+          skippedMissingVuid: result.skippedMissingVuid ?? 0,
+          error: null,
+        };
+        await writeStore(next);
+      } catch (error) {
+        const next = await readStore();
+        next.updatedAt = new Date().toISOString();
+        next.counties[key] = {
+          ...(next.counties[key] ?? emptyCountyStatus(key)),
+          status: "error",
+          error: error instanceof Error ? error.message : String(error),
+        };
+        await writeStore(next);
+      } finally {
+        rosterGate().active = null;
+        void continueRosterQueue();
+      }
+    })();
+
+    return readCountyRosterBoard();
+  } finally {
+    rosterGate().lock = false;
+  }
+}
+
+export async function startAllCountyRosterPulls() {
+  if (rosterGate().active || rosterGate().lock || rosterGate().queue.length) {
+    const error = new Error("A roster pull is already running.");
+    error.statusCode = 409;
+    throw error;
+  }
+  const keys = trainedRosterKeys();
+  if (!keys.length) {
+    const error = new Error("No trained county roster pulls yet.");
+    error.statusCode = 400;
+    throw error;
+  }
+  rosterGate().queue = keys.slice(1);
+  try {
+    return await startCountyRosterPull(keys[0]);
+  } catch (error) {
+    rosterGate().queue = [];
+    throw error;
+  }
+}
+
+export async function runDueRosterPulls(now = new Date()) {
+  if (rosterGate().active || rosterGate().lock || rosterGate().queue.length) return { started: false, reason: "busy" };
+  const schedule = await readRosterSchedule();
+  const store = await readStore();
+  const due = countiesDueForRosterPull(store.counties ?? {}, schedule, now);
+  if (!due.length) return { started: false, reason: "idle" };
+  if (rosterGate().active || rosterGate().lock || rosterGate().queue.length) return { started: false, reason: "busy" };
+  rosterGate().queue = due.slice(1);
+  try {
+    await startCountyRosterPull(due[0]);
+    return { started: true, counties: due };
+  } catch (error) {
+    rosterGate().queue = [];
+    if (error?.statusCode === 409) return { started: false, reason: "busy" };
+    throw error;
+  }
+}
+
+const SCHEDULE_GLOBAL = "__enrRosterPullSchedule";
+
+export function startRosterPullSchedule() {
+  if (scheduleTimer) return;
+  const existing = globalThis[SCHEDULE_GLOBAL];
+  if (existing?.timer) clearInterval(existing.timer);
+  if (existing?.boot) clearTimeout(existing.boot);
+  const tick = () => {
+    void runDueRosterPulls().catch((error) => {
+      console.error("County roster schedule", error);
+    });
+  };
+  const boot = setTimeout(() => {
+    const timer = setInterval(tick, 30_000);
+    scheduleTimer = timer;
+    const current = globalThis[SCHEDULE_GLOBAL];
+    if (current) current.timer = timer;
+    tick();
+  }, 4 * 60 * 1000);
+  scheduleTimer = boot;
+  globalThis[SCHEDULE_GLOBAL] = { timer: null, boot };
+}

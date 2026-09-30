@@ -10,6 +10,7 @@ import {
 } from "../db.mjs";
 import { rowMatchesLinkedContests, suggestSosCandidateForCountyRow } from "./countySosRaceMatch.mjs";
 import { civixCountyNameToKey } from "./texasCountyKeys.mjs";
+import { resolveVoteSource } from "./voteSource.mjs";
 
 export function isGovernorRaceName(name) {
   const n = String(name ?? "")
@@ -62,72 +63,45 @@ function resolveCountyKey(countyName, civixToCountyKey) {
   return key;
 }
 
-function resolveOrigin(configured, feedTotal, sosTotal, hasManual) {
-  const cfg = String(configured ?? "auto").toLowerCase();
-  if (cfg === "manual") return hasManual ? "manual" : sosTotal > 0 ? "sos" : feedTotal > 0 ? "county_feed" : "empty";
-  if (cfg === "sos") return sosTotal > 0 ? "sos" : "empty";
-  if (cfg === "county_feed") return feedTotal > 0 ? "county_feed" : sosTotal > 0 ? "sos" : "empty";
-  if (feedTotal > sosTotal && feedTotal > 0) return "county_feed";
-  if (sosTotal > 0) return "sos";
-  if (feedTotal > 0) return "county_feed";
-  return "empty";
-}
-
 function numbersForCandidate(map, candidateId) {
   return map[candidateId] ?? emptyNumbers();
 }
 
-/**
- * Admin vote desk for one SOS race: county-site numbers, SOS numbers, and manual overrides.
- * @param {string} electionId
- * @param {string} sosRaceId
- * @param {Array<{ id: string|number, N?: string, Candidates?: unknown[], section?: string }>} sosRaces
- */
-export async function buildCountyVoteDesk(electionId, sosRaceId, sosRaces) {
-  const races = sosRaces ?? [];
-  const requested = String(sosRaceId ?? "").trim();
-  const raceId = requested || pickDefaultSosRaceId(races);
-  const race = races.find((r) => String(r.id ?? "") === raceId) ?? null;
-  const raceList = races.map((r) => ({
-    id: String(r.id ?? ""),
-    name: String(r.N ?? ""),
-    section: String(r.section ?? ""),
+function raceListFrom(races) {
+  return (races ?? []).map((race) => ({
+    id: String(race.id ?? ""),
+    name: String(race.N ?? ""),
+    section: String(race.section ?? ""),
   }));
+}
 
-  if (!race) {
-    return {
-      race: null,
-      races: raceList,
-      counties: [],
-      history: [],
-    };
-  }
-
-  const candidates = (race.Candidates ?? []).map((c) => ({
-    id: String(c.ID ?? ""),
-    name: String(c.N ?? ""),
-    party: String(c.P ?? ""),
+function raceCandidates(race) {
+  return (race?.Candidates ?? []).map((candidate) => ({
+    id: String(candidate.ID ?? ""),
+    name: String(candidate.N ?? ""),
+    party: String(candidate.P ?? ""),
   }));
+}
+
+async function loadVoteDeskContext(electionId) {
+  const id = String(electionId);
+  const [byCivixName, sosRows, links, manualVotes, voteSources, candidateLinks, civixToCountyKey] = await Promise.all([
+    getLatestCountyRows(id),
+    getLatestSosCountyRows(id),
+    listCountySosRaceLinks(id),
+    listCountySosManualVotes(id),
+    listCountySosRaceVoteSources(id),
+    listCountySosCandidateLinks(id),
+    buildCivixNameToCountyKeyMap(id),
+  ]);
+  return { byCivixName, sosRows, links, manualVotes, voteSources, candidateLinks, civixToCountyKey };
+}
+
+function assembleRaceCounties(ctx, race) {
+  const raceId = String(race.id ?? "");
+  const candidates = raceCandidates(race);
   const raceName = String(race.N ?? "");
-
-  const [byCivixName, sosRows, links, manualVotes, voteSources, candidateLinks, civixToCountyKey, history] =
-    await Promise.all([
-      getLatestCountyRows(String(electionId)),
-      getLatestSosCountyRows(String(electionId)),
-      listCountySosRaceLinks(String(electionId)),
-      listCountySosManualVotes(String(electionId)),
-      listCountySosRaceVoteSources(String(electionId)),
-      listCountySosCandidateLinks(String(electionId), raceId),
-      buildCivixNameToCountyKeyMap(String(electionId)),
-      listVoteHistoryForRace(String(electionId), {
-        sosRaceId: raceId,
-        raceName,
-        isGovernor: isGovernorRaceName(raceName),
-        limit: 200,
-      }),
-    ]);
-
-  const raceLinks = links.filter((l) => l.sosRaceId === raceId);
+  const raceLinks = ctx.links.filter((link) => link.sosRaceId === raceId);
   const linksByCounty = new Map();
   for (const link of raceLinks) {
     const list = linksByCounty.get(link.countyKey) ?? [];
@@ -136,13 +110,15 @@ export async function buildCountyVoteDesk(electionId, sosRaceId, sosRaces) {
   }
 
   const candidateLinkByChoice = new Map(
-    candidateLinks.map((cl) => [`${cl.countyKey}|${String(cl.countyChoiceName ?? "").trim()}`, cl.sosCandidateId]),
+    ctx.candidateLinks
+      .filter((link) => link.sosRaceId === raceId)
+      .map((link) => [`${link.countyKey}|${String(link.countyChoiceName ?? "").trim()}`, link.sosCandidateId]),
   );
 
   /** @type {Map<string, Record<string, ReturnType<typeof emptyNumbers>>>} */
   const feedByCounty = new Map();
-  for (const [civixName, rows] of Object.entries(byCivixName)) {
-    const countyKey = civixToCountyKey[civixName] ?? resolveCountyKey(civixName, civixToCountyKey);
+  for (const [civixName, rows] of Object.entries(ctx.byCivixName)) {
+    const countyKey = ctx.civixToCountyKey[civixName] ?? resolveCountyKey(civixName, ctx.civixToCountyKey);
     if (!countyKey) continue;
     const contestNames = linksByCounty.get(countyKey) ?? [];
     for (const row of rows ?? []) {
@@ -155,7 +131,7 @@ export async function buildCountyVoteDesk(electionId, sosRaceId, sosRaces) {
       const choice = String(row.choiceName ?? "").trim();
       const linkedId = candidateLinkByChoice.get(`${countyKey}|${choice}`);
       const target = linkedId
-        ? candidates.find((c) => c.id === String(linkedId))
+        ? candidates.find((candidate) => candidate.id === String(linkedId))
         : suggestSosCandidateForCountyRow(race.Candidates ?? [], row);
       const candidateId = linkedId || (target?.ID != null ? String(target.ID) : "");
       if (!candidateId) continue;
@@ -168,13 +144,13 @@ export async function buildCountyVoteDesk(electionId, sosRaceId, sosRaces) {
 
   /** @type {Map<string, Record<string, ReturnType<typeof emptyNumbers>>>} */
   const sosByCounty = new Map();
-  for (const row of sosRows ?? []) {
+  for (const row of ctx.sosRows ?? []) {
     const contestName = String(row.contestName ?? "");
     const nameMatch = isGovernorRaceName(raceName)
       ? isGovernorRaceName(contestName)
       : contestName.trim().toLowerCase() === raceName.trim().toLowerCase();
     if (!nameMatch) continue;
-    const countyKey = resolveCountyKey(row.countyName, civixToCountyKey);
+    const countyKey = resolveCountyKey(row.countyName, ctx.civixToCountyKey);
     if (!countyKey) continue;
     const target = suggestSosCandidateForCountyRow(race.Candidates ?? [], row);
     const candidateId = target?.ID != null ? String(target.ID) : "";
@@ -187,19 +163,23 @@ export async function buildCountyVoteDesk(electionId, sosRaceId, sosRaces) {
 
   /** @type {Map<string, Record<string, ReturnType<typeof emptyNumbers>>>} */
   const manualByCounty = new Map();
-  for (const m of manualVotes) {
-    if (m.sosRaceId !== raceId) continue;
-    const bucket = manualByCounty.get(m.countyKey) ?? {};
-    bucket[m.sosCandidateId] = {
-      earlyVotes: Number(m.earlyVotes ?? 0),
-      electionDayVotes: Number(m.electionDayVotes ?? 0),
-      mailVotes: Number(m.mailVotes ?? 0),
-      totalVotes: Number(m.totalVotes ?? 0) || Number(m.earlyVotes ?? 0) + Number(m.electionDayVotes ?? 0) + Number(m.mailVotes ?? 0),
+  for (const manual of ctx.manualVotes) {
+    if (manual.sosRaceId !== raceId) continue;
+    const bucket = manualByCounty.get(manual.countyKey) ?? {};
+    bucket[manual.sosCandidateId] = {
+      earlyVotes: Number(manual.earlyVotes ?? 0),
+      electionDayVotes: Number(manual.electionDayVotes ?? 0),
+      mailVotes: Number(manual.mailVotes ?? 0),
+      totalVotes:
+        Number(manual.totalVotes ?? 0) ||
+        Number(manual.earlyVotes ?? 0) + Number(manual.electionDayVotes ?? 0) + Number(manual.mailVotes ?? 0),
     };
-    manualByCounty.set(m.countyKey, bucket);
+    manualByCounty.set(manual.countyKey, bucket);
   }
 
-  const sourceByCounty = new Map(voteSources.filter((s) => s.sosRaceId === raceId).map((s) => [s.countyKey, s.voteSource]));
+  const sourceByCounty = new Map(
+    ctx.voteSources.filter((source) => source.sosRaceId === raceId).map((source) => [source.countyKey, source.voteSource]),
+  );
 
   const countyKeys = new Set([
     ...feedByCounty.keys(),
@@ -209,35 +189,102 @@ export async function buildCountyVoteDesk(electionId, sosRaceId, sosRaces) {
     ...linksByCounty.keys(),
   ]);
 
-  const counties = [...countyKeys].map((countyKey) => {
+  return [...countyKeys].map((countyKey) => {
     const feed = feedByCounty.get(countyKey) ?? {};
     const sos = sosByCounty.get(countyKey) ?? {};
     const manual = manualByCounty.get(countyKey) ?? {};
     const hasManual = Object.keys(manual).length > 0;
     const configured = sourceByCounty.get(countyKey) ?? "auto";
-    const origin = resolveOrigin(configured, sumTotals(feed), sumTotals(sos), hasManual);
+    const pack = (map) =>
+      candidates.map((candidate) => ({
+        sosCandidateId: candidate.id,
+        ...numbersForCandidate(map, candidate.id),
+      }));
+    const origin = resolveVoteSource(configured, sumTotals(feed), sumTotals(sos), sumTotals(manual), hasManual);
     const active = origin === "manual" ? manual : origin === "county_feed" ? feed : origin === "sos" ? sos : {};
     return {
       countyKey,
       voteSource: configured === "auto" ? "auto" : configured,
       origin,
       linked: linksByCounty.has(countyKey),
-      candidates: candidates.map((c) => ({
-        sosCandidateId: c.id,
-        ...numbersForCandidate(active, c.id),
-      })),
+      sos: pack(sos),
+      countyFeed: pack(feed),
+      manual: pack(manual),
+      candidates: pack(active),
     };
   });
+}
+
+/**
+ * Admin vote desk for one SOS race: county-site numbers, SOS numbers, and manual overrides.
+ * @param {string} electionId
+ * @param {string} sosRaceId
+ * @param {Array<{ id: string|number, N?: string, Candidates?: unknown[], section?: string }>} sosRaces
+ */
+export async function buildCountyVoteDesk(electionId, sosRaceId, sosRaces) {
+  const races = sosRaces ?? [];
+  const requested = String(sosRaceId ?? "").trim();
+  const raceId = requested || pickDefaultSosRaceId(races);
+  const race = races.find((item) => String(item.id ?? "") === raceId) ?? null;
+  const raceList = raceListFrom(races);
+
+  if (!race) {
+    return {
+      race: null,
+      races: raceList,
+      counties: [],
+      history: [],
+    };
+  }
+
+  const raceName = String(race.N ?? "");
+  const [ctx, history] = await Promise.all([
+    loadVoteDeskContext(electionId),
+    listVoteHistoryForRace(String(electionId), {
+      sosRaceId: raceId,
+      raceName,
+      isGovernor: isGovernorRaceName(raceName),
+      limit: 200,
+    }),
+  ]);
 
   return {
     race: {
       id: raceId,
       name: raceName,
       section: String(race.section ?? ""),
-      candidates,
+      candidates: raceCandidates(race),
     },
     races: raceList,
-    counties,
+    counties: assembleRaceCounties(ctx, race),
     history,
   };
+}
+
+/**
+ * Every SOS race for one county, with SOS, county-pull, and manual numbers.
+ * @param {string} electionId
+ * @param {string} countyKey
+ * @param {Array<{ id: string|number, N?: string, Candidates?: unknown[], section?: string }>} sosRaces
+ */
+export async function buildCountyAllRaces(electionId, countyKey, sosRaces) {
+  const key = String(countyKey ?? "").trim().toLowerCase();
+  const ctx = await loadVoteDeskContext(electionId);
+  const races = (sosRaces ?? []).map((race) => {
+    const candidates = raceCandidates(race);
+    const emptyPack = candidates.map((candidate) => ({ sosCandidateId: candidate.id, ...emptyNumbers() }));
+    const hit = assembleRaceCounties(ctx, race).find((county) => county.countyKey === key);
+    return {
+      id: String(race.id ?? ""),
+      name: String(race.N ?? ""),
+      section: String(race.section ?? ""),
+      candidates,
+      voteSource: hit?.voteSource ?? "auto",
+      origin: hit?.origin ?? "empty",
+      sos: hit?.sos ?? emptyPack,
+      countyFeed: hit?.countyFeed ?? emptyPack,
+      manual: hit?.manual ?? emptyPack,
+    };
+  });
+  return { countyKey: key, races };
 }

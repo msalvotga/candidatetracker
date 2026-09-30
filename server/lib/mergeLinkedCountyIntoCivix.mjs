@@ -18,6 +18,7 @@ import {
   rowMatchesLinkedContests,
   suggestSosCandidateForCountyRow,
 } from "./countySosRaceMatch.mjs";
+import { resolveVoteSource } from "./voteSource.mjs";
 
 function findTargetRaceCandidateFromRow(raceCandidates, row, countyKey, raceId, candidateLinkByKey) {
   const choice = String(row.choiceName ?? "").trim();
@@ -86,20 +87,16 @@ function sumSosCountyRaceVotes(raceBlock, raceCandidates) {
   return total;
 }
 
-/**
- * @param {string | undefined} configured sos | county_feed | manual | auto | undefined
- * @param {number} countyFeedTotal
- * @param {number} sosCountyTotal
- * @param {boolean} [hasManualVotes]
- * @returns {"sos"|"county_feed"|"manual"}
- */
-function resolveVoteSource(configured, countyFeedTotal, sosCountyTotal, hasManualVotes = false) {
-  const cfg = String(configured ?? "auto").toLowerCase();
-  if (cfg === "manual") return hasManualVotes ? "manual" : "sos";
-  if (cfg === "sos") return "sos";
-  if (cfg === "county_feed") return countyFeedTotal > 0 ? "county_feed" : "sos";
-  if (countyFeedTotal > sosCountyTotal && countyFeedTotal > 0) return "county_feed";
-  return "sos";
+function sumManualVotes(list) {
+  let total = 0;
+  for (const m of list ?? []) {
+    const early = Number(m.earlyVotes ?? 0);
+    const day = Number(m.electionDayVotes ?? 0);
+    const mail = Number(m.mailVotes ?? 0);
+    const summed = early + day + mail;
+    total += Math.max(Number(m.totalVotes ?? 0), summed);
+  }
+  return total;
 }
 
 function applyVoteRowToCell(cell, row, forceCounty) {
@@ -184,8 +181,10 @@ export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPa
     if (isSd4SosRaceName(raceName)) continue;
 
     const raceLinks = linksBySosRace.get(raceId) ?? [];
-    if (!raceLinks.length) continue;
+    const hasManualForRace = manualVotes.some((m) => m.sosRaceId === raceId);
+    if (!raceLinks.length && !hasManualForRace) continue;
 
+    let appliedOverride = false;
     for (const block of Object.values(countyRoot)) {
       const civixName = String(block?.N ?? "").toUpperCase();
       const countyKey = civixToCountyKey[civixName] ?? "";
@@ -200,9 +199,11 @@ export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPa
         configuredSource,
         sumCountyFeedVotesForRace(countyRows, contestNames),
         sumSosCountyRaceVotes(existingRaceBlock, race.Candidates),
+        sumManualVotes(manualList),
         manualList.length > 0,
       );
-      if (voteSource === "sos") continue;
+      if (voteSource === "sos" || voteSource === "empty") continue;
+      appliedOverride = true;
 
       block.Races = block.Races ?? {};
       if (!block.Races[raceId]) block.Races[raceId] = { C: {} };
@@ -250,6 +251,8 @@ export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPa
       }
     }
 
+    if (!raceLinks.length && !appliedOverride) continue;
+
     let total = 0;
     let early = 0;
     let electionDay = 0;
@@ -285,19 +288,20 @@ export async function mergeLinkedCountyOverridesIntoCivix(electionId, electionPa
           (b) => (civixToCountyKey[String(b?.N ?? "").toUpperCase()] ?? "") === ck,
         );
         const manualForCounty = manualByCountyRace.get(`${ck}|${raceId}`) ?? [];
-        return (
-          resolveVoteSource(
-            cfg,
-            sumCountyFeedVotesForRace(rows, names),
-            sumSosCountyRaceVotes(blockForCounty?.Races?.[raceId], race.Candidates),
-            manualForCounty.length > 0,
-          ) !== "sos"
+        const chosen = resolveVoteSource(
+          cfg,
+          sumCountyFeedVotesForRace(rows, names),
+          sumSosCountyRaceVotes(blockForCounty?.Races?.[raceId], race.Candidates),
+          sumManualVotes(manualForCounty),
+          manualForCounty.length > 0,
         );
+        return chosen !== "sos" && chosen !== "empty";
       };
-      if (
-        cTotal > 0 ||
-        raceLinks.some((l) => usesCountyForCounty(l.countyKey))
-      ) {
+      const countiesToCheck = new Set(raceLinks.map((l) => l.countyKey));
+      for (const m of manualVotes) {
+        if (m.sosRaceId === raceId) countiesToCheck.add(m.countyKey);
+      }
+      if (cTotal > 0 || [...countiesToCheck].some((ck) => usesCountyForCounty(ck))) {
         c.V = cTotal;
         c.EV = cEarly;
         c.ED = cEd;

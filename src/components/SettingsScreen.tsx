@@ -34,6 +34,9 @@ import {
 } from "./IngestProgressStatus";
 import type { IngestStepTiming } from "../lib/dataBackend";
 import { SettingsCollapse } from "./SettingsCollapse";
+import { SettingsBuildStamp } from "./SettingsBuildStamp";
+import { BallotScoreDataSettings } from "./BallotScoreDataSettings";
+import { CountyRosterScheduleSettings } from "./CountyRosterScheduleSettings";
 
 function SourceImportAlert({
   sourceKey,
@@ -53,10 +56,12 @@ function SourceImportAlert({
 
 export function SettingsScreen({
   onBack,
+  onOpenManualVotes,
   onCatalogChanged,
   backendLabel,
 }: {
   onBack: () => void;
+  onOpenManualVotes: () => void;
   onCatalogChanged: () => void;
   backendLabel: string;
 }) {
@@ -79,6 +84,7 @@ export function SettingsScreen({
     montgomerySourceUrl: "",
     chambersSourceUrl: "",
     civixCookieConfigured: false,
+    manualVoteElectionId: "",
   });
   const [civixConnect, setCivixConnect] = useState<CivixConnectPrepare | null>(null);
   const [forceMsg, setForceMsg] = useState<string | null>(null);
@@ -141,6 +147,40 @@ export function SettingsScreen({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  async function onSetManualVoteGovernorOnly(governorOnly: boolean) {
+    setBusy(true);
+    setSaveMsg(null);
+    try {
+      const updated = await updateAppSettings({
+        disableAutoIngest: appSettings.disableAutoIngest,
+        manualVoteGovernorOnly: governorOnly,
+      });
+      setAppSettings(updated);
+      setSaveMsg(governorOnly ? "Manual entry is limited to Governor." : "Manual entry shows every race.");
+    } catch (e) {
+      setSaveMsg(e instanceof Error ? e.message : "Failed to save manual votes setting");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSetManualVoteElection(electionId: string) {
+    setBusy(true);
+    setSaveMsg(null);
+    try {
+      const updated = await updateAppSettings({
+        disableAutoIngest: appSettings.disableAutoIngest,
+        manualVoteElectionId: electionId,
+      });
+      setAppSettings(updated);
+      setSaveMsg(electionId ? "Manual votes election saved." : "Manual votes election cleared.");
+    } catch (e) {
+      setSaveMsg(e instanceof Error ? e.message : "Failed to save manual votes election");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function onToggleAutoIngest(nextDisabled: boolean) {
     setBusy(true);
@@ -398,6 +438,7 @@ export function SettingsScreen({
             <span className="enr-official enr-official--muted">Settings</span>
           </div>
           <div className="enr-top__right">
+            <SettingsBuildStamp timeZone={appSettings.displayTimeZone} />
             <span className="enr-backendPill" title="Data loading mode">
               {backendLabel}
             </span>
@@ -409,6 +450,9 @@ export function SettingsScreen({
         <div className="enr-nav__left">
           <button type="button" className="enr-navlink" onClick={onBack}>
             Home
+          </button>
+          <button type="button" className="enr-navlink" onClick={onOpenManualVotes}>
+            Manual votes
           </button>
           <span className="enr-navlink is-active" aria-current="page">
             Settings
@@ -424,7 +468,47 @@ export function SettingsScreen({
           ) : null}
 
           <section className="enr-panel enr-settings__section">
-        <h2>Ingest controls</h2>
+            <SettingsCollapse title="Manual votes">
+            <p className="enr-muted">
+              The Manual votes tab, next to Home, is filled out for one election. Early voting, mail, and election day
+              entered there replace SOS or county-site numbers for a county when the manual total is higher, or when
+              that county is set to always use the manual numbers.
+            </p>
+            <label className="enr-field">
+              Election for manual entry
+              <select
+                className="enr-input"
+                value={appSettings.manualVoteElectionId ?? ""}
+                disabled={busy}
+                onChange={(e) => void onSetManualVoteElection(e.target.value)}
+              >
+                <option value="">Choose an election</option>
+                {electionConfigs
+                  .filter((c) => c.usesCivixSos !== false && /^\d+$/.test(c.electionId))
+                  .map((c) => (
+                    <option key={c.electionId} value={c.electionId}>
+                      {c.label || `Election ${c.electionId}`}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="enr-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={appSettings.manualVoteGovernorOnly === true}
+                disabled={busy}
+                onChange={(e) => void onSetManualVoteGovernorOnly(e.target.checked)}
+              />
+              Only show the Governor race for manual entry
+            </label>
+            </SettingsCollapse>
+          </section>
+
+          <BallotScoreDataSettings />
+          <CountyRosterScheduleSettings />
+
+          <section className="enr-panel enr-settings__section">
+        <SettingsCollapse title="Ingest controls">
         <label className="enr-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <input
             type="checkbox"
@@ -580,6 +664,7 @@ export function SettingsScreen({
         ) : null}
         {forceMsg ? <p className={forceMsg.startsWith("Updated") ? "enr-saveOk" : "enr-errorInline"}>{forceMsg}</p> : null}
         {lastIngestTimings?.length ? <IngestResultTimings stepTimings={lastIngestTimings} /> : null}
+        </SettingsCollapse>
       </section>
 
       <section className="enr-panel enr-settings__section">
@@ -798,7 +883,7 @@ export function SettingsScreen({
       </section>
 
       <section className="enr-panel enr-settings__section">
-        <h2>Database live view</h2>
+        <SettingsCollapse title="Database live view">
         {dbOverview ? (
           <>
             <p>
@@ -840,6 +925,7 @@ export function SettingsScreen({
         ) : (
           <p>Loading DB metadata…</p>
         )}
+        </SettingsCollapse>
       </section>
         </div>
       </main>

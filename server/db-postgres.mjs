@@ -1376,7 +1376,8 @@ export async function getAppSettings() {
      WHERE setting_key IN (
        N'disable_auto_ingest', N'auto_refresh_enabled', N'auto_refresh_interval_sec', N'sos_countyinfo_url',
        N'harris_source_url', N'galveston_source_url', N'jefferson_source_url', N'montgomery_source_url', N'chambers_source_url',
-       N'display_time_zone', N'civix_cookie', N'civix_connect_token'
+       N'display_time_zone', N'civix_cookie', N'civix_connect_token', N'manual_vote_election_id',
+       N'manual_vote_governor_only'
      )`,
   );
   const map = new Map(r.recordset.map((x) => [String(x.settingKey), String(x.valueJson)]));
@@ -1395,6 +1396,8 @@ export async function getAppSettings() {
     civixCookie: map.get("civix_cookie") ?? "",
     civixCookieConfigured: Boolean(String(map.get("civix_cookie") ?? "").trim()),
     civixConnectTokenJson: map.get("civix_connect_token") ?? "",
+    manualVoteElectionId: String(map.get("manual_vote_election_id") ?? "").trim(),
+    manualVoteGovernorOnly: (map.get("manual_vote_governor_only") ?? "false").toLowerCase() === "true",
   };
 }
 
@@ -1426,6 +1429,8 @@ export async function updateAppSettings({
   chambersSourceUrl,
   displayTimeZone,
   civixCookie,
+  manualVoteElectionId,
+  manualVoteGovernorOnly,
 }) {
   const pool = await ensureDb();
   const upsert = async (key, value) => {
@@ -1452,6 +1457,10 @@ export async function updateAppSettings({
   if (chambersSourceUrl != null) await upsert("chambers_source_url", String(chambersSourceUrl));
   if (displayTimeZone != null) await upsert("display_time_zone", String(displayTimeZone || "America/Chicago"));
   if (civixCookie != null) await upsert("civix_cookie", String(civixCookie));
+  if (manualVoteElectionId != null) await upsert("manual_vote_election_id", String(manualVoteElectionId).trim());
+  if (typeof manualVoteGovernorOnly === "boolean") {
+    await upsert("manual_vote_governor_only", manualVoteGovernorOnly ? "true" : "false");
+  }
   const settings = await getAppSettings();
   return {
     disableAutoIngest: settings.disableAutoIngest,
@@ -1465,6 +1474,8 @@ export async function updateAppSettings({
     chambersSourceUrl: settings.chambersSourceUrl,
     displayTimeZone: settings.displayTimeZone,
     civixCookieConfigured: settings.civixCookieConfigured,
+    manualVoteElectionId: settings.manualVoteElectionId,
+    manualVoteGovernorOnly: settings.manualVoteGovernorOnly,
   };
 }
 

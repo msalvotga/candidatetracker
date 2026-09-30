@@ -24,6 +24,9 @@ import { SettingsScreen } from "./components/SettingsScreen";
 import { APP_VERSION } from "./lib/appVersion";
 import { EV_ROSTER_ENABLED } from "./lib/featureFlags";
 import { EvRosterScreen } from "./components/EvRosterScreen";
+import { CountyRosterScreen } from "./components/CountyRosterScreen";
+import { BallotScoreScreen } from "./components/BallotScoreScreen";
+import { ManualVotesScreen } from "./components/ManualVotesScreen";
 
 const OFFICE_ORDER: OfficeType[] = [
   "FEDERAL OFFICES",
@@ -75,7 +78,7 @@ function civixElectionIdFromCatalog(catalogId: string | null): string | null {
 }
 
 export function App() {
-  const [screen, setScreen] = useState<"dashboard" | "settings" | "ev-roster">("dashboard");
+  const [screen, setScreen] = useState<"dashboard" | "manual-votes" | "settings" | "ev-roster" | "ballot-score" | "county-roster">("dashboard");
   const [useBackend, setUseBackend] = useState<boolean | null>(null);
   const [catalogRefresh, setCatalogRefresh] = useState(0);
 
@@ -99,6 +102,18 @@ export function App() {
   const lastMergedIngestEndRef = useRef<number | null>(null);
 
   const bumpCatalog = useCallback(() => setCatalogRefresh((n) => n + 1), []);
+
+  const refreshLoadedElection = useCallback(async () => {
+    if (useBackend !== true || !selectedElectionId) return;
+    const option = electionOptions.find((o) => o.catalogId === selectedElectionId);
+    if (!option) return;
+    try {
+      const bundle = await loadElectionFromBackend(option.catalogId, option.catalogLabel);
+      setCurrent(bundle);
+    } catch {
+      /* keep the results already on screen */
+    }
+  }, [useBackend, selectedElectionId, electionOptions]);
 
   useEffect(() => {
     if (!EV_ROSTER_ENABLED && screen === "ev-roster") setScreen("dashboard");
@@ -522,11 +537,34 @@ export function App() {
     );
   }
 
+  if (screen === "county-roster") {
+    return (
+      <div className="enr-app">
+        <CountyRosterScreen onBack={() => setScreen("dashboard")} />
+        <footer className="enr-footer">
+          <div>{APP_VERSION}</div>
+        </footer>
+      </div>
+    );
+  }
+
+  if (screen === "ballot-score") {
+    return (
+      <div className="enr-app">
+        <BallotScoreScreen onBack={() => setScreen("dashboard")} />
+        <footer className="enr-footer">
+          <div>{APP_VERSION}</div>
+        </footer>
+      </div>
+    );
+  }
+
   if (screen === "settings") {
     return (
       <div className="enr-app">
         <SettingsScreen
           onBack={() => setScreen("dashboard")}
+          onOpenManualVotes={() => setScreen("manual-votes")}
           onCatalogChanged={bumpCatalog}
           backendLabel={backendLabel}
         />
@@ -560,14 +598,34 @@ export function App() {
 
       <nav className="enr-nav">
         <div className="enr-nav__left">
-          <button type="button" className="enr-navlink is-active" onClick={() => setView("race")}>
+          <button
+            type="button"
+            className={`enr-navlink ${screen === "dashboard" ? "is-active" : ""}`}
+            onClick={() => {
+              setScreen("dashboard");
+              setView("race");
+            }}
+          >
             Home
+          </button>
+          <button
+            type="button"
+            className={`enr-navlink ${screen === "manual-votes" ? "is-active" : ""}`}
+            onClick={() => setScreen("manual-votes")}
+          >
+            Manual votes
           </button>
           {EV_ROSTER_ENABLED ? (
             <button type="button" className="enr-navlink" onClick={() => setScreen("ev-roster")}>
               Early voting rosters
             </button>
           ) : null}
+          <button type="button" className="enr-navlink" onClick={() => setScreen("ballot-score")}>
+            Ballot scores
+          </button>
+          <button type="button" className="enr-navlink" onClick={() => setScreen("county-roster")}>
+            County rosters
+          </button>
           <button type="button" className="enr-navlink" onClick={() => setScreen("settings")}>
             Settings
           </button>
@@ -596,7 +654,7 @@ export function App() {
         </div>
       </nav>
 
-      {current && ribbonReporting ? (
+      {screen === "dashboard" && current && ribbonReporting ? (
         <ReportingRibbon
           reporting={ribbonReporting}
           nextRunAt={ingestStatus?.nextRunAt ?? null}
@@ -608,13 +666,25 @@ export function App() {
       ) : null}
 
       <main className="enr-main">
-        {listLoading ? (
+        {screen === "manual-votes" ? (
+          <ManualVotesScreen
+            onOpenSettings={() => setScreen("settings")}
+            onVotesApplied={(electionId) => {
+              if (civixElectionIdFromCatalog(selectedElectionId) === electionId) {
+                void refreshLoadedElection();
+              }
+            }}
+          />
+        ) : null}
+        {screen === "dashboard" && listLoading ? (
           <div className="enr-panel">
             Loading election list… {useBackend === null ? "(checking /api)" : useBackend ? "(Civix + manual catalog)" : "(Civix direct)"}
           </div>
         ) : null}
-        {!listLoading && detailLoading ? <div className="enr-panel">Loading results for the selected election…</div> : null}
-        {!listLoading && loadError ? (
+        {screen === "dashboard" && !listLoading && detailLoading ? (
+          <div className="enr-panel">Loading results for the selected election…</div>
+        ) : null}
+        {screen === "dashboard" && !listLoading && loadError ? (
           <div className="enr-panel enr-error">
             <div className="enr-error__title">Could not load data</div>
             <div className="enr-error__body">{loadError}</div>
@@ -626,11 +696,11 @@ export function App() {
             ) : null}
           </div>
         ) : null}
-        {!listLoading && !loadError && !electionOptions.length ? (
+        {screen === "dashboard" && !listLoading && !loadError && !electionOptions.length ? (
           <div className="enr-panel">No elections are available from the current catalog.</div>
         ) : null}
 
-        {!listLoading && !detailLoading && !loadError && current ? (
+        {screen === "dashboard" && !listLoading && !detailLoading && !loadError && current ? (
           <>
             {!showingFavorites ? (
               <div className="enr-controls">

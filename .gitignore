@@ -27,6 +27,9 @@ candidate-lookup/dist
 # Logs and local scratch
 debug.log
 tmp/
+server/data/voter-exports/
+server/data/ballot-score-ev/
+server/data/county-rosters/
 
 # TypeScript incremental
 *.tsbuildinfo

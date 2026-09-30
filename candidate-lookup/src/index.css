@@ -2263,6 +2263,14 @@ body.race-layout-resizing .race-layout-resizer {
   flex-wrap: wrap;
 }
 
+.staffer-map-harris-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
 .staffer-map-harris-back {
   border: 1px solid var(--border);
   border-radius: 8px;

@@ -93,10 +93,19 @@ function guestIpAllowlist() {
   return new Set(configured);
 }
 
+function isLoopbackIp(ip) {
+  if (!ip) return false;
+  if (ip === "127.0.0.1" || ip === "::1" || ip === "localhost") return true;
+  if (ip.startsWith("127.")) return true;
+  return false;
+}
+
 export function isGuestIp(req) {
+  const candidates = clientIpCandidates(req);
+  if (candidates.some(isLoopbackIp)) return true;
   const allowlist = guestIpAllowlist();
   if (allowlist.size === 0) return false;
-  return clientIpCandidates(req).some((ip) => allowlist.has(ip));
+  return candidates.some((ip) => allowlist.has(ip));
 }
 
 const DEV_ADMIN_USER = {

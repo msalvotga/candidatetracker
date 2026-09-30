@@ -27,6 +27,7 @@ import { CountyRaceMappingSection } from "./CountyRaceMappingSection";
 import { CountyVoteDesk } from "./CountyVoteDesk";
 import { CountyRaceSourcesSection } from "./CountyRaceSourcesSection";
 import { SettingsCollapse } from "./SettingsCollapse";
+import { SettingsBuildStamp } from "./SettingsBuildStamp";
 import { TX_CIVIX_DEFAULT_COUNTYINFO_PREFIX, civixDefaultCountyInfoUrl } from "../lib/civix/urls";
 import { TEXAS_COUNTIES, TEXAS_COUNTY_KEY_SET } from "../lib/texasCounties";
 
@@ -599,6 +600,9 @@ export function ElectionSettingsDetail({
           <div className="enr-top__center">
             <span className="enr-official enr-official--muted">Election sources</span>
           </div>
+          <div className="enr-top__right">
+            <SettingsBuildStamp />
+          </div>
         </div>
       </header>
       <nav className="enr-nav">
@@ -616,7 +620,7 @@ export function ElectionSettingsDetail({
           {msg ? <p className={msg.startsWith("OK") || msg.includes("Saved") ? "enr-saveOk" : "enr-errorInline"}>{msg}</p> : null}
 
           <section className="enr-panel enr-settings__section">
-            <h2>Election &amp; SOS (Civix)</h2>
+            <SettingsCollapse title="Election & SOS (Civix)">
             <label className="enr-field" style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
               <input type="checkbox" checked={usesCivixSos} onChange={(e) => setUsesCivixSos(e.target.checked)} disabled={busy} />
               <span>
@@ -730,6 +734,7 @@ export function ElectionSettingsDetail({
             {lastIngestTimings?.length && !forceRefreshing ? (
               <IngestResultTimings stepTimings={lastIngestTimings} />
             ) : null}
+            </SettingsCollapse>
           </section>
 
           <CountyVoteDesk

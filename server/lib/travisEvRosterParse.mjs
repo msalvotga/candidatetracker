@@ -37,7 +37,8 @@ export function travisMethodFromEntryName(entryName) {
  * @param {string} sheetName
  */
 export function travisPartyFromSheetName(sheetName) {
-  return normalizeParty(sheetName);
+  const party = normalizeParty(sheetName);
+  return party === "REP" || party === "DEM" ? party : "";
 }
 
 /**
@@ -94,8 +95,7 @@ export function parseTravisRosterXlsx(buffer, entryName, defaultCounty, opts = {
   const out = [];
 
   for (const sheetName of wb.SheetNames ?? []) {
-    const sheetParty = travisPartyFromSheetName(sheetName);
-    if (!sheetParty) continue;
+    const sheetParty = travisPartyFromSheetName(sheetName) || "";
 
     const matrix = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "", raw: false });
     const headerRowIdx = matrix.findIndex((row) =>

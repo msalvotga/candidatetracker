@@ -16,6 +16,20 @@ import { getSd4HistoricalPayloadForApi } from "./lib/sd4HistoricalPrecinct.mjs";
 import { buildElectionFileFromCountyFeeds } from "./lib/electionFileFromCountyResults.mjs";
 import { decodeBase64Json, decodeUploadPayload, encodeBase64Json } from "./lib/b64.mjs";
 import { isEvRosterEnabled } from "./lib/featureFlags.mjs";
+import { readBallotScoreSummary } from "./lib/ballotScoreSummary.mjs";
+import { exportFileName, getVoterExport, publicExportJob, startVoterExport } from "./lib/ballotScoreVoters.mjs";
+import { applyLiveRosterToModel } from "./lib/ballotScoreAggregate.mjs";
+import { readEvPayload, readEvStatus, saveDatasetUpload, startRebuild } from "./lib/ballotScoreEv.mjs";
+import {
+  listRosterVoters,
+  readCountyRosterBoard,
+  readRosterSchedule,
+  readRosterVoterRows,
+  startAllCountyRosterPulls,
+  startCountyRosterPull,
+  startRosterPullSchedule,
+  updateRosterSchedule,
+} from "./lib/countyRosterPulls.mjs";
 import { buildOfficialEarlyVotingTurnoutPageUrl, listEvrElections } from "./lib/civixEvr.mjs";
 import { pullEvRoster } from "./lib/evRoster.mjs";
 import { EV_ROSTER_PULL_SCOPES } from "./lib/evRosterPullScopes.mjs";
@@ -94,11 +108,12 @@ import {
   listCountySosCandidateLinks,
   upsertCountySosCandidateLink,
   deleteCountySosCandidateLink,
+  listCountySosRaceVoteSources,
 } from "./db.mjs";
 import { catalogIdForSourceConfig, resolveDefaultCatalogId } from "./lib/electionCatalogId.mjs";
 import { buildCountyRaceMappingView } from "./lib/countyRaceMappingView.mjs";
 import { buildCountyRaceSourcesView } from "./lib/countyRaceSourcesView.mjs";
-import { buildCountyVoteDesk } from "./lib/countyVoteDesk.mjs";
+import { buildCountyAllRaces, buildCountyVoteDesk } from "./lib/countyVoteDesk.mjs";
 import { collectCivixSosRaces } from "./lib/civixSosRaces.mjs";
 import { inferElectionPartyFromConfig } from "./lib/countySosRaceMatch.mjs";
 import { mergeLinkedCountyOverridesIntoCivix } from "./lib/mergeLinkedCountyIntoCivix.mjs";
@@ -1279,6 +1294,151 @@ export function createApiApp() {
     }
   });
 
+  function ballotExportCounty(req) {
+    const fromQuery = typeof req.query?.county === "string" ? req.query.county.trim() : "";
+    const fromBody = typeof req.body?.county === "string" ? req.body.county.trim() : "";
+    return fromQuery || fromBody || "all";
+  }
+
+  app.post("/api/ballot-score/export", (req, res) => {
+    try {
+      res.json(publicExportJob(startVoterExport(ballotExportCounty(req))));
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/ballot-score/export-status", (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(publicExportJob(getVoterExport(ballotExportCounty(req))));
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/ballot-score/export.csv", (req, res) => {
+    try {
+      const county = ballotExportCounty(req);
+      const job = getVoterExport(county);
+      if (!job || job.status !== "ready" || !job.file) {
+        return res.status(409).json({
+          error: "That county file is not ready. Prepare it on the ballot score settings page first.",
+        });
+      }
+      res.download(job.file, exportFileName(county));
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/ballot-score/ev/status", async (_req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await readEvStatus());
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/ballot-score/ev", async (_req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const payload = await readEvPayload();
+      if (payload.model) applyLiveRosterToModel(payload.model, await readRosterVoterRows());
+      res.json(payload);
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/ballot-score/ev/rebuild", async (_req, res) => {
+    try {
+      res.json(await startRebuild());
+    } catch (e) {
+      res.status(e.statusCode || 500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/ballot-score/ev/upload/:kind", async (req, res) => {
+    try {
+      const filename = decodeURIComponent(String(req.get("x-file-name") || "upload.csv"));
+      res.json(await saveDatasetUpload(String(req.params.kind || ""), filename, req));
+    } catch (e) {
+      res.status(e.statusCode || 500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/county-rosters/voters", async (req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const offset = Number(req.query.offset ?? 0);
+      const limit = Number(req.query.limit ?? 100);
+      const sort = String(req.query.sort ?? "voteDate");
+      const dir = String(req.query.dir ?? "asc");
+      res.json(await listRosterVoters({ offset, limit, sort, dir }));
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/county-rosters", async (_req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await readCountyRosterBoard());
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/county-rosters/schedule", async (_req, res) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await readRosterSchedule());
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.put("/api/county-rosters/schedule", async (req, res) => {
+    try {
+      res.json(await updateRosterSchedule(req.body ?? {}));
+    } catch (e) {
+      res.status(e.statusCode || 500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/county-rosters/pull-all", async (_req, res) => {
+    try {
+      res.json(await startAllCountyRosterPulls());
+    } catch (e) {
+      res.status(e.statusCode || 500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/county-rosters/:county/pull", async (req, res) => {
+    try {
+      res.json(await startCountyRosterPull(String(req.params.county || "")));
+    } catch (e) {
+      res.status(e.statusCode || 500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/ballot-score", (_req, res) => {
+    try {
+      const summary = readBallotScoreSummary();
+      if (!summary) {
+        return res.status(404).json({
+          error: "Ballot score summary is not built yet. Run python scripts/build-ballot-score-summary.py",
+        });
+      }
+      res.setHeader("Cache-Control", "no-store");
+      res.json(summary);
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
   app.get("/api/health", async (_req, res) => {
     const { isDatabaseLoaded } = await import("./db.mjs");
     res.json({
@@ -1653,6 +1813,7 @@ export function createApiApp() {
       await ensureDb();
       const electionId = String(req.params.electionId ?? "").trim();
       const sosRaceId = String(req.query?.sosRaceId ?? "").trim();
+      const countyKey = String(req.query?.countyKey ?? "").trim();
       if (!electionId) return res.status(400).json({ error: "electionId required" });
       const num = Number(electionId);
       if (!Number.isFinite(num)) {
@@ -1661,6 +1822,10 @@ export function createApiApp() {
       const cfg = await getElectionIngestConfig(num);
       const bundle = await loadCivixBundleWithCacheFallback(num, cfg.sosCountyInfoUrl);
       const sosRaces = collectCivixSosRaces(bundle.election);
+      if (countyKey) {
+        const view = await buildCountyAllRaces(electionId, countyKey, sosRaces);
+        return res.json({ electionId, ...view });
+      }
       const view = await buildCountyVoteDesk(electionId, sosRaceId, sosRaces);
       res.json({ electionId, ...view });
     } catch (e) {
@@ -1680,6 +1845,10 @@ export function createApiApp() {
         return res.status(400).json({ error: "sosRaceId required" });
       }
       if (!counties.length) return res.status(400).json({ error: "counties required" });
+      const existingSources = await listCountySosRaceVoteSources(electionId);
+      const sourceByKey = new Map(
+        existingSources.map((s) => [`${s.countyKey}|${s.sosRaceId}`, String(s.voteSource ?? "auto")]),
+      );
       let saved = 0;
       for (const county of counties) {
         const countyKey = String(county?.countyKey ?? "").toLowerCase().trim();
@@ -1701,11 +1870,28 @@ export function createApiApp() {
           });
           saved += 1;
         }
-        await upsertCountySosRaceVoteSource(electionId, {
-          countyKey,
-          sosRaceId,
-          voteSource: "manual",
-        });
+        if (county.forceManual === true) {
+          await upsertCountySosRaceVoteSource(electionId, {
+            countyKey,
+            sosRaceId,
+            voteSource: "manual",
+          });
+        } else if (county.forceManual === false) {
+          const prev = sourceByKey.get(`${countyKey}|${sosRaceId}`) ?? "auto";
+          if (prev === "manual" || prev === "auto") {
+            await upsertCountySosRaceVoteSource(electionId, {
+              countyKey,
+              sosRaceId,
+              voteSource: "auto",
+            });
+          }
+        } else {
+          await upsertCountySosRaceVoteSource(electionId, {
+            countyKey,
+            sosRaceId,
+            voteSource: "manual",
+          });
+        }
       }
       res.json({ ok: true, saved });
     } catch (e) {
@@ -1965,6 +2151,13 @@ export function createApiApp() {
         montgomerySourceUrl: req.body?.montgomerySourceUrl,
         chambersSourceUrl: req.body?.chambersSourceUrl,
         civixCookie: req.body?.civixCookie,
+        manualVoteElectionId: req.body?.manualVoteElectionId,
+        manualVoteGovernorOnly:
+          req.body?.manualVoteGovernorOnly === true || req.body?.manualVoteGovernorOnly === "true"
+            ? true
+            : req.body?.manualVoteGovernorOnly === false || req.body?.manualVoteGovernorOnly === "false"
+              ? false
+              : undefined,
       });
       res.json(settings);
     } catch (e) {
@@ -2811,5 +3004,6 @@ export function createApiApp() {
     res.status(404).send("Not found");
   });
 
+  startRosterPullSchedule();
   return app;
 }
