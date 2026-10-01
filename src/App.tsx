@@ -201,7 +201,7 @@ export function App() {
         if (cancelled) return;
         setElectionOptions(options);
         const preferred =
-          (defaultCatalogId && options.find((o) => o.catalogId === defaultCatalogId)) ??
+          options.find((o) => defaultCatalogId != null && o.catalogId === defaultCatalogId) ??
           options.find((o) => o.provider === "civix") ??
           options[0];
         const savedId = selectedElectionIdRef.current;
