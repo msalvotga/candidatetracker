@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "csv-parse";
@@ -7,7 +7,25 @@ import JSZip from "jszip";
 import { datasetPath } from "./ballotScoreEv.mjs";
 import { bexarRosterDocuments, bexarRosterFilesToPull, BEXAR_FOLDER_ID, BEXAR_ROSTER_PAGE, parseBexarAbbmPdf } from "./bexarRoster.mjs";
 import { harrisBbmRosterLink, harrisRosterFrame, HARRIS_ROSTER_PAGE, parseHarrisBbmCsv } from "./harrisRoster.mjs";
+import { parsePotterRosterPdf, potterRosterLinks, POTTER_ROSTER_PAGE } from "./potterRoster.mjs";
+import { parseTarrantRosterZip, tarrantRosterLinks, TARRANT_ROSTER_PAGE } from "./tarrantRoster.mjs";
+import { parseWiseRosterPdf, wiseMailRosterLink, WISE_ROSTER_PAGE } from "./wiseRoster.mjs";
+import {
+  GALVESTON_FETCH_HEADERS,
+  GALVESTON_ROSTER_PAGE,
+  galvestonMailRosterLinks,
+  galvestonRosterFilesToPull,
+  parseGalvestonMailCsv,
+} from "./galvestonRoster.mjs";
 import { parseTravisRosterZip } from "./travisEvRosterParse.mjs";
+import { ELLIS_ROSTER_PAGE, ellisMailRosterLink, parseEllisRosterZip } from "./ellisRoster.mjs";
+import {
+  MONTGOMERY_ROSTER_PAGE,
+  montgomeryFetch,
+  montgomeryRosterFilesToPull,
+  montgomeryRosterLinks,
+  parseMontgomeryRosterZip,
+} from "./montgomeryRoster.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(HERE, "../data/county-rosters");
@@ -44,6 +62,60 @@ export const COUNTY_ROSTER_PROFILES = {
     notes:
       "Each file in the November 3, 2026 document folder is one day of voting or one day of incoming mail. The date is in the file name. A pull reads the newest file, plus any earlier day that does not already have voters. The VUID is the first column. The date column is labeled Ballot Received Date or Received Date.",
     sourcePage: BEXAR_ROSTER_PAGE,
+  },
+  potter: {
+    key: "potter",
+    label: "Potter County",
+    trained: true,
+    fileKinds: "Roster PDFs",
+    notes:
+      "Each pull reads the voting rosters page and takes the Mail Ballot Roster PDF. The file address changes. The VUID and the Ballot Status Date are on each row. When the early voting roster link is posted, that PDF is read the same way.",
+    sourcePage: POTTER_ROSTER_PAGE,
+  },
+  tarrant: {
+    key: "tarrant",
+    label: "Tarrant County",
+    trained: true,
+    fileKinds: "Tab-delimited ZIP",
+    notes:
+      "Each pull reads the November 3, 2026 results page and takes the Ballot by Mail and In Person during Early Voting zip files. The text file inside is tab-separated. SOS Voter ID is the VUID and Return Date is the vote date. The early-voting file is skipped until that roster is posted.",
+    sourcePage: TARRANT_ROSTER_PAGE,
+  },
+  wise: {
+    key: "wise",
+    label: "Wise County",
+    trained: true,
+    fileKinds: "Mail roster PDF",
+    notes:
+      "Each pull reads the Elections page and takes the newest Roster of Early Voting By Mail for the November 3, 2026 election. The link says received as of a date, and that date changes. The PDF has a VUID Number column and a Date column.",
+    sourcePage: WISE_ROSTER_PAGE,
+  },
+  galveston: {
+    key: "galveston",
+    label: "Galveston County",
+    trained: true,
+    fileKinds: "Daily mail CSVs",
+    notes:
+      "Each pull reads the current elections page and takes the CSV files under Mail Ballot Rosters. The date beside each link is the day of ballots. A pull reads the newest day, plus any earlier day that does not already have voters. VUID and Ballot Received Date are the voter id and the vote date.",
+    sourcePage: GALVESTON_ROSTER_PAGE,
+  },
+  montgomery: {
+    key: "montgomery",
+    label: "Montgomery County",
+    trained: true,
+    fileKinds: "Daily roster ZIPs",
+    notes:
+      "Each pull reads the early voting roster page for the November 3, 2026 joint election. Early voting and mail are in the same daily zip. The CSV has a VUID, and the vote date is in the file name. A person is listed once per race, so each VUID is kept once per day. A pull reads the newest day, plus any earlier day that does not already have voters.",
+    sourcePage: MONTGOMERY_ROSTER_PAGE,
+  },
+  ellis: {
+    key: "ellis",
+    label: "Ellis County",
+    trained: true,
+    fileKinds: "Cumulative mail ZIP",
+    notes:
+      "Each pull reads the Upcoming Elections page and takes the Returned Ballots by Mail Roster Report. The link changes when the file is replaced. The zip holds one cumulative Excel file. Rows have a VUID and no vote date. The first time a VUID appears, it is stored with the date in cell C2. A VUID already stored for Ellis is left as it is.",
+    sourcePage: ELLIS_ROSTER_PAGE,
   },
 };
 
@@ -90,10 +162,10 @@ async function readStore() {
 
 async function writeStore(store) {
   await ensureDir();
-  const tmp = `${STATUS_PATH}.tmp`;
+  const tmp = `${STATUS_PATH}.${process.pid}.tmp`;
   await writeFile(tmp, JSON.stringify(store));
-  await rm(STATUS_PATH, { force: true });
-  await rename(tmp, STATUS_PATH);
+  await copyFile(tmp, STATUS_PATH);
+  await rm(tmp, { force: true });
 }
 
 export function summarizeRosterRows(rows) {
@@ -371,10 +443,10 @@ async function readVoters() {
 
 async function writeVoters(voters) {
   await ensureDir();
-  const tmp = `${VOTERS_PATH}.tmp`;
+  const tmp = `${VOTERS_PATH}.${process.pid}.tmp`;
   await writeFile(tmp, JSON.stringify(voters));
-  await rm(VOTERS_PATH, { force: true });
-  await rename(tmp, VOTERS_PATH);
+  await copyFile(tmp, VOTERS_PATH);
+  await rm(tmp, { force: true });
 }
 
 async function saveRosterRows(incoming, sourceCounty) {
@@ -712,10 +784,249 @@ async function pullBexar() {
   };
 }
 
+async function pullPotter() {
+  const page = await fetch(POTTER_ROSTER_PAGE, { headers: { "user-agent": "electionnighttracker" } });
+  if (!page.ok) {
+    throw new Error(`Potter roster page was not available (${page.status}). ${POTTER_ROSTER_PAGE}`);
+  }
+  const links = potterRosterLinks(await page.text());
+  if (!links.length) {
+    throw new Error("The Mail Ballot Roster PDF was not on the Potter County voting rosters page.");
+  }
+  const rows = [];
+  let skippedMissingVuid = 0;
+  for (const link of links) {
+    const file = await fetch(link.href, {
+      headers: { "user-agent": "electionnighttracker", referer: POTTER_ROSTER_PAGE },
+    });
+    if (!file.ok) {
+      throw new Error(`Potter roster file was not available (${file.status}). ${link.href}`);
+    }
+    const parsed = await parsePotterRosterPdf(Buffer.from(await file.arrayBuffer()), {
+      votingMethod: link.votingMethod,
+    });
+    rows.push(...parsed.rows);
+    skippedMissingVuid += parsed.skippedMissingVuid;
+  }
+  const saved = await saveRosterRows(rows, "potter");
+  const mail = links.find((link) => link.votingMethod === "AB") ?? links[0];
+  return {
+    sourceUrl: mail.href,
+    fileCount: links.length,
+    skippedMissingVuid,
+    ...summarizeRosterRows(rows),
+    ...saved,
+  };
+}
+
+async function pullTarrant() {
+  const page = await fetch(TARRANT_ROSTER_PAGE, { headers: { "user-agent": "electionnighttracker" } });
+  if (!page.ok) {
+    throw new Error(`Tarrant roster page was not available (${page.status}). ${TARRANT_ROSTER_PAGE}`);
+  }
+  const links = tarrantRosterLinks(await page.text());
+  const mail = links.find((link) => link.votingMethod === "AB");
+  if (!mail) {
+    throw new Error("The Ballot by Mail zip was not on the Tarrant County November 3, 2026 results page.");
+  }
+  const rows = [];
+  let skippedMissingVuid = 0;
+  const missingByDate = new Map();
+  let posted = 0;
+  for (const link of links) {
+    const file = await fetch(link.href, {
+      headers: { "user-agent": "electionnighttracker", referer: TARRANT_ROSTER_PAGE },
+    });
+    if (!file.ok) {
+      throw new Error(`Tarrant roster file was not available (${file.status}). ${link.href}`);
+    }
+    const parsed = await parseTarrantRosterZip(Buffer.from(await file.arrayBuffer()), {
+      votingMethod: link.votingMethod,
+    });
+    if (!parsed.posted) continue;
+    posted += 1;
+    rows.push(...parsed.rows);
+    skippedMissingVuid += parsed.skippedMissingVuid;
+    for (const day of parsed.missingVuidDays) {
+      missingByDate.set(day.date, (missingByDate.get(day.date) ?? 0) + day.missingVuid);
+    }
+  }
+  if (!posted) {
+    throw new Error("The Tarrant Ballot by Mail file did not include an SOS Voter ID and Return Date.");
+  }
+  const saved = await saveRosterRows(rows, "tarrant");
+  return {
+    sourceUrl: mail.href,
+    fileCount: posted,
+    skippedMissingVuid,
+    skippedMissingVuidDays: [...missingByDate.entries()]
+      .map(([date, missingVuid]) => ({ date, missingVuid }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    ...summarizeRosterRows(rows),
+    ...saved,
+  };
+}
+
+async function pullWise() {
+  const page = await fetch(WISE_ROSTER_PAGE, { headers: { "user-agent": "electionnighttracker" } });
+  if (!page.ok) {
+    throw new Error(`Wise roster page was not available (${page.status}). ${WISE_ROSTER_PAGE}`);
+  }
+  const link = wiseMailRosterLink(await page.text());
+  if (!link) {
+    throw new Error("The early-voting-by-mail roster PDF was not on the Wise County Elections page.");
+  }
+  const file = await fetch(link.href, {
+    headers: { "user-agent": "electionnighttracker", referer: WISE_ROSTER_PAGE },
+  });
+  if (!file.ok) {
+    throw new Error(`Wise roster file was not available (${file.status}). ${link.href}`);
+  }
+  const parsed = await parseWiseRosterPdf(Buffer.from(await file.arrayBuffer()));
+  const saved = await saveRosterRows(parsed.rows, "wise");
+  return {
+    sourceUrl: link.href,
+    fileCount: 1,
+    skippedMissingVuid: parsed.skippedMissingVuid,
+    skippedMissingVuidDays: parsed.missingVuidDays,
+    ...summarizeRosterRows(parsed.rows),
+    ...saved,
+  };
+}
+
+async function pullGalveston() {
+  const page = await fetch(GALVESTON_ROSTER_PAGE, { headers: GALVESTON_FETCH_HEADERS });
+  if (page.status !== 200) {
+    throw new Error(`Galveston roster page was not available (${page.status}). ${GALVESTON_ROSTER_PAGE}`);
+  }
+  const files = galvestonMailRosterLinks(await page.text());
+  const have = new Set();
+  for (const row of await readVoters()) {
+    if (String(row.sourceCounty ?? "").toLowerCase() !== "galveston") continue;
+    const date = String(row.voteDate ?? "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) have.add(date);
+  }
+  const selected = galvestonRosterFilesToPull(files, have);
+  if (!selected.length) {
+    throw new Error("No mail ballot roster CSV was under Mail Ballot Rosters on the Galveston elections page.");
+  }
+  const rows = [];
+  let skippedMissingVuid = 0;
+  const missingByDate = new Map();
+  for (const link of selected) {
+    const file = await fetch(link.href, { headers: { ...GALVESTON_FETCH_HEADERS, referer: GALVESTON_ROSTER_PAGE } });
+    if (file.status !== 200) {
+      throw new Error(`Galveston roster file was not available (${file.status}). ${link.href}`);
+    }
+    const parsed = parseGalvestonMailCsv(await file.text());
+    rows.push(...parsed.rows);
+    skippedMissingVuid += parsed.skippedMissingVuid;
+    for (const day of parsed.missingVuidDays) {
+      missingByDate.set(day.date, (missingByDate.get(day.date) ?? 0) + day.missingVuid);
+    }
+  }
+  const saved = await saveRosterRows(rows, "galveston");
+  const latest = selected[selected.length - 1];
+  return {
+    sourceUrl: latest.href,
+    fileCount: selected.length,
+    skippedMissingVuid,
+    skippedMissingVuidDays: [...missingByDate.entries()]
+      .map(([date, missingVuid]) => ({ date, missingVuid }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    ...summarizeRosterRows(rows),
+    ...saved,
+  };
+}
+
+async function pullMontgomery() {
+  const page = await montgomeryFetch(MONTGOMERY_ROSTER_PAGE);
+  if (page.status !== 200) {
+    throw new Error(`Montgomery roster page was not available (${page.status}). ${MONTGOMERY_ROSTER_PAGE}`);
+  }
+  const files = montgomeryRosterLinks(await page.text());
+  const have = new Set();
+  for (const row of await readVoters()) {
+    if (String(row.sourceCounty ?? "").toLowerCase() !== "montgomery") continue;
+    const date = String(row.voteDate ?? "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) have.add(date);
+  }
+  const selected = montgomeryRosterFilesToPull(files, have);
+  if (!selected.length) {
+    throw new Error("No dated roster zip was on the Montgomery early voting roster page.");
+  }
+  const rows = [];
+  let skippedMissingVuid = 0;
+  const missingByDate = new Map();
+  for (const link of selected) {
+    const file = await montgomeryFetch(link.href);
+    if (file.status !== 200) {
+      throw new Error(`Montgomery roster file was not available (${file.status}). ${link.href}`);
+    }
+    const parsed = await parseMontgomeryRosterZip(Buffer.from(await file.arrayBuffer()), link.fileName);
+    rows.push(...parsed.rows);
+    skippedMissingVuid += parsed.skippedMissingVuid;
+    for (const day of parsed.missingVuidDays) {
+      missingByDate.set(day.date, (missingByDate.get(day.date) ?? 0) + day.missingVuid);
+    }
+  }
+  const saved = await saveRosterRows(rows, "montgomery");
+  const latest = selected[selected.length - 1];
+  return {
+    sourceUrl: latest.href,
+    fileCount: selected.length,
+    skippedMissingVuid,
+    skippedMissingVuidDays: [...missingByDate.entries()]
+      .map(([date, missingVuid]) => ({ date, missingVuid }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    ...summarizeRosterRows(rows),
+    ...saved,
+  };
+}
+
+async function pullEllis() {
+  const page = await fetch(ELLIS_ROSTER_PAGE, { headers: { "user-agent": "electionnighttracker" } });
+  if (!page.ok) {
+    throw new Error(`Ellis roster page was not available (${page.status}). ${ELLIS_ROSTER_PAGE}`);
+  }
+  const link = ellisMailRosterLink(await page.text());
+  if (!link) {
+    throw new Error("The Returned Ballots by Mail Roster Report was not on the Ellis Upcoming Elections page.");
+  }
+  const file = await fetch(link.href, {
+    headers: { "user-agent": "electionnighttracker", referer: ELLIS_ROSTER_PAGE },
+  });
+  if (!file.ok) {
+    throw new Error(`Ellis roster file was not available (${file.status}). ${link.href}`);
+  }
+  const known = new Set();
+  for (const row of await readVoters()) {
+    if (String(row.sourceCounty ?? "").toLowerCase() !== "ellis") continue;
+    const vuid = String(row.vuid ?? "").trim();
+    if (vuid) known.add(vuid);
+  }
+  const parsed = await parseEllisRosterZip(Buffer.from(await file.arrayBuffer()), known);
+  const saved = await saveRosterRows(parsed.rows, "ellis");
+  return {
+    sourceUrl: link.href,
+    fileCount: 1,
+    skippedMissingVuid: parsed.skippedMissingVuid,
+    skippedMissingVuidDays: parsed.missingVuidDays,
+    ...summarizeRosterRows(parsed.rows),
+    ...saved,
+  };
+}
+
 const PULLS = {
   travis: pullTravis,
   harris: pullHarris,
   bexar: pullBexar,
+  potter: pullPotter,
+  tarrant: pullTarrant,
+  wise: pullWise,
+  galveston: pullGalveston,
+  montgomery: pullMontgomery,
+  ellis: pullEllis,
 };
 
 const SCHEDULE_PATH = path.join(DATA_DIR, "schedule.json");
