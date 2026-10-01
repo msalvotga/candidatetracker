@@ -1,5 +1,7 @@
 import "dotenv/config";
 import express from "express";
+import { streamDatabaseSql } from "./lib/exportDatabase.mjs";
+import { getNativePool } from "./lib/pgPool.mjs";
 import cors from "cors";
 import { listCivixElectionSummaries, fetchCivixElectionBundle, fetchCivixElectionBundleWithOverrides } from "./lib/civixServer.mjs";
 import { fetchGalvestonSd4Summary, fetchJeffersonSd4Summary } from "./lib/galvestonClarity.mjs";
@@ -2051,6 +2053,23 @@ export function createApiApp() {
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/settings/export-db", async (_req, res) => {
+    try {
+      await ensureDb();
+      const pool = getNativePool();
+      if (!pool) throw new Error("Database is not connected.");
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+      res.setHeader("Content-Type", "application/sql; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="electiontracker-${stamp}.sql"`);
+      await streamDatabaseSql(pool, res);
+      res.end();
+    } catch (e) {
+      console.error(e);
+      if (!res.headersSent) res.status(500).json({ error: String(e?.message || e) });
+      else res.end();
     }
   });
 

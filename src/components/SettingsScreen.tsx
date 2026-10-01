@@ -37,6 +37,7 @@ import { SettingsCollapse } from "./SettingsCollapse";
 import { SettingsBuildStamp } from "./SettingsBuildStamp";
 import { BallotScoreDataSettings } from "./BallotScoreDataSettings";
 import { CountyRosterScheduleSettings } from "./CountyRosterScheduleSettings";
+import { apiUrl } from "../lib/apiBase";
 
 function SourceImportAlert({
   sourceKey,
@@ -431,6 +432,9 @@ export function SettingsScreen({
           <div className="enr-settings__heading">
             <h1 className="enr-settings__title">Data &amp; ingest</h1>
             <div className="enr-settings__headingTools">
+              <a className="enr-btn enr-btn--primary" href={apiUrl("/api/settings/export-db")}>
+                Export database
+              </a>
               <SettingsBuildStamp timeZone={appSettings.displayTimeZone} />
               <span className="enr-backendPill" title="Data loading mode">
                 {backendLabel}
