@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/apiBase";
 import { TEXAS_COUNTIES } from "../lib/texasCounties";
 
-type RosterDay = { date: string; voters: number; earlyInPerson: number; mail: number };
+type RosterDay = { date: string; voters?: number; missingVuid?: number; earlyInPerson?: number; mail?: number };
 
 type CountyPull = {
   key: string;
@@ -18,19 +18,18 @@ type CountyPull = {
   uniqueVuids: number;
   fileCount: number;
   days: RosterDay[];
+  missingVuid?: number;
   earlyInPerson: number;
   mail: number;
   other: number;
   skippedMissingVuid?: number;
+  skippedMissingVuidDays?: { date: string; missingVuid: number }[];
   error: string | null;
   running?: boolean;
 };
 
 type RosterSchedule = {
   enabled: boolean;
-  intervalMinutes: number;
-  startHour: number;
-  endHour: number;
   timeZone: string;
 };
 
@@ -42,11 +41,6 @@ type Board = {
   pullQueue?: string[];
 };
 
-function hourLabel(hour: number) {
-  const h = hour % 12 || 12;
-  const suffix = hour < 12 ? "AM" : "PM";
-  return `${h}:00 ${suffix}`;
-}
 
 type ProfileField = { label: string; value: string };
 
@@ -183,7 +177,67 @@ type VotedPage = {
 };
 
 const PAGE_SIZE = 100;
-type CountySort = "name" | "voters" | "pulled";
+type CountySort = "name" | "voters" | "vote" | "pulled";
+
+function previousIsoDate(isoDate: string) {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  utc.setUTCDate(utc.getUTCDate() - 1);
+  return utc.toISOString().slice(0, 10);
+}
+
+function centralToday(now = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+}
+
+function latestVoteDate(days: RosterDay[] | undefined) {
+  let latest = "";
+  for (const day of days ?? []) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day.date) && day.date > latest) latest = day.date;
+  }
+  return latest || null;
+}
+
+function voteDateIsCurrent(latest: string | null, pulledAt: string | null) {
+  if (!latest) return false;
+  const today = centralToday();
+  if (latest >= previousIsoDate(today)) return true;
+  if (!pulledAt) return false;
+  const pulled = Date.parse(pulledAt);
+  if (Number.isNaN(pulled)) return false;
+  const pullDay = centralToday(new Date(pulled));
+  if (pullDay !== today) return false;
+  return latest >= previousIsoDate(pullDay);
+}
+
+function formatVoteDate(iso: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  const [year, month, day] = iso.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+function voteDayRows(pull: CountyPull | undefined) {
+  const by = new Map<string, { date: string; voters: number; missingVuid: number }>();
+  for (const day of pull?.days ?? []) {
+    by.set(day.date, { date: day.date, voters: day.voters ?? 0, missingVuid: day.missingVuid ?? 0 });
+  }
+  for (const day of pull?.skippedMissingVuidDays ?? []) {
+    const existing = by.get(day.date) ?? { date: day.date, voters: 0, missingVuid: 0 };
+    existing.missingVuid += day.missingVuid;
+    by.set(day.date, existing);
+  }
+  return [...by.values()].sort((a, b) => b.date.localeCompare(a.date));
+}
 
 function formatNum(n: number) {
   return n.toLocaleString("en-US");
@@ -201,7 +255,7 @@ function formatWhen(iso: string | null) {
   return date.toLocaleString("en-US", { timeZone: "America/Chicago", dateStyle: "medium", timeStyle: "short" });
 }
 
-export function CountyRosterScreen({ onBack }: { onBack: () => void }) {
+export function CountyRosterScreen() {
   const [view, setView] = useState<"voted" | "counties">("voted");
   const [board, setBoard] = useState<Board | null>(null);
   const [voted, setVoted] = useState<VotedPage | null>(null);
@@ -214,6 +268,7 @@ export function CountyRosterScreen({ onBack }: { onBack: () => void }) {
   const [voterSort, setVoterSort] = useState<VoterSort>("voteDate");
   const [voterDir, setVoterDir] = useState<"asc" | "desc">("asc");
   const [detail, setDetail] = useState<VotedRow | null>(null);
+  const [dayCountyKey, setDayCountyKey] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
   async function refresh() {
@@ -256,11 +311,14 @@ export function CountyRosterScreen({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     if (!detail) return;
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setDetail(null);
+      if (event.key === "Escape") {
+        setDetail(null);
+        setDayCountyKey(null);
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [detail]);
+  }, [detail, dayCountyKey]);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -275,8 +333,13 @@ export function CountyRosterScreen({ onBack }: { onBack: () => void }) {
     const countyName = (county: (typeof TEXAS_COUNTIES)[number]) => county.label.replace(/ County$/, "");
     const voterCount = (county: (typeof TEXAS_COUNTIES)[number]) => {
       const pullState = board?.counties[county.key];
-      if (!pullState?.trained || pullState.status !== "ready") return null;
-      return pullState.uniqueVuids;
+      if (!pullState?.trained) return null;
+      return pullState.uniqueVuids ?? 0;
+    };
+    const voteDate = (county: (typeof TEXAS_COUNTIES)[number]) => {
+      const pullState = board?.counties[county.key];
+      if (!pullState?.trained) return null;
+      return latestVoteDate(pullState.days);
     };
     const pulledAt = (county: (typeof TEXAS_COUNTIES)[number]) => {
       const pullState = board?.counties[county.key];
@@ -286,12 +349,12 @@ export function CountyRosterScreen({ onBack }: { onBack: () => void }) {
     };
     return filtered.sort((a, b) => {
       if (sortKey === "name") return countyName(a).localeCompare(countyName(b)) * dir;
-      const av = sortKey === "voters" ? voterCount(a) : pulledAt(a);
-      const bv = sortKey === "voters" ? voterCount(b) : pulledAt(b);
+      const av = sortKey === "voters" ? voterCount(a) : sortKey === "vote" ? voteDate(a) : pulledAt(a);
+      const bv = sortKey === "voters" ? voterCount(b) : sortKey === "vote" ? voteDate(b) : pulledAt(b);
       if (av == null && bv == null) return countyName(a).localeCompare(countyName(b));
       if (av == null) return 1;
       if (bv == null) return -1;
-      if (av !== bv) return (av - bv) * dir;
+      if (av !== bv) return av < bv ? -dir : dir;
       return countyName(a).localeCompare(countyName(b));
     });
   }, [board, filter, query, sortKey, sortDir]);
@@ -367,26 +430,19 @@ export function CountyRosterScreen({ onBack }: { onBack: () => void }) {
     }
   }
 
+  const dayCounty = TEXAS_COUNTIES.find((county) => county.key === dayCountyKey) ?? null;
+  const dayPull = dayCountyKey ? board?.counties[dayCountyKey] : undefined;
+  const dayRows = voteDayRows(dayPull);
+  const dayLatest = latestVoteDate(dayPull?.days);
+  const dayCurrent = voteDateIsCurrent(dayLatest, dayPull?.pulledAt ?? null);
+  const skippedListed = (dayPull?.skippedMissingVuidDays ?? []).reduce((sum, day) => sum + day.missingVuid, 0);
+  const undatedMissingVuid = Math.max(0, (dayPull?.skippedMissingVuid ?? 0) - skippedListed);
   const page = voted ? Math.floor(voted.offset / PAGE_SIZE) + 1 : 1;
   const pageCount = Math.max(1, Math.ceil((voted?.total ?? 0) / PAGE_SIZE));
   const rangeStart = voted && voted.total > 0 ? voted.offset + 1 : 0;
   const rangeEnd = voted ? Math.min(voted.offset + voted.rows.length, voted.total) : 0;
 
   return (
-    <>
-      <header className="enr-top">
-        <div className="enr-top__row">
-          <div className="enr-brand">County rosters</div>
-          <div className="enr-top__center">
-            <span className="enr-official enr-official--muted">Voter roster pulls</span>
-          </div>
-          <div className="enr-top__right">
-            <button type="button" className="enr-btn enr-btn--ghost" onClick={onBack}>
-              Back
-            </button>
-          </div>
-        </div>
-      </header>
       <main className="enr-ballot">
         <div className="enr-ballot__filters">
           <button
@@ -591,7 +647,7 @@ export function CountyRosterScreen({ onBack }: { onBack: () => void }) {
             </div>
             <p className="enr-ballot__schedule">
               {board?.schedule?.enabled
-                ? `Automatic pulls run every ${board.schedule.intervalMinutes} minutes from ${hourLabel(board.schedule.startHour)} through ${hourLabel(board.schedule.endHour)} Central, when a county's last pull is older than that interval.`
+                ? "Automatic pulls run in the background at 9:00, 10:00, 11:00, and 12:00 Central, Monday through Saturday, until a county's roster includes ballots from the day before."
                 : "Automatic pulls are off. Pull all rosters updates every trained county."}
             </p>
             <div className="enr-tablewrap">
@@ -609,7 +665,11 @@ export function CountyRosterScreen({ onBack }: { onBack: () => void }) {
                         Voters{countySortMark("voters")}
                       </button>
                     </th>
-                    <th className="num">Days</th>
+                    <th aria-sort={sortKey === "vote" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                      <button type="button" className="enr-ballot__sort" onClick={() => onCountySort("vote")}>
+                        Latest vote{countySortMark("vote")}
+                      </button>
+                    </th>
                     <th aria-sort={sortKey === "pulled" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
                       <button type="button" className="enr-ballot__sort" onClick={() => onCountySort("pulled")}>
                         Last pull{countySortMark("pulled")}
@@ -623,17 +683,27 @@ export function CountyRosterScreen({ onBack }: { onBack: () => void }) {
                     const pullState = board?.counties[county.key];
                     const trained = Boolean(pullState?.trained);
                     const running = pullState?.running || pullState?.status === "running" || busyKey === county.key;
+                    const latest = trained ? latestVoteDate(pullState?.days) : null;
+                    const current = voteDateIsCurrent(latest, pullState?.pulledAt ?? null);
                     return (
                       <tr key={county.key}>
                         <td>{county.label.replace(/ County$/, "")}</td>
                         <td>{!board ? "…" : trained ? "Trained" : "Not trained"}</td>
-                        <td className="num">
-                          {trained && pullState?.status === "ready" ? formatNum(pullState.uniqueVuids) : "—"}
-                          {trained && pullState?.skippedMissingVuid ? (
-                            <div className="enr-ballot__n">{formatNum(pullState.skippedMissingVuid)} without a VUID</div>
-                          ) : null}
+                        <td className="num">{trained ? formatNum(pullState?.uniqueVuids ?? 0) : "—"}</td>
+                        <td>
+                          {latest ? (
+                            <button
+                              type="button"
+                              className={`enr-roster-date${current ? " is-current" : " is-behind"}`}
+                              onClick={() => setDayCountyKey(county.key)}
+                            >
+                              <span className="enr-roster-date__day">{formatVoteDate(latest)}</span>
+                              <span className="enr-roster-date__state">{current ? "Current" : "Needs a pull"}</span>
+                            </button>
+                          ) : (
+                            "—"
+                          )}
                         </td>
-                        <td className="num">{trained && pullState?.status === "ready" ? formatNum(pullState.days.length) : "—"}</td>
                         <td>{trained ? formatWhen(pullState?.pulledAt ?? null) : "—"}</td>
                         <td>
                           {trained ? (
@@ -657,7 +727,55 @@ export function CountyRosterScreen({ onBack }: { onBack: () => void }) {
             </div>
           </section>
         )}
+        {dayCounty && dayPull ? (
+          <div className="enr-voter-dialog" role="dialog" aria-modal="true" aria-labelledby="roster-days-title">
+            <button type="button" className="enr-voter-dialog__backdrop" aria-label="Close vote days" onClick={() => setDayCountyKey(null)} />
+            <div className="enr-voter-dialog__panel enr-voter-dialog__panel--days">
+              <div className="enr-voter-dialog__head">
+                <h2 id="roster-days-title">{dayCounty.label.replace(/ County$/, "")} vote days</h2>
+                <button type="button" className="enr-btn enr-btn--ghost" onClick={() => setDayCountyKey(null)}>
+                  Close
+                </button>
+              </div>
+              <p className="enr-muted">
+                {dayCurrent
+                  ? `${formatVoteDate(dayLatest ?? "")} is current. No automatic pull is needed for the rest of today. Pull roster still updates this county.`
+                  : dayLatest
+                    ? `${formatVoteDate(dayLatest)} is older than the day before the last pull. An automatic pull will try again at the next scheduled hour.`
+                    : "No vote dates are stored for this county yet."}
+              </p>
+              {dayRows.length ? (
+                <table className="enr-table enr-table--compact enr-roster-days">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th className="num">Voters</th>
+                      <th className="num">No VUID</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dayRows.map((day) => (
+                      <tr key={day.date}>
+                        <td>{formatVoteDate(day.date)}</td>
+                        <td className="num">{formatNum(day.voters)}</td>
+                        <td className="num">{day.missingVuid ? formatNum(day.missingVuid) : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p>No vote days are stored yet.</p>
+              )}
+              {dayPull.skippedMissingVuidDays?.length ? (
+                undatedMissingVuid ? (
+                  <p className="enr-muted">{formatNum(undatedMissingVuid)} more rows on the last pull had no VUID and no vote date.</p>
+                ) : null
+              ) : dayPull.skippedMissingVuid ? (
+                <p className="enr-muted">{formatNum(dayPull.skippedMissingVuid)} rows on the last pull had no VUID.</p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </main>
-    </>
   );
 }

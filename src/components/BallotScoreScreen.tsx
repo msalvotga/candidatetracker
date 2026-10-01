@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch, apiUrl } from "../lib/apiBase";
+import { apiFetch } from "../lib/apiBase";
 import { BallotScoreHeatmap, type BallotMapCell } from "./BallotScoreHeatmap";
 import {
   FALLBACK_DAYS,
@@ -167,7 +167,7 @@ function mapLines(row: ViewRow, mode: "absolute" | "compare", dayLabel: string):
   };
 }
 
-export function BallotScoreScreen({ onBack }: { onBack: () => void }) {
+export function BallotScoreScreen() {
   const [summary, setSummary] = useState<BallotScoreSummary | null>(null);
   const [ev, setEv] = useState<EvPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -177,8 +177,6 @@ export function BallotScoreScreen({ onBack }: { onBack: () => void }) {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("label");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [page, setPage] = useState<"scores" | "settings">("scores");
-  const [exportCounty, setExportCounty] = useState("all");
   const [evDay, setEvDay] = useState("1");
   const [votingDay, setVotingDay] = useState("all");
   const [board, setBoard] = useState<Board>("table");
@@ -296,31 +294,7 @@ export function BallotScoreScreen({ onBack }: { onBack: () => void }) {
   const evCum2022 = bucketStat(cumulativeBucket(evState, evDay, "y2022"), "score2022");
 
   return (
-    <>
-      <header className="enr-top">
-        <div className="enr-top__row">
-          <div className="enr-brand">Ballot score</div>
-          <div className="enr-top__center">
-            <span className="enr-official enr-official--muted">2026 governor ballot</span>
-          </div>
-          <div className="enr-top__right">
-            {page === "settings" ? (
-              <button type="button" className="enr-btn enr-btn--ghost" onClick={() => setPage("scores")}>
-                Scores
-              </button>
-            ) : (
-              <button type="button" className="enr-btn enr-btn--ghost" onClick={() => setPage("settings")} disabled={!summary}>
-                Settings
-              </button>
-            )}
-            <button type="button" className="enr-btn enr-btn--ghost" onClick={onBack}>
-              Back
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <main className="enr-ballot">
+    <main className="enr-ballot">
         {loading ? <p className="enr-ballot__status">Loading ballot scores…</p> : null}
         {rebuilding ? (
           <p className="enr-ballot__status">
@@ -336,11 +310,7 @@ export function BallotScoreScreen({ onBack }: { onBack: () => void }) {
           </p>
         ) : null}
 
-        {page === "settings" && summary ? (
-          <BallotScoreSettings counties={summary.groups.county} county={exportCounty} onCounty={setExportCounty} />
-        ) : null}
-
-        {page === "scores" && summary ? (
+        {summary ? (
           <>
             <section className="enr-ballot__kpis" aria-label="Statewide averages">
               <Kpi label={`2026 election, 2026 model · ${votingDayTitle(evDef)} cumulative`} stat={evCum2026} />
@@ -546,117 +516,6 @@ export function BallotScoreScreen({ onBack }: { onBack: () => void }) {
           </>
         ) : null}
       </main>
-    </>
-  );
-}
-
-type ExportJob = {
-  status: "idle" | "running" | "ready" | "error" | string;
-  scanned: number;
-  written: number;
-  bytes: number;
-  error: string | null;
-};
-
-function BallotScoreSettings({
-  counties,
-  county,
-  onCounty,
-}: {
-  counties: GeoRow[];
-  county: string;
-  onCounty: (county: string) => void;
-}) {
-  const [job, setJob] = useState<ExportJob>({ status: "idle", scanned: 0, written: 0, bytes: 0, error: null });
-  const [starting, setStarting] = useState(false);
-  const selected = county === "all" ? null : counties.find((row) => row.key === county);
-  const downloadUrl = apiUrl(`/api/ballot-score/export.csv?county=${encodeURIComponent(county)}`);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadStatus() {
-      try {
-        const response = await apiFetch(`/api/ballot-score/export-status?county=${encodeURIComponent(county)}`, {
-          cache: "no-store",
-        });
-        const body = (await response.json()) as ExportJob;
-        if (!cancelled) setJob(body);
-      } catch {
-        if (!cancelled) setJob((current) => current);
-      }
-    }
-    void loadStatus();
-    const timer = window.setInterval(() => void loadStatus(), 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [county]);
-
-  async function prepare() {
-    setStarting(true);
-    try {
-      const response = await apiFetch(`/api/ballot-score/export?county=${encodeURIComponent(county)}`, {
-        method: "POST",
-      });
-      const body = (await response.json()) as ExportJob;
-      setJob(body);
-    } catch (error) {
-      setJob({
-        status: "error",
-        scanned: 0,
-        written: 0,
-        bytes: 0,
-        error: error instanceof Error ? error.message : "Could not start the export",
-      });
-    } finally {
-      setStarting(false);
-    }
-  }
-
-  const ready = job.status === "ready";
-  const running = job.status === "running" || starting;
-
-  return (
-    <section className="enr-card enr-ballot__settings">
-      <div className="enr-card__head">
-        <h2 className="enr-card__title">Download voters</h2>
-      </div>
-      <form className="enr-ballot__settings-form" onSubmit={(event) => event.preventDefault()}>
-        <label className="enr-selectLabel">
-          County
-          <select className="enr-select" value={county} onChange={(event) => onCounty(event.target.value)} disabled={running}>
-            <option value="all">All counties</option>
-            {counties.map((row) => (
-              <option key={row.key} value={row.key}>
-                {row.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        {ready ? (
-          <a className="enr-btn enr-btn--primary" href={downloadUrl}>
-            Download CSV
-          </a>
-        ) : (
-          <button type="button" className="enr-btn enr-btn--primary" onClick={() => void prepare()} disabled={running}>
-            {running ? "Preparing…" : "Prepare CSV"}
-          </button>
-        )}
-      </form>
-      <p className="enr-ballot__hint">
-        {running
-          ? `Reading the statewide file… ${formatNum(job.scanned)} voters scanned, ${formatNum(job.written)} in this county.`
-          : ready
-            ? `File is ready${job.written ? ` (${formatNum(job.written)} voters)` : ""}. The download is the finished CSV.`
-            : job.status === "error"
-              ? job.error || "The export failed."
-              : selected
-                ? `Prepares a CSV of every voter in ${selected.label}. One row per voter, including the 2026 governor ballot score.`
-                : "Prepares a CSV of every voter in every county."}{" "}
-        Upload the early-voting lookup, 2022 file, and 2026 roster from the main Settings page.
-      </p>
-    </section>
   );
 }
 

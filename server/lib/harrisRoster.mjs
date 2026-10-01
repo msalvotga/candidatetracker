@@ -56,6 +56,7 @@ function isHeaderRow(row) {
 export function parseHarrisBbmCsv(text) {
   const table = parse(String(text ?? ""), { bom: true, relax_column_count: true, relax_quotes: true });
   const rows = [];
+  const missingByDate = new Map();
   let skippedMissingVuid = 0;
   let skippedMissingDate = 0;
   for (const raw of table) {
@@ -65,6 +66,7 @@ export function parseHarrisBbmCsv(text) {
     const voteDate = parseIsoDate(cell(raw, 7));
     if (!/^\d{8,}$/.test(vuid)) {
       skippedMissingVuid += 1;
+      if (voteDate) missingByDate.set(voteDate, (missingByDate.get(voteDate) ?? 0) + 1);
       continue;
     }
     if (!voteDate) {
@@ -73,5 +75,8 @@ export function parseHarrisBbmCsv(text) {
     }
     rows.push({ vuid, activityDate: voteDate, votingMethod: "AB" });
   }
-  return { rows, skippedMissingVuid, skippedMissingDate };
+  const missingVuidDays = [...missingByDate.entries()]
+    .map(([date, missingVuid]) => ({ date, missingVuid }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  return { rows, skippedMissingVuid, skippedMissingDate, missingVuidDays };
 }

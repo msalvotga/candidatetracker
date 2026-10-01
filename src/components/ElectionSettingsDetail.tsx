@@ -27,7 +27,6 @@ import { CountyRaceMappingSection } from "./CountyRaceMappingSection";
 import { CountyVoteDesk } from "./CountyVoteDesk";
 import { CountyRaceSourcesSection } from "./CountyRaceSourcesSection";
 import { SettingsCollapse } from "./SettingsCollapse";
-import { SettingsBuildStamp } from "./SettingsBuildStamp";
 import { TX_CIVIX_DEFAULT_COUNTYINFO_PREFIX, civixDefaultCountyInfoUrl } from "../lib/civix/urls";
 import { TEXAS_COUNTIES, TEXAS_COUNTY_KEY_SET } from "../lib/texasCounties";
 
@@ -593,27 +592,11 @@ export function ElectionSettingsDetail({
   );
 
   return (
-    <>
-      <header className="enr-top">
-        <div className="enr-top__row">
-          <div className="enr-brand">Texas election night tracker</div>
-          <div className="enr-top__center">
-            <span className="enr-official enr-official--muted">Election sources</span>
-          </div>
-          <div className="enr-top__right">
-            <SettingsBuildStamp />
-          </div>
-        </div>
-      </header>
-      <nav className="enr-nav">
-        <div className="enr-nav__left">
-          <button type="button" className="enr-navlink" onClick={onBack}>
-            ← Back to settings
-          </button>
-        </div>
-      </nav>
       <main className="enr-main enr-main--settings">
         <div className="enr-settings">
+          <button type="button" className="enr-btn enr-btn--ghost enr-settings__back" onClick={onBack}>
+            Back to settings
+          </button>
           <h1 className="enr-settings__title">
             {label} <span className="enr-muted">({electionId})</span>
           </h1>
@@ -1286,6 +1269,5 @@ montgomery,montgomery-eresults-html,https://elections.mctx.org/...`}
           />
         </div>
       </main>
-    </>
   );
 }

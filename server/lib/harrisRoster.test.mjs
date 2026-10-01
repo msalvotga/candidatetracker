@@ -20,5 +20,6 @@ test("reads column E as the VUID and column H as the vote date", () => {
 `;
   const parsed = parseHarrisBbmCsv(csv);
   assert.equal(parsed.skippedMissingVuid, 1);
+  assert.deepEqual(parsed.missingVuidDays, [{ date: "2026-09-24", missingVuid: 1 }]);
   assert.deepEqual(parsed.rows, [{ vuid: "2221343697", activityDate: "2026-09-24", votingMethod: "AB" }]);
 });

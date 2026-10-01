@@ -153,7 +153,7 @@ function totalsFromCounties(counties: EvRosterCountySummary[]): EvRosterSummaryT
   );
 }
 
-export function EvRosterScreen({ onBack }: { onBack: () => void }) {
+export function EvRosterScreen() {
   const [configs, setConfigs] = useState<EvRosterConfig[]>([]);
   const [runoffs, setRunoffs] = useState<EvRosterRunoff[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -747,9 +747,6 @@ export function EvRosterScreen({ onBack }: { onBack: () => void }) {
   return (
     <div className="enr-ev-roster">
       <header className="enr-ev-roster__header">
-        <button type="button" className="enr-btn enr-btn--ghost" onClick={onBack}>
-          ← Results
-        </button>
         <div>
           <h1>Early voting rosters</h1>
           <p className="enr-muted">

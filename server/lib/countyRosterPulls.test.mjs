@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   countiesDueForRosterPull,
+  rosterCaughtUp,
+  rosterCountyCounts,
   mergeRosterRecords,
   registrationDateFromProfile,
   sortRosterVoters,
@@ -129,25 +131,52 @@ test("sorts registration date and leaves blank dates last", () => {
   );
 });
 
-test("pulls trained counties once an hour from 9am through 1pm Central", () => {
-  const counties = {
-    bexar: { pulledAt: "2026-09-29T14:00:00.000Z" },
-    harris: { pulledAt: "2026-09-29T14:00:00.000Z" },
-    travis: { pulledAt: "2026-09-29T14:00:00.000Z" },
-  };
-  assert.deepEqual(countiesDueForRosterPull(counties, HOURLY, new Date("2026-09-29T13:59:00.000Z")), []);
-  assert.deepEqual(countiesDueForRosterPull({}, HOURLY, new Date("2026-09-29T14:00:00.000Z")), ["bexar", "harris", "travis"]);
-  assert.deepEqual(countiesDueForRosterPull(counties, HOURLY, new Date("2026-09-29T14:30:00.000Z")), []);
-  assert.deepEqual(countiesDueForRosterPull(counties, HOURLY, new Date("2026-09-29T15:00:00.000Z")), ["bexar", "harris", "travis"]);
-  assert.deepEqual(countiesDueForRosterPull(counties, HOURLY, new Date("2026-09-29T18:30:00.000Z")), ["bexar", "harris", "travis"]);
-  assert.deepEqual(countiesDueForRosterPull(counties, HOURLY, new Date("2026-09-29T19:00:00.000Z")), []);
-  assert.deepEqual(countiesDueForRosterPull({}, { ...HOURLY, enabled: false }, new Date("2026-09-29T15:00:00.000Z")), []);
+test("counts stored voters for the county that pulled them", () => {
+  const counts = rosterCountyCounts([
+    { sourceCounty: "bexar", vuid: "1", voteDate: "2026-09-28" },
+    { sourceCounty: "bexar", vuid: "1", voteDate: "2026-09-30" },
+    { sourceCounty: "BEXAR", vuid: "2", voteDate: "2026-09-30" },
+    { sourceCounty: "travis", vuid: "3", voteDate: "2026-09-22" },
+    { sourceCounty: "harris", vuid: "", voteDate: "2026-09-24" },
+  ]);
+  assert.equal(counts.bexar.rows, 3);
+  assert.equal(counts.bexar.uniqueVuids, 2);
+  assert.equal(counts.bexar.days.length, 2);
+  assert.equal(counts.bexar.days.find((day) => day.date === "2026-09-30").voters, 2);
+  assert.equal(counts.travis.uniqueVuids, 1);
+  assert.equal(counts.harris.uniqueVuids, 0);
+  assert.equal(counts.harris.rows, 1);
+  assert.equal(counts.harris.missingVuid, 1);
+  assert.equal(counts.harris.days[0].missingVuid, 1);
+});
+
+test("a vote date of yesterday, or the day before today's pull, is current", () => {
+  const now = new Date("2026-10-01T14:00:00.000Z");
+  assert.equal(rosterCaughtUp("2026-09-30", null, now), true);
+  assert.equal(rosterCaughtUp("2026-09-28", "2026-10-01T14:10:00.000Z", now), false);
+  assert.equal(rosterCaughtUp("2026-09-30", "2026-10-01T14:10:00.000Z", now), true);
+  assert.equal(rosterCaughtUp("2026-09-30", "2026-09-28T14:10:00.000Z", new Date("2026-10-02T14:00:00.000Z")), false);
+});
+
+test("auto-pulls at 9, 10, 11, and noon Central, Monday through Saturday, until yesterday's ballots are in", () => {
+  const nine = new Date("2026-10-01T14:00:00.000Z");
+  const voters = [
+    { sourceCounty: "bexar", voteDate: "2026-09-30" },
+    { sourceCounty: "harris", voteDate: "2026-09-28" },
+  ];
+  assert.deepEqual(countiesDueForRosterPull({}, HOURLY, new Date("2026-10-01T13:59:00.000Z"), voters), []);
+  assert.deepEqual(countiesDueForRosterPull({}, HOURLY, nine, voters), ["harris", "travis"]);
+  assert.deepEqual(countiesDueForRosterPull({}, HOURLY, new Date("2026-10-01T16:30:00.000Z"), voters), ["harris", "travis"]);
+  assert.deepEqual(countiesDueForRosterPull({}, HOURLY, new Date("2026-10-01T17:00:00.000Z"), voters), ["harris", "travis"]);
+  assert.deepEqual(countiesDueForRosterPull({}, HOURLY, new Date("2026-10-01T18:00:00.000Z"), voters), []);
+  assert.deepEqual(countiesDueForRosterPull({}, HOURLY, new Date("2026-10-04T14:00:00.000Z"), []), []);
   assert.deepEqual(
-    countiesDueForRosterPull(
-      { bexar: { pulledAt: "2026-09-29T14:50:00.000Z" }, harris: { pulledAt: "2026-09-29T14:00:00.000Z" } },
-      HOURLY,
-      new Date("2026-09-29T15:00:00.000Z"),
-    ),
+    countiesDueForRosterPull({ harris: { pulledAt: "2026-10-01T14:10:00.000Z" } }, HOURLY, new Date("2026-10-01T14:40:00.000Z"), voters),
+    ["travis"],
+  );
+  assert.deepEqual(
+    countiesDueForRosterPull({ harris: { pulledAt: "2026-10-01T14:10:00.000Z" } }, HOURLY, new Date("2026-10-01T15:00:00.000Z"), voters),
     ["harris", "travis"],
   );
+  assert.deepEqual(countiesDueForRosterPull({}, { ...HOURLY, enabled: false }, nine, voters), []);
 });

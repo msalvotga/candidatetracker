@@ -4,19 +4,8 @@ import { SettingsCollapse } from "./SettingsCollapse";
 
 type RosterSchedule = {
   enabled: boolean;
-  intervalMinutes: number;
-  startHour: number;
-  endHour: number;
   timeZone: string;
 };
-
-const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
-
-function hourLabel(hour: number) {
-  const h = hour % 12 || 12;
-  const suffix = hour < 12 ? "AM" : "PM";
-  return `${h}:00 ${suffix}`;
-}
 
 export function CountyRosterScheduleSettings() {
   const [schedule, setSchedule] = useState<RosterSchedule | null>(null);
@@ -87,69 +76,13 @@ export function CountyRosterScheduleSettings() {
             void save(next);
           }}
         />
-        Update trained county rosters on a schedule
+        Update trained county rosters automatically
       </label>
       <p className="enr-muted" style={{ marginTop: -4, marginBottom: 12 }}>
-        Each trained county is pulled again when its last pull is older than the interval. That check runs during
-        each hour from the first pull through the last pull, Central time. The default is every hour from 9:00 AM
-        through 1:00 PM.
+        Automatic pulls run in the background at 9:00 AM, 10:00 AM, 11:00 AM, and 12:00 PM Central, Monday through
+        Saturday, whether or not County rosters is open. A county is skipped once its roster already includes a ballot
+        from the day before. On October 1, a September 30 vote date means that county posted its updated roster.
       </p>
-      <label className="enr-field">
-        Update interval (minutes)
-        <input
-          className="enr-input"
-          type="number"
-          min={15}
-          max={1440}
-          step={1}
-          disabled={busy}
-          value={schedule.intervalMinutes}
-          onChange={(event) =>
-            setSchedule((current) =>
-              current ? { ...current, intervalMinutes: Math.max(15, Number(event.target.value) || 60) } : current,
-            )
-          }
-          onBlur={() => void save(schedule)}
-        />
-      </label>
-      <label className="enr-field">
-        First pull
-        <select
-          className="enr-input"
-          disabled={busy}
-          value={schedule.startHour}
-          onChange={(event) => {
-            const next = { ...schedule, startHour: Number(event.target.value) };
-            setSchedule(next);
-            void save(next);
-          }}
-        >
-          {HOURS.map((hour) => (
-            <option key={hour} value={hour}>
-              {hourLabel(hour)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="enr-field">
-        Last pull
-        <select
-          className="enr-input"
-          disabled={busy}
-          value={schedule.endHour}
-          onChange={(event) => {
-            const next = { ...schedule, endHour: Number(event.target.value) };
-            setSchedule(next);
-            void save(next);
-          }}
-        >
-          {HOURS.map((hour) => (
-            <option key={hour} value={hour}>
-              {hourLabel(hour)}
-            </option>
-          ))}
-        </select>
-      </label>
       </SettingsCollapse>
     </section>
   );

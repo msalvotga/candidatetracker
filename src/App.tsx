@@ -21,6 +21,7 @@ import { ReportingRibbon } from "./components/ReportingRibbon";
 import { RaceSummary } from "./components/RaceSummary";
 import { CountyBreakdown } from "./components/CountyBreakdown";
 import { SettingsScreen } from "./components/SettingsScreen";
+import { AppChrome, type AppScreen } from "./components/AppChrome";
 import { APP_VERSION } from "./lib/appVersion";
 import { EV_ROSTER_ENABLED } from "./lib/featureFlags";
 import { EvRosterScreen } from "./components/EvRosterScreen";
@@ -66,6 +67,36 @@ function racesForTab(
   return election.file.races.filter((r) => r.officeType === tab);
 }
 
+const HOME_STATE_KEY = "enr.homeState";
+const APP_SCREENS = new Set<AppScreen>(["dashboard", "manual-votes", "settings", "ev-roster", "ballot-score", "county-roster"]);
+
+type HomeState = {
+  screen: AppScreen;
+  view: "race" | "county";
+  officeTab: string | null;
+  selectedRaceId: string | null;
+  selectedElectionId: string | null;
+};
+
+function readHomeState(): HomeState | null {
+  try {
+    const raw = sessionStorage.getItem(HOME_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<HomeState>;
+    if (!parsed || typeof parsed !== "object") return null;
+    const screen = APP_SCREENS.has(parsed.screen as AppScreen) ? (parsed.screen as AppScreen) : "dashboard";
+    return {
+      screen,
+      view: parsed.view === "county" ? "county" : "race",
+      officeTab: typeof parsed.officeTab === "string" ? parsed.officeTab : null,
+      selectedRaceId: typeof parsed.selectedRaceId === "string" ? parsed.selectedRaceId : null,
+      selectedElectionId: typeof parsed.selectedElectionId === "string" ? parsed.selectedElectionId : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Numeric Civix election id when catalog entry uses SOS (civix:… or election:… with numeric id). */
 function civixElectionIdFromCatalog(catalogId: string | null): string | null {
   if (!catalogId) return null;
@@ -78,7 +109,8 @@ function civixElectionIdFromCatalog(catalogId: string | null): string | null {
 }
 
 export function App() {
-  const [screen, setScreen] = useState<"dashboard" | "manual-votes" | "settings" | "ev-roster" | "ballot-score" | "county-roster">("dashboard");
+  const savedHome = readHomeState();
+  const [screen, setScreen] = useState<AppScreen>(savedHome?.screen ?? "dashboard");
   const [useBackend, setUseBackend] = useState<boolean | null>(null);
   const [catalogRefresh, setCatalogRefresh] = useState(0);
 
@@ -88,10 +120,10 @@ export function App() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [selectedElectionId, setSelectedElectionId] = useState<string | null>(null);
-  const [officeTab, setOfficeTab] = useState<DashboardTab | null>(null);
-  const [selectedRaceId, setSelectedRaceId] = useState<string | null>(null);
-  const [view, setView] = useState<"race" | "county">("race");
+  const [selectedElectionId, setSelectedElectionId] = useState<string | null>(savedHome?.selectedElectionId ?? null);
+  const [officeTab, setOfficeTab] = useState<DashboardTab | null>((savedHome?.officeTab as DashboardTab | null) ?? null);
+  const [selectedRaceId, setSelectedRaceId] = useState<string | null>(savedHome?.selectedRaceId ?? null);
+  const [view, setView] = useState<"race" | "county">(savedHome?.view ?? "race");
   const [ingestStatus, setIngestStatus] = useState<IngestStatus | null>(null);
   const [displayTimeZone, setDisplayTimeZone] = useState("America/Chicago");
   const [electionSourceConfigs, setElectionSourceConfigs] = useState<ElectionSourceConfig[]>([]);
@@ -100,8 +132,29 @@ export function App() {
   const [favoritesError, setFavoritesError] = useState<string | null>(null);
   /** Last ingest completion time we have merged into `current` (avoids duplicate fetches + establishes baseline). */
   const lastMergedIngestEndRef = useRef<number | null>(null);
+  const selectedElectionIdRef = useRef(selectedElectionId);
+  const electionOptionsRef = useRef(electionOptions);
+  const currentRef = useRef(current);
+  selectedElectionIdRef.current = selectedElectionId;
+  electionOptionsRef.current = electionOptions;
+  currentRef.current = current;
 
   const bumpCatalog = useCallback(() => setCatalogRefresh((n) => n + 1), []);
+
+  useEffect(() => {
+    const next: HomeState = {
+      screen,
+      view,
+      officeTab,
+      selectedRaceId,
+      selectedElectionId,
+    };
+    try {
+      sessionStorage.setItem(HOME_STATE_KEY, JSON.stringify(next));
+    } catch {
+      /* session storage can be unavailable */
+    }
+  }, [screen, view, officeTab, selectedRaceId, selectedElectionId]);
 
   const refreshLoadedElection = useCallback(async () => {
     if (useBackend !== true || !selectedElectionId) return;
@@ -151,7 +204,10 @@ export function App() {
           (defaultCatalogId && options.find((o) => o.catalogId === defaultCatalogId)) ??
           options.find((o) => o.provider === "civix") ??
           options[0];
-        if (preferred) setSelectedElectionId(preferred.catalogId);
+        const savedId = selectedElectionIdRef.current;
+        const keepSaved = savedId != null && options.some((option) => option.catalogId === savedId);
+        const nextId = keepSaved ? savedId : preferred?.catalogId ?? null;
+        if (nextId) setSelectedElectionId(nextId);
       } catch (e) {
         if (cancelled) return;
         setLoadError(e instanceof Error ? e.message : "Failed to load election list");
@@ -171,15 +227,15 @@ export function App() {
       setCurrent(null);
       return;
     }
-    const option = electionOptions.find((o) => o.catalogId === selectedElectionId);
-    if (!option) {
-      setCurrent(null);
-      return;
-    }
+    const option = electionOptionsRef.current.find((o) => o.catalogId === selectedElectionId);
+    if (!option) return;
+    const showingSame = currentRef.current?.catalogId === selectedElectionId;
     let cancelled = false;
     (async () => {
-      setDetailLoading(true);
-      setCurrent(null);
+      if (!showingSame) {
+        setDetailLoading(true);
+        setCurrent(null);
+      }
       setLoadError(null);
       try {
         let bundle: LoadedElection;
@@ -202,8 +258,10 @@ export function App() {
         setCurrent(bundle);
       } catch (e) {
         if (cancelled) return;
-        setCurrent(null);
-        setLoadError(e instanceof Error ? e.message : "Failed to load election results");
+        if (!showingSame) {
+          setCurrent(null);
+          setLoadError(e instanceof Error ? e.message : "Failed to load election results");
+        }
       } finally {
         if (!cancelled) setDetailLoading(false);
       }
@@ -211,7 +269,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedElectionId, electionOptions, useBackend]);
+  }, [selectedElectionId, useBackend, electionOptions.length]);
 
   const tabs = useMemo<DashboardTab[]>(() => [FAVORITES_TAB, ...officeTypesForElection(current ?? undefined)], [current]);
 
@@ -230,6 +288,7 @@ export function App() {
   const showingFavorites = officeTab === FAVORITES_TAB;
 
   useEffect(() => {
+    if (!current) return;
     if (!tabRaces.length) {
       setSelectedRaceId(null);
       return;
@@ -237,7 +296,7 @@ export function App() {
     if (!selectedRaceId || !tabRaces.some((r) => r.id === selectedRaceId)) {
       setSelectedRaceId(tabRaces[0]!.id);
     }
-  }, [tabRaces, selectedRaceId]);
+  }, [current, tabRaces, selectedRaceId]);
 
   const selectedRace = useMemo(() => {
     if (!selectedRaceId) return null;
@@ -529,130 +588,20 @@ export function App() {
 
   const backendLabel = useBackend === null ? "…" : useBackend ? "API + Civix merge" : "Browser only (Civix)";
 
-  if (screen === "ev-roster" && EV_ROSTER_ENABLED) {
-    return (
-      <div className="enr-app">
-        <EvRosterScreen onBack={() => setScreen("dashboard")} />
-      </div>
-    );
-  }
-
-  if (screen === "county-roster") {
-    return (
-      <div className="enr-app">
-        <CountyRosterScreen onBack={() => setScreen("dashboard")} />
-        <footer className="enr-footer">
-          <div>{APP_VERSION}</div>
-        </footer>
-      </div>
-    );
-  }
-
-  if (screen === "ballot-score") {
-    return (
-      <div className="enr-app">
-        <BallotScoreScreen onBack={() => setScreen("dashboard")} />
-        <footer className="enr-footer">
-          <div>{APP_VERSION}</div>
-        </footer>
-      </div>
-    );
-  }
-
-  if (screen === "settings") {
-    return (
-      <div className="enr-app">
-        <SettingsScreen
-          onBack={() => setScreen("dashboard")}
-          onOpenManualVotes={() => setScreen("manual-votes")}
-          onCatalogChanged={bumpCatalog}
-          backendLabel={backendLabel}
-        />
-        <footer className="enr-footer">
-          <div>
-            With <code>npm run dev</code>, the election API is served in-process on the same port as Vite (<code>/api/*</code>
-            ). Use <code>npm run dev:all</code> if you want the API on port 3847 separately (e.g. for integration tests).
-          </div>
-        </footer>
-      </div>
-    );
-  }
-
   return (
     <div className="enr-app">
-      <header className="enr-top">
-        <div className="enr-top__row">
-          <div className="enr-brand">Texas election night tracker</div>
-          <div className="enr-top__center">
-            {current?.file.reporting.resultStatus ? (
-              <span className="enr-official">{current.file.reporting.resultStatus}</span>
-            ) : (
-              <span className="enr-official enr-official--muted">Unofficial results</span>
-            )}
-          </div>
-          <div className="enr-top__right">
-            {/* intentionally blank on home per UI request */}
-          </div>
-        </div>
-      </header>
-
-      <nav className="enr-nav">
-        <div className="enr-nav__left">
-          <button
-            type="button"
-            className={`enr-navlink ${screen === "dashboard" ? "is-active" : ""}`}
-            onClick={() => {
-              setScreen("dashboard");
-              setView("race");
-            }}
-          >
-            Home
-          </button>
-          <button
-            type="button"
-            className={`enr-navlink ${screen === "manual-votes" ? "is-active" : ""}`}
-            onClick={() => setScreen("manual-votes")}
-          >
-            Manual votes
-          </button>
-          {EV_ROSTER_ENABLED ? (
-            <button type="button" className="enr-navlink" onClick={() => setScreen("ev-roster")}>
-              Early voting rosters
-            </button>
-          ) : null}
-          <button type="button" className="enr-navlink" onClick={() => setScreen("ballot-score")}>
-            Ballot scores
-          </button>
-          <button type="button" className="enr-navlink" onClick={() => setScreen("county-roster")}>
-            County rosters
-          </button>
-          <button type="button" className="enr-navlink" onClick={() => setScreen("settings")}>
-            Settings
-          </button>
-        </div>
-        <div className="enr-nav__right">
-          {electionOptions.length > 0 ? (
-            <div className="enr-navElectionBlock">
-              <label className="enr-navElectionRow">
-                <span className="enr-navElectionLabel">Election</span>
-                <select
-                  className="enr-navElectionSelect"
-                  value={selectedElectionId ?? ""}
-                  onChange={(e) => setSelectedElectionId(e.target.value || null)}
-                  disabled={listLoading}
-                  aria-label="Select election"
-                >
-                  {electionOptions.map((o) => (
-                    <option key={o.catalogId} value={o.catalogId}>
-                      {o.catalogLabel}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          ) : null}
-        </div>
-      </nav>
+      <AppChrome
+        active={screen}
+        onNavigate={(next) => {
+          setScreen(next);
+          if (next === "dashboard") setView("race");
+        }}
+        resultStatus={current?.file.reporting.resultStatus}
+        electionOptions={electionOptions}
+        selectedElectionId={selectedElectionId}
+        onSelectElection={setSelectedElectionId}
+        listLoading={listLoading}
+      />
 
       {screen === "dashboard" && current && ribbonReporting ? (
         <ReportingRibbon
@@ -665,6 +614,14 @@ export function App() {
         />
       ) : null}
 
+      {screen === "settings" ? (
+        <SettingsScreen onCatalogChanged={bumpCatalog} backendLabel={backendLabel} />
+      ) : null}
+      {screen === "ballot-score" ? <BallotScoreScreen /> : null}
+      {screen === "county-roster" ? <CountyRosterScreen /> : null}
+      {screen === "ev-roster" && EV_ROSTER_ENABLED ? <EvRosterScreen /> : null}
+
+      {screen === "dashboard" || screen === "manual-votes" ? (
       <main className="enr-main">
         {screen === "manual-votes" ? (
           <ManualVotesScreen
@@ -676,15 +633,15 @@ export function App() {
             }}
           />
         ) : null}
-        {screen === "dashboard" && listLoading ? (
+        {screen === "dashboard" && !current && listLoading ? (
           <div className="enr-panel">
             Loading election list… {useBackend === null ? "(checking /api)" : useBackend ? "(Civix + manual catalog)" : "(Civix direct)"}
           </div>
         ) : null}
-        {screen === "dashboard" && !listLoading && detailLoading ? (
+        {screen === "dashboard" && !current && !listLoading && detailLoading ? (
           <div className="enr-panel">Loading results for the selected election…</div>
         ) : null}
-        {screen === "dashboard" && !listLoading && loadError ? (
+        {screen === "dashboard" && !current && !listLoading && loadError ? (
           <div className="enr-panel enr-error">
             <div className="enr-error__title">Could not load data</div>
             <div className="enr-error__body">{loadError}</div>
@@ -696,11 +653,11 @@ export function App() {
             ) : null}
           </div>
         ) : null}
-        {screen === "dashboard" && !listLoading && !loadError && !electionOptions.length ? (
+        {screen === "dashboard" && !current && !listLoading && !loadError && !electionOptions.length ? (
           <div className="enr-panel">No elections are available from the current catalog.</div>
         ) : null}
 
-        {screen === "dashboard" && !listLoading && !detailLoading && !loadError && current ? (
+        {screen === "dashboard" && current ? (
           <>
             {!showingFavorites ? (
               <div className="enr-controls">
@@ -798,6 +755,7 @@ export function App() {
             ) : null}
             {view === "race" && !showingFavorites && selectedRace ? (
               <RaceSummary
+                key={selectedRace.id}
                 race={selectedRace}
                 onContestDetails={() => setView("county")}
                 electionDayEstimate={selectedElectionConfig?.electionDayEstimate ?? null}
@@ -829,11 +787,12 @@ export function App() {
               />
             ) : null}
             {view === "county" && selectedRace ? (
-              <CountyBreakdown race={selectedRace} onBack={() => setView("race")} />
+              <CountyBreakdown key={selectedRace.id} race={selectedRace} onBack={() => setView("race")} />
             ) : null}
           </>
         ) : null}
       </main>
+      ) : null}
 
       <footer className="enr-footer">
         <div>{APP_VERSION}</div>

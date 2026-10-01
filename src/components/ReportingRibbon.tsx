@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { ReportingSnapshot } from "../types/election";
 import { formatDateTime } from "../lib/voteMath";
+import { LiveCount } from "./LiveCount";
 
-function pctCircle(label: string, value: number, total: number, tone: "pink" | "green") {
+function pctCircle(label: ReactNode, value: number, total: number, tone: "pink" | "green") {
   const pct = total > 0 ? Math.round((value / total) * 1000) / 10 : 0;
   const ring = tone === "pink" ? "var(--tx-pink)" : "var(--tx-green)";
   return (
@@ -14,7 +15,9 @@ function pctCircle(label: string, value: number, total: number, tone: "pink" | "
         }}
       >
         <div className="enr-gauge__inner">
-          <div className="enr-gauge__pct">{Math.round(pct)}%</div>
+          <div className="enr-gauge__pct">
+            <LiveCount value={Math.round(pct)} />%
+          </div>
         </div>
       </div>
       <div className="enr-gauge__text">{label}</div>
@@ -78,13 +81,17 @@ export function ReportingRibbon({
       <div className="enr-ribbon__inner">
         <div className="enr-ribbon__gauges">
           {pctCircle(
-            `${counties.reported.toLocaleString()} of ${counties.total.toLocaleString()} Counties with data`,
+            <>
+              <LiveCount value={counties.reported} /> of {counties.total.toLocaleString()} Counties with data
+            </>,
             counties.reported,
             counties.total,
             "pink",
           )}
           {pctCircle(
-            `${pollingLocations.reported.toLocaleString()} of ${pollingLocations.total.toLocaleString()} Polling locations reporting`,
+            <>
+              <LiveCount value={pollingLocations.reported} /> of {pollingLocations.total.toLocaleString()} Polling locations reporting
+            </>,
             pollingLocations.reported,
             pollingLocations.total,
             "green",

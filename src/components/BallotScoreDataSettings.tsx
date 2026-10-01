@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { apiFetch } from "../lib/apiBase";
+import { apiFetch, apiUrl } from "../lib/apiBase";
 import { SettingsCollapse } from "./SettingsCollapse";
 
 type DatasetKind = "lookup" | "static2022" | "roster2026";
@@ -279,7 +279,129 @@ export function BallotScoreDataSettings() {
           {busyKind === "rebuild" ? "Rebuilding…" : "Rebuild scores"}
         </button>
       </div>
+      <BallotScoreDownload />
       </SettingsCollapse>
     </section>
+  );
+}
+
+type ExportJob = {
+  status: "idle" | "running" | "ready" | "error" | string;
+  scanned: number;
+  written: number;
+  bytes: number;
+  error: string | null;
+};
+
+function BallotScoreDownload() {
+  const [counties, setCounties] = useState<{ key: string; label: string }[]>([]);
+  const [county, setCounty] = useState("all");
+  const [job, setJob] = useState<ExportJob>({ status: "idle", scanned: 0, written: 0, bytes: 0, error: null });
+  const [starting, setStarting] = useState(false);
+  const selected = county === "all" ? null : counties.find((row) => row.key === county);
+  const downloadUrl = apiUrl(`/api/ballot-score/export.csv?county=${encodeURIComponent(county)}`);
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiFetch("/api/ballot-score", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((body) => {
+        const rows = Array.isArray(body?.groups?.county) ? body.groups.county : [];
+        if (!cancelled) {
+          setCounties(
+            rows
+              .filter((row: { key?: string }) => row?.key && row.key !== "0")
+              .map((row: { key: string; label?: string }) => ({ key: row.key, label: row.label || row.key })),
+          );
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadStatus() {
+      try {
+        const response = await apiFetch(`/api/ballot-score/export-status?county=${encodeURIComponent(county)}`, {
+          cache: "no-store",
+        });
+        const body = (await response.json()) as ExportJob;
+        if (!cancelled) setJob(body);
+      } catch {
+        if (!cancelled) setJob((current) => current);
+      }
+    }
+    void loadStatus();
+    const timer = window.setInterval(() => void loadStatus(), 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [county]);
+
+  async function prepare() {
+    setStarting(true);
+    try {
+      const response = await apiFetch(`/api/ballot-score/export?county=${encodeURIComponent(county)}`, {
+        method: "POST",
+      });
+      const body = (await response.json()) as ExportJob;
+      setJob(body);
+    } catch (error) {
+      setJob({
+        status: "error",
+        scanned: 0,
+        written: 0,
+        bytes: 0,
+        error: error instanceof Error ? error.message : "Could not start the export",
+      });
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  const ready = job.status === "ready";
+  const running = job.status === "running" || starting;
+
+  return (
+    <div className="enr-ballot__settings">
+      <h3 className="enr-card__title">Download voters</h3>
+      <form className="enr-ballot__settings-form" onSubmit={(event) => event.preventDefault()}>
+        <label className="enr-selectLabel">
+          County
+          <select className="enr-select" value={county} onChange={(event) => setCounty(event.target.value)} disabled={running}>
+            <option value="all">All counties</option>
+            {counties.map((row) => (
+              <option key={row.key} value={row.key}>
+                {row.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {ready ? (
+          <a className="enr-btn enr-btn--primary" href={downloadUrl}>
+            Download CSV
+          </a>
+        ) : (
+          <button type="button" className="enr-btn enr-btn--primary" onClick={() => void prepare()} disabled={running}>
+            {running ? "Preparing…" : "Prepare CSV"}
+          </button>
+        )}
+      </form>
+      <p className="enr-muted">
+        {running
+          ? `Reading the statewide file… ${formatNum(job.scanned)} voters scanned, ${formatNum(job.written)} in this county.`
+          : ready
+            ? `File is ready${job.written ? ` (${formatNum(job.written)} voters)` : ""}. The download is the finished CSV.`
+            : job.status === "error"
+              ? job.error || "The export failed."
+              : selected
+                ? `Prepares a CSV of every voter in ${selected.label}. One row per voter, including the 2026 governor ballot score.`
+                : "Prepares a CSV of every voter in every county. One row per voter, including the 2026 governor ballot score."}
+      </p>
+    </div>
   );
 }

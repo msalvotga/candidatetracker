@@ -536,24 +536,9 @@
 }
 
 .enr-liveNum--pulse {
-  animation: enr-liveNumPulse 0.9s ease-out;
-}
-
-@keyframes enr-liveNumPulse {
-  0% {
-    color: var(--tx-green, #178a3d);
-    background-color: rgba(23, 138, 61, 0.2);
-    transform: scale(1.03);
-  }
-  55% {
-    color: var(--tx-green, #178a3d);
-    background-color: rgba(23, 138, 61, 0.08);
-  }
-  100% {
-    color: inherit;
-    background-color: transparent;
-    transform: scale(1);
-  }
+  color: #0f7a32;
+  background-color: rgba(23, 138, 61, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(15, 122, 50, 0.35);
 }
 
 .col-name {
@@ -1106,6 +1091,25 @@
   flex-direction: column;
   gap: 10px;
   margin-bottom: 16px;
+}
+
+.enr-settings__heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.enr-settings__headingTools {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.enr-settings__back {
+  margin-bottom: 12px;
 }
 
 .enr-settings__title {
@@ -2130,6 +2134,43 @@ code {
   min-width: 960px;
 }
 
+.enr-roster-date {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--tx-navy);
+  cursor: pointer;
+  text-align: left;
+}
+
+.enr-roster-date__day {
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.enr-roster-date__state {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.enr-roster-date.is-current .enr-roster-date__state {
+  color: #17662f;
+}
+
+.enr-roster-date.is-behind .enr-roster-date__state {
+  color: #9b2335;
+}
+
+.enr-roster-days {
+  width: 100%;
+  min-width: 0;
+  margin-top: 12px;
+}
+
 .enr-roster-info {
   width: 56px;
   text-align: center;
@@ -2175,6 +2216,12 @@ code {
   border-radius: 10px;
   padding: 16px 18px 20px;
   box-shadow: 0 16px 40px rgba(15, 39, 71, 0.25);
+}
+
+.enr-voter-dialog__panel--days {
+  width: min(720px, calc(100% - 48px));
+  max-height: none;
+  overflow: visible;
 }
 
 .enr-voter-dialog__head {

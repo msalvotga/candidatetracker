@@ -55,13 +55,9 @@ function SourceImportAlert({
 }
 
 export function SettingsScreen({
-  onBack,
-  onOpenManualVotes,
   onCatalogChanged,
   backendLabel,
 }: {
-  onBack: () => void;
-  onOpenManualVotes: () => void;
   onCatalogChanged: () => void;
   backendLabel: string;
 }) {
@@ -430,39 +426,17 @@ export function SettingsScreen({
   }
 
   return (
-    <>
-      <header className="enr-top">
-        <div className="enr-top__row">
-          <div className="enr-brand">Texas election night tracker</div>
-          <div className="enr-top__center">
-            <span className="enr-official enr-official--muted">Settings</span>
-          </div>
-          <div className="enr-top__right">
-            <SettingsBuildStamp timeZone={appSettings.displayTimeZone} />
-            <span className="enr-backendPill" title="Data loading mode">
-              {backendLabel}
-            </span>
-          </div>
-        </div>
-      </header>
-
-      <nav className="enr-nav">
-        <div className="enr-nav__left">
-          <button type="button" className="enr-navlink" onClick={onBack}>
-            Home
-          </button>
-          <button type="button" className="enr-navlink" onClick={onOpenManualVotes}>
-            Manual votes
-          </button>
-          <span className="enr-navlink is-active" aria-current="page">
-            Settings
-          </span>
-        </div>
-      </nav>
-
       <main className="enr-main enr-main--settings">
         <div className="enr-settings">
-          <h1 className="enr-settings__title">Data &amp; ingest</h1>
+          <div className="enr-settings__heading">
+            <h1 className="enr-settings__title">Data &amp; ingest</h1>
+            <div className="enr-settings__headingTools">
+              <SettingsBuildStamp timeZone={appSettings.displayTimeZone} />
+              <span className="enr-backendPill" title="Data loading mode">
+                {backendLabel}
+              </span>
+            </div>
+          </div>
           {saveMsg ? (
             <p className={saveMsg.includes("failed") || saveMsg.includes("Failed") ? "enr-errorInline" : "enr-saveOk"}>{saveMsg}</p>
           ) : null}
@@ -929,6 +903,5 @@ export function SettingsScreen({
       </section>
         </div>
       </main>
-    </>
   );
 }
