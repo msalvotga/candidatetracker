@@ -1,0 +1,19 @@
+# Discovery queries. Results enter the review queue. They are not polls by themselves.
+provider: brave
+# Set BRAVE_SEARCH_API_KEY, BING_SEARCH_API_KEY, or SERPAPI_API_KEY in the repo .env.
+# The provider is selected by POLLING_SEARCH_PROVIDER (brave | bing | serpapi).
+
+queries:
+  - '"Texas governor poll" 2026'
+  - '"Texas gubernatorial poll" 2026'
+  - '"Abbott Hinojosa poll"'
+  - '"Greg Abbott Gina Hinojosa poll"'
+  - '"Abbott Hinojosa crosstabs"'
+  - '"Abbott Hinojosa survey"'
+  - '"Texas governor likely voters poll"'
+  - '"Texas governor registered voters poll"'
+  - '"Texas statewide survey Abbott Hinojosa"'
+
+# Appended as site:domain searches for organizations in sources.yaml that list domains.
+search_known_domains: true
+results_per_query: 8

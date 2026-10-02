@@ -27,6 +27,18 @@
   font-size: 14px;
 }
 
+.enr-secret-r {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
 .enr-top__center {
   justify-self: center;
 }

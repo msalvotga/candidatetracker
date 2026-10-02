@@ -30,6 +30,12 @@ tmp/
 server/data/voter-exports/
 server/data/ballot-score-ev/
 server/data/county-rosters/
+polling/data/*.sqlite
+polling/data/*.sqlite-*
+polling/data/raw/
+polling/data/exports/
+polling/data/_peek.py
+**/__pycache__/
 
 # TypeScript incremental
 *.tsbuildinfo

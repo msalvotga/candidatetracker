@@ -1,0 +1,10 @@
+[project]
+name = "txpoll"
+version = "0.1.0"
+description = "Local-first polling database and trend model for Texas statewide races."
+requires-python = ">=3.12"
+readme = "README.md"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

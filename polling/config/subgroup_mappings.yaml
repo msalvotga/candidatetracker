@@ -1,0 +1,76 @@
+# Original pollster labels -> normalized labels.
+# The original label is always retained. Normalization is a label, not proof the
+# questions or sample constructions match.
+#
+# compatible: false means "do not draw one trend through these even if a casual
+# reader would treat the words as synonyms."
+
+dimensions:
+  party:
+    - { original: "Republican", normalized: "Republican", compatible_group: "party_republican" }
+    - { original: "GOP", normalized: "Republican", compatible_group: "party_republican" }
+    - { original: "REP", normalized: "Republican", compatible_group: "party_republican" }
+    - { original: "Democrat", normalized: "Democrat", compatible_group: "party_democrat" }
+    - { original: "Dem", normalized: "Democrat", compatible_group: "party_democrat" }
+    - { original: "DEM", normalized: "Democrat", compatible_group: "party_democrat" }
+    - { original: "Independent", normalized: "Independent", compatible_group: "party_independent_unspecified" }
+    - { original: "Ind", normalized: "Independent", compatible_group: "party_independent_unspecified" }
+    - { original: "Independents", normalized: "Independent", compatible_group: "party_independent_unspecified" }
+    - { original: "IND/OTHER", normalized: "Independent / other", compatible_group: "party_independent_plus_other" }
+    - { original: "Pure independent", normalized: "Pure independent", compatible_group: "party_pure_independent" }
+
+  race_ethnicity:
+    - { original: "Hispanic", normalized: "Hispanic/Latino", compatible_group: "hispanic_latino_unspecified" }
+    - { original: "Latino", normalized: "Hispanic/Latino", compatible_group: "hispanic_latino_unspecified" }
+    - { original: "Hispanic/Latino", normalized: "Hispanic/Latino", compatible_group: "hispanic_latino_unspecified" }
+    - { original: "White", normalized: "White", compatible_group: "white_unspecified" }
+    - { original: "White NH", normalized: "White, non-Hispanic", compatible_group: "white_non_hispanic" }
+    - { original: "Black", normalized: "Black", compatible_group: "black_unspecified" }
+    - { original: "Black Voters", normalized: "Black", compatible_group: "black_unspecified" }
+    - { original: "Black NH", normalized: "Black, non-Hispanic", compatible_group: "black_non_hispanic" }
+    - { original: "Asian", normalized: "Asian", compatible_group: "asian_unspecified" }
+
+  gender:
+    - { original: "Men", normalized: "Men", compatible_group: "men" }
+    - { original: "Male", normalized: "Men", compatible_group: "men" }
+    - { original: "Women", normalized: "Women", compatible_group: "women" }
+    - { original: "Female", normalized: "Women", compatible_group: "women" }
+
+  age:
+    # These bands are not interchangeable. Do not map 18-34 onto 18-29.
+    - { original: "18-29", normalized: "18-29", compatible_group: "age_18_29" }
+    - { original: "18-34", normalized: "18-34", compatible_group: "age_18_34" }
+    - { original: "Under Age 35", normalized: "Under 35", compatible_group: "age_under_35" }
+    - { original: "30-44", normalized: "30-44", compatible_group: "age_30_44" }
+    - { original: "35-49", normalized: "35-49", compatible_group: "age_35_49" }
+    - { original: "45-64", normalized: "45-64", compatible_group: "age_45_64" }
+    - { original: "50-64", normalized: "50-64", compatible_group: "age_50_64" }
+    - { original: "65+", normalized: "65+", compatible_group: "age_65_plus" }
+    - { original: "Age 65+", normalized: "65+", compatible_group: "age_65_plus" }
+
+  education:
+    - { original: "College Degree", normalized: "College degree", compatible_group: "college_degree" }
+    - { original: "Bachelors+", normalized: "Bachelor's or higher", compatible_group: "bachelors_plus" }
+    - { original: "No Degree", normalized: "No college degree", compatible_group: "no_degree" }
+
+  region:
+    - { original: "Austin", normalized: "Austin", compatible_group: "region_austin" }
+    - { original: "DFW", normalized: "Dallas-Fort Worth", compatible_group: "region_dfw" }
+    - { original: "Houston", normalized: "Houston", compatible_group: "region_houston" }
+    - { original: "San Antonio/South", normalized: "San Antonio / South", compatible_group: "region_sa_south" }
+    - { original: "Rural", normalized: "Rural", compatible_group: "rural_region_label" }
+
+  urbanicity:
+    - { original: "Urban", normalized: "Urban", compatible_group: "urban" }
+    - { original: "Sub urban", normalized: "Suburban", compatible_group: "suburban" }
+    - { original: "Suburban", normalized: "Suburban", compatible_group: "suburban" }
+    - { original: "Rural", normalized: "Rural", compatible_group: "rural" }
+
+  ideology:
+    - { original: "Lib", normalized: "Liberal", compatible_group: "liberal" }
+    - { original: "Mod", normalized: "Moderate", compatible_group: "moderate" }
+    - { original: "Cons", normalized: "Conservative", compatible_group: "conservative" }
+
+  vote_history:
+    - { original: "2024 Trump Voters", normalized: "2024 Trump voters", compatible_group: "vote_2024_trump" }
+    - { original: "2024 Harris Voters", normalized: "2024 Harris voters", compatible_group: "vote_2024_harris" }

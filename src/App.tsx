@@ -28,6 +28,7 @@ import { EvRosterScreen } from "./components/EvRosterScreen";
 import { CountyRosterScreen } from "./components/CountyRosterScreen";
 import { BallotScoreScreen } from "./components/BallotScoreScreen";
 import { ManualVotesScreen } from "./components/ManualVotesScreen";
+import { PollingScreen } from "./components/polling/PollingScreen";
 
 const OFFICE_ORDER: OfficeType[] = [
   "FEDERAL OFFICES",
@@ -68,7 +69,7 @@ function racesForTab(
 }
 
 const HOME_STATE_KEY = "enr.homeState";
-const APP_SCREENS = new Set<AppScreen>(["dashboard", "manual-votes", "settings", "ev-roster", "ballot-score", "county-roster"]);
+const APP_SCREENS = new Set<AppScreen>(["dashboard", "manual-votes", "settings", "ev-roster", "ballot-score", "county-roster", "polling"]);
 
 type HomeState = {
   screen: AppScreen;
@@ -110,7 +111,8 @@ function civixElectionIdFromCatalog(catalogId: string | null): string | null {
 
 export function App() {
   const savedHome = readHomeState();
-  const [screen, setScreen] = useState<AppScreen>(savedHome?.screen ?? "dashboard");
+  const hashPolling = typeof window !== "undefined" && window.location.hash === "#polling";
+  const [screen, setScreen] = useState<AppScreen>(hashPolling ? "polling" : savedHome?.screen ?? "dashboard");
   const [useBackend, setUseBackend] = useState<boolean | null>(null);
   const [catalogRefresh, setCatalogRefresh] = useState(0);
 
@@ -594,6 +596,11 @@ export function App() {
         active={screen}
         onNavigate={(next) => {
           setScreen(next);
+          if (next === "polling") {
+            window.history.replaceState(null, "", "#polling");
+          } else if (window.location.hash === "#polling") {
+            window.history.replaceState(null, "", window.location.pathname + window.location.search);
+          }
           if (next === "dashboard") setView("race");
         }}
         resultStatus={current?.file.reporting.resultStatus}
@@ -620,6 +627,7 @@ export function App() {
       {screen === "ballot-score" ? <BallotScoreScreen /> : null}
       {screen === "county-roster" ? <CountyRosterScreen /> : null}
       {screen === "ev-roster" && EV_ROSTER_ENABLED ? <EvRosterScreen /> : null}
+      {screen === "polling" ? <PollingScreen /> : null}
 
       {screen === "dashboard" || screen === "manual-votes" ? (
       <main className="enr-main">

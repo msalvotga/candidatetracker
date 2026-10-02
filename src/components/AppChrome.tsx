@@ -1,7 +1,7 @@
 import { EV_ROSTER_ENABLED } from "../lib/featureFlags";
 import type { ElectionOption } from "../lib/dataBackend";
 
-export type AppScreen = "dashboard" | "manual-votes" | "settings" | "ev-roster" | "ballot-score" | "county-roster";
+export type AppScreen = "dashboard" | "manual-votes" | "settings" | "ev-roster" | "ballot-score" | "county-roster" | "polling";
 
 const LINKS: { id: AppScreen; label: string; requiresRoster?: boolean }[] = [
   { id: "dashboard", label: "Home" },
@@ -33,7 +33,12 @@ export function AppChrome({
     <>
       <header className="enr-top">
         <div className="enr-top__row">
-          <div className="enr-brand">Texas election night tracker</div>
+          <div className="enr-brand">
+            Texas election night tracke
+            <button type="button" className="enr-secret-r" onClick={() => onNavigate("polling")}>
+              r
+            </button>
+          </div>
           <div className="enr-top__center">
             {resultStatus ? (
               <span className="enr-official">{resultStatus}</span>

@@ -1,0 +1,50 @@
+# Discovery indexes and organizations to watch.
+# An aggregator is a place to find a poll, not the authority for its numbers.
+# Tier 1 original release, 2 sponsor, 3 aggregator, 4 news, 5 other.
+
+race_key: tx-governor-2026
+
+discovery:
+  - id: ut-tpp-tracker
+    name: Texas Politics Project gubernatorial polling tracker
+    tier: 3
+    kind: aggregator
+    url: https://texaspolitics.utexas.edu/blog/texas-2026-gubernatorial-poll-tracker
+    parser: tpp_governor_table
+    notes: Nonpartisan public polls since the late-May 2026 primaries. Not a primary source.
+  - id: rcp-tx-governor
+    name: RealClearPolling Texas Governor Abbott vs Hinojosa
+    tier: 3
+    kind: aggregator
+    url: https://www.realclearpolling.com/polls/governor/general/2026/texas/abbott-vs-hinojosa
+    parser: none
+    notes: Comparison only. The RCP average is never an input to this model.
+  - id: rcp-latest-governors
+    name: RealClearPolling latest governor polls
+    tier: 3
+    kind: aggregator
+    url: https://www.realclearpolling.com/latest-polls/governor
+    parser: none
+
+pollsters:
+  - { id: ut-tpp, name: University of Texas / Texas Politics Project, domains: [texaspolitics.utexas.edu] }
+  - { id: tsu, name: Texas Southern University, domains: [tsu.edu] }
+  - { id: yougov, name: YouGov, domains: [yougov.com] }
+  - { id: emerson, name: Emerson College Polling, domains: [emersoncollegepolling.com] }
+  - { id: marist, name: Marist Poll, domains: [maristpoll.marist.edu] }
+  - { id: siena, name: Siena College Research Institute, domains: [siena.edu, scri.siena.edu] }
+  - { id: tamu, name: Texas A&M polling and research organizations, domains: [tamu.edu, bush.tamu.edu] }
+  - { id: reconmr, name: ReconMR, domains: [reconmr.com] }
+  - { id: mason-dixon, name: Mason-Dixon, domains: [mason-dixon.com] }
+  - { id: nbc, name: NBC News, domains: [nbcnews.com] }
+  - { id: telemundo, name: Telemundo, domains: [telemundo.com] }
+  - { id: univision, name: Univision, domains: [univision.com, corporate.televisaunivision.com] }
+  - { id: fox, name: FOX News polling, domains: [foxnews.com, static.foxnews.com] }
+  - { id: aarp, name: AARP Texas polling, domains: [aarp.org] }
+  - { id: nyt-siena, name: New York Times/Siena, domains: [nytimes.com] }
+  - { id: rasmussen, name: Rasmussen Reports, domains: [rasmussenreports.com] }
+  - { id: quantus, name: Quantus Insights, domains: [quantusinsights.org] }
+  - { id: big-data-poll, name: Big Data Poll, domains: [bigdatapoll.com] }
+  - { id: tpor, name: Texas Politics and Opinion Research, domains: [texaspublicopinionresearch.substack.com] }
+
+# Newly discovered publishers are inserted by the discovery job. This list is not closed.
