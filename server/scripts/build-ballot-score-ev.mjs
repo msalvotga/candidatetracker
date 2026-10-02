@@ -2,6 +2,8 @@ import { access, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { aggregateBallotFiles } from "../lib/ballotScoreAggregate.mjs";
+import { writeRosterDocument } from "../lib/countyRosterDocuments.mjs";
+import { ensureDb } from "../db.mjs";
 import {
   BALLOT_EV_DIR,
   datasetPath,
@@ -23,6 +25,8 @@ async function exists(filePath) {
 }
 
 async function writeJson(filePath, value) {
+  if (filePath === MODEL_PATH) await writeRosterDocument("ballot-ev-model", value);
+  if (filePath === statusFilePath()) await writeRosterDocument("ballot-ev-status", value);
   const tmp = `${filePath}.tmp`;
   await writeFile(tmp, JSON.stringify(value));
   await rm(filePath, { force: true });
@@ -30,6 +34,7 @@ async function writeJson(filePath, value) {
 }
 
 async function main() {
+  await ensureDb();
   await mkdir(BALLOT_EV_DIR, { recursive: true });
   await writeJson(LOCK_PATH, { pid: process.pid, startedAt: new Date().toISOString() });
   try {

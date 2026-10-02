@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "csv-parse/sync";
 import { DAY_DEFS } from "./ballotScoreCalendar.mjs";
 import { missingColumns, requiredColumns } from "./ballotScoreAggregate.mjs";
+import { readRosterDocument, writeRosterDocument } from "./countyRosterDocuments.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const BALLOT_EV_DIR = path.join(HERE, "../data/ballot-score-ev");
@@ -90,15 +91,31 @@ async function promoteQueuedUploads() {
   return promoted;
 }
 
+function documentKey(filePath) {
+  if (filePath === STATUS_PATH) return "ballot-ev-status";
+  if (filePath === UPLOADS_PATH) return "ballot-ev-uploads";
+  if (filePath === MODEL_PATH) return "ballot-ev-model";
+  return null;
+}
+
 async function readJson(filePath) {
+  const key = documentKey(filePath);
+  if (key) {
+    const saved = await readRosterDocument(key);
+    if (saved) return saved;
+  }
   try {
-    return JSON.parse(await readFile(filePath, "utf8"));
+    const value = JSON.parse(await readFile(filePath, "utf8"));
+    if (key) await writeRosterDocument(key, value);
+    return value;
   } catch {
     return null;
   }
 }
 
 async function writeJson(filePath, value) {
+  const key = documentKey(filePath);
+  if (key) await writeRosterDocument(key, value);
   const tmp = `${filePath}.tmp`;
   await writeFile(tmp, JSON.stringify(value));
   await rm(filePath, { force: true });
