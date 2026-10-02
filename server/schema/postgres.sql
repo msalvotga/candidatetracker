@@ -549,6 +549,12 @@ VALUES
   ('56181', 'May 2, 2026 Special Election', 1, 1, '', '', '', '', '', '')
 ON CONFLICT (election_id) DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS county_roster_documents (
+  doc_key TEXT PRIMARY KEY,
+  payload JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')
+);
+
 INSERT INTO ev_roster_configs (evr_election_id, party, election_name, election_date, notes) VALUES
   (58315, 'REP', '2026 REPUBLICAN PRIMARY RUNOFF ELECTION', '05/26/2026', 'Civix EVR'),
   (58314, 'DEM', '2026 DEMOCRATIC PRIMARY RUNOFF ELECTION', '05/26/2026', 'Civix EVR')

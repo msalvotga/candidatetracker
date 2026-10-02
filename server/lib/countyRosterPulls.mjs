@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { access, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "csv-parse";
@@ -18,6 +18,7 @@ import {
   parseGalvestonMailCsv,
 } from "./galvestonRoster.mjs";
 import { parseTravisRosterZip } from "./travisEvRosterParse.mjs";
+import { readRosterDocument, writeRosterDocument } from "./countyRosterDocuments.mjs";
 import { ELLIS_ROSTER_PAGE, ellisMailRosterLink, parseEllisRosterZip } from "./ellisRoster.mjs";
 import {
   MONTGOMERY_ROSTER_PAGE,
@@ -152,20 +153,36 @@ async function ensureDir() {
   await mkdir(DATA_DIR, { recursive: true });
 }
 
-async function readStore() {
+async function readJsonFile(filePath) {
   try {
-    return JSON.parse(await readFile(STATUS_PATH, "utf8"));
+    return JSON.parse(await readFile(filePath, "utf8"));
   } catch {
-    return { updatedAt: null, counties: {} };
+    return undefined;
   }
 }
 
-async function writeStore(store) {
+async function writeJsonFile(filePath, value) {
   await ensureDir();
-  const tmp = `${STATUS_PATH}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(store));
-  await copyFile(tmp, STATUS_PATH);
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify(value));
+  await copyFile(tmp, filePath);
   await rm(tmp, { force: true });
+}
+
+async function readStore() {
+  const saved = await readRosterDocument("status");
+  if (saved && typeof saved === "object" && !Array.isArray(saved)) return saved;
+  const file = await readJsonFile(STATUS_PATH);
+  if (file && typeof file === "object") {
+    await writeRosterDocument("status", file);
+    return file;
+  }
+  return { updatedAt: null, counties: {} };
+}
+
+async function writeStore(store) {
+  await writeRosterDocument("status", store);
+  await writeJsonFile(STATUS_PATH, store);
 }
 
 export function summarizeRosterRows(rows) {
@@ -425,28 +442,23 @@ export async function readRosterVoterRows() {
 }
 
 async function readVoters() {
-  try {
-    const rows = JSON.parse(await readFile(VOTERS_PATH, "utf8"));
-    if (!Array.isArray(rows)) return [];
-    let changed = false;
-    for (const row of rows) {
-      const before = JSON.stringify(row);
-      tieVoteToCounty(row);
-      if (JSON.stringify(row) !== before) changed = true;
-    }
-    if (changed) await writeVoters(rows);
-    return rows;
-  } catch {
-    return [];
+  const saved = await readRosterDocument("voters");
+  const rows = Array.isArray(saved) ? saved : await readJsonFile(VOTERS_PATH);
+  if (!Array.isArray(rows)) return [];
+  if (!Array.isArray(saved)) await writeRosterDocument("voters", rows);
+  let changed = false;
+  for (const row of rows) {
+    const before = JSON.stringify(row);
+    tieVoteToCounty(row);
+    if (JSON.stringify(row) !== before) changed = true;
   }
+  if (changed) await writeVoters(rows);
+  return rows;
 }
 
 async function writeVoters(voters) {
-  await ensureDir();
-  const tmp = `${VOTERS_PATH}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(voters));
-  await copyFile(tmp, VOTERS_PATH);
-  await rm(tmp, { force: true });
+  await writeRosterDocument("voters", voters);
+  await writeJsonFile(VOTERS_PATH, voters);
 }
 
 async function saveRosterRows(incoming, sourceCounty) {
@@ -564,16 +576,20 @@ async function readLookupHeader(filePath) {
 }
 
 async function readProfileStamp() {
-  try {
-    return JSON.parse(await readFile(PROFILE_STAMP_PATH, "utf8"))?.stamp ?? "";
-  } catch {
-    return "";
+  const saved = await readRosterDocument("lookup-profile");
+  if (saved && typeof saved === "object" && saved.stamp) return String(saved.stamp);
+  const file = await readJsonFile(PROFILE_STAMP_PATH);
+  if (file?.stamp) {
+    await writeRosterDocument("lookup-profile", { stamp: file.stamp });
+    return String(file.stamp);
   }
+  return "";
 }
 
 async function writeProfileStamp(stamp) {
-  await ensureDir();
-  await writeFile(PROFILE_STAMP_PATH, JSON.stringify({ stamp }));
+  const payload = { stamp };
+  await writeRosterDocument("lookup-profile", payload);
+  await writeJsonFile(PROFILE_STAMP_PATH, payload);
 }
 
 async function enrichMatchedRosterProfiles() {
@@ -1146,11 +1162,15 @@ export function countiesDueForRosterPull(counties, schedule, now = new Date(), v
 }
 
 export async function readRosterSchedule() {
-  try {
-    return normalizeRosterSchedule(JSON.parse(await readFile(SCHEDULE_PATH, "utf8")));
-  } catch {
-    return { ...DEFAULT_ROSTER_SCHEDULE };
+  const saved = await readRosterDocument("schedule");
+  if (saved && typeof saved === "object") return normalizeRosterSchedule(saved);
+  const file = await readJsonFile(SCHEDULE_PATH);
+  if (file && typeof file === "object") {
+    const schedule = normalizeRosterSchedule(file);
+    await writeRosterDocument("schedule", schedule);
+    return schedule;
   }
+  return { ...DEFAULT_ROSTER_SCHEDULE };
 }
 
 export async function updateRosterSchedule(patch) {
@@ -1160,11 +1180,8 @@ export async function updateRosterSchedule(patch) {
     error.statusCode = 400;
     throw error;
   }
-  await ensureDir();
-  const tmp = `${SCHEDULE_PATH}.tmp`;
-  await writeFile(tmp, JSON.stringify(next));
-  await rm(SCHEDULE_PATH, { force: true });
-  await rename(tmp, SCHEDULE_PATH);
+  await writeRosterDocument("schedule", next);
+  await writeJsonFile(SCHEDULE_PATH, next);
   return next;
 }
 
