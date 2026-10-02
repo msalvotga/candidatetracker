@@ -170,7 +170,7 @@ class CalculationTests(unittest.TestCase):
 
     def test_model_version_matches_the_config(self):
         config = load_yaml("model.yaml")
-        self.assertEqual(MODEL_VERSION, "1.2.0")
+        self.assertEqual(MODEL_VERSION, "1.3.0")
         self.assertEqual(config["model_version"], MODEL_VERSION)
         self.assertFalse(config["sponsorship_weights"]["apply_in_default_model"])
 
@@ -294,7 +294,7 @@ class SnapshotTests(unittest.TestCase):
             self.assertGreater(snapshot["overview"]["high95"], snapshot["overview"]["margin"])
             self.assertIn("not a forecast", snapshot["meta"]["disclaimer"])
             self.assertIsNone(snapshot["comparisons"]["rcp"])
-            self.assertEqual(snapshot["meta"]["modelVersion"], "1.2.0")
+            self.assertEqual(snapshot["meta"]["modelVersion"], "1.3.0")
             self.assertEqual(snapshot["uncertainty"]["method"], "gaussian_posterior")
             self.assertEqual(snapshot["meta"]["engine"], "Dynamic latent polling trend")
             self.assertIsNotNone(snapshot["overview"]["low50"])

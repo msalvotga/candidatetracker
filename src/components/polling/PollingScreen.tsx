@@ -84,7 +84,25 @@ type PollRow = {
     moeStatus: string;
     note: string;
   } | null;
-  impact?: { withPoll: number; withoutPoll: number | null; impact: number | null; measurementSe: number } | null;
+  impact?: {
+    withPoll: number;
+    withoutPoll: number | null;
+    impact: number | null;
+    measurementSe: number;
+    samplingSe?: number | null;
+    excessSd?: number | null;
+    firmShockSd?: number | null;
+    populationModeSd?: number | null;
+    varianceFloorSd?: number | null;
+    finalObservationSd?: number | null;
+    expectedField?: number | null;
+    innovation?: number | null;
+    priorSd?: number | null;
+    gain?: number | null;
+    before?: number | null;
+    after?: number | null;
+    update?: number | null;
+  } | null;
   sources: { tier: number; type: string; url: string; publisher: string | null; isPrimary: boolean; notes: string | null; localFile: string | null }[];
   methodology: string | null;
   results: { candidate: string; party: string | null; percentage: number | null; symbol: string | null; type: string }[];
@@ -190,7 +208,33 @@ type Snapshot = {
     lvOnly: number | null;
     rvOnly: number | null;
   }[];
-  movement?: { days: number; change: number; sd: number | null; low95: number | null; high95: number | null; newPolls: number; newPollsters: number }[];
+  movement?: { days: number; change: number; sd: number | null; low95: number | null; high95: number | null; probPositive?: number | null; probNegative?: number | null; newPolls: number; newPollsters: number }[];
+  audit?: {
+    processSd?: number;
+    numericalBestQ?: number;
+    qBand?: number[];
+    selectionScore?: number;
+    numericalBestScore?: number;
+    selectionSe?: number | null;
+    whyQ?: string;
+    excessSd?: number;
+    firmSd?: number;
+    houseSd?: number;
+    qFast?: number | null;
+    whyFast?: string | null;
+    polls?: number;
+    pollsters?: number;
+    margin?: number;
+    sd?: number;
+    fieldDates?: string;
+    recency?: string;
+    sampleType?: string;
+    varianceFloor?: string;
+    pollsterDependence?: string;
+    bootstrap?: string;
+    houseEffects?: string;
+    updates?: { pollId: number; pollster: string; margin: number; innovation: number; observationSd: number; gain: number; before: number; after: number; priorSd: number }[];
+  } | null;
   modelLab?: {
     whyQ: string;
     whyHalfLife: string;
@@ -261,7 +305,7 @@ type Snapshot = {
   };
 };
 
-const TABS = ["Overview", "Polls", "Comparison", "Model lab", "Subgroups", "Pollsters", "Settings", "Review"] as const;
+const TABS = ["Overview", "Polls", "Comparison", "Model lab", "Model audit", "Subgroups", "Pollsters", "Settings", "Review"] as const;
 
 function pct(value: number | null | undefined, digits = 0) {
   if (value == null || Number.isNaN(value)) return "—";
@@ -367,6 +411,7 @@ export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
         ) : null}
         {tab === "Comparison" ? <Comparison state={state} /> : null}
         {tab === "Model lab" ? <ModelLab state={state} /> : null}
+        {tab === "Model audit" ? <ModelAudit state={state} /> : null}
         {tab === "Subgroups" ? <Subgroups state={state} dimension={dimension} onDimension={setDimension} /> : null}
         {tab === "Pollsters" ? <Pollsters state={state} /> : null}
         {tab === "Settings" ? <Settings state={state} onSave={(patch) => post("/api/polling/settings", patch)} onReset={() => post("/api/polling/settings/reset")} /> : null}
@@ -449,19 +494,31 @@ function Specification({ state }: { state: Snapshot }) {
       <h2>Current model specification</h2>
       <div className="poll-meta">
         <div><span>Version</span>{String(spec.modelVersion)}</div>
-        <div><span>Primary engine</span>{String(spec.primaryEngine ?? "dynamic latent polling trend")}</div>
+      </div>
+      <h3>Primary latent model</h3>
+      <div className="poll-meta">
         <div><span>Daily process SD</span>{spec.processSd == null ? "—" : `${Number(spec.processSd).toFixed(2)} points`}</div>
         <div><span>Excess variance</span>{spec.excessVariance == null ? "—" : `${Number(spec.excessVariance).toFixed(2)}`}</div>
+        <div><span>Firm-shock variance</span>{spec.firmVariance == null ? "—" : `${Number(spec.firmVariance).toFixed(2)}`}</div>
         <div><span>House-effect prior SD</span>{spec.sigmaHouse == null ? "—" : `${Number(spec.sigmaHouse).toFixed(2)}`}</div>
-        <div><span>EWMA comparison</span>{spec.ewmaHalfLife == null ? "—" : `${String(spec.ewmaHalfLife)} days`}</div>
-        <div><span>Conservative comparison</span>{spec.conservativeHalfLife == null ? "—" : `${String(spec.conservativeHalfLife)} days`}</div>
-        <div><span>LV / RV / Adults</span>{String(spec.lvMultiplier)} / {String(spec.rvMultiplier)} / {String(spec.adultsMultiplier)}</div>
-        <div><span>Variance floor</span>{String(spec.tauPp)} pp</div>
-        <div><span>Cluster window</span>{String(spec.clusterWindowDays)} days</div>
-        <div><span>Bandwidth</span>{String(spec.bandwidthDays)} days</div>
-        <div><span>House effects</span>{spec.houseEffectsApplied ? "On" : "Off"}</div>
+        <div><span>Field dates</span>Full field window</div>
+        <div><span>Recency multiplier</span>Not used</div>
+        <div><span>LV/RV multipliers</span>Not used</div>
+        <div><span>Posterior</span>Gaussian filter</div>
+      </div>
+      <h3>Comparison models</h3>
+      <div className="poll-meta">
+        <div><span>EWMA half-life</span>{spec.ewmaHalfLife == null ? "—" : `${String(spec.ewmaHalfLife)} days`}</div>
+        <div><span>Conservative half-life</span>{spec.conservativeHalfLife == null ? "—" : `${String(spec.conservativeHalfLife)} days`}</div>
+        <div><span>Fast latent process SD</span>{spec.qFast == null ? "—" : `${Number(spec.qFast).toFixed(2)}`}</div>
+        <div><span>Local-linear bandwidth</span>{String(spec.bandwidthDays)} days</div>
+        <div><span>Comparison half-life</span>{String(spec.effectiveHalfLifeDays)} days</div>
+        <div><span>LV / RV / Adults weights</span>{String(spec.lvMultiplier)} / {String(spec.rvMultiplier)} / {String(spec.adultsMultiplier)}</div>
+        <div><span>Comparison variance floor</span>{String(spec.tauPp)} pp</div>
         <div><span>Bootstrap draws</span>{String(spec.bootstrapDraws)}</div>
-        <div><span>Interval</span>{String(spec.intervalMethod)}</div>
+        <div><span>Cluster window</span>{String(spec.clusterWindowDays)} days</div>
+        <div><span>Comparison house-effect switch</span>{spec.houseEffectsApplied ? "On" : "Off"}</div>
+        <div><span>Comparison interval</span>{String(spec.intervalMethod)}</div>
         <div><span>Sponsor multipliers</span>{spec.sponsorMultipliersInDefault ? "On" : "Off"}</div>
         <div><span>Outlier factor</span>{String(spec.outlierMultiplier)}</div>
       </div>
@@ -477,17 +534,19 @@ function ChangeAnalysis({ state }: { state: Snapshot }) {
   return (
     <section className="poll-card">
       <h2>Change analysis</h2>
-      <p className="poll-muted">Change in the latent polling margin, with the posterior uncertainty of that change. New polls are those whose information date falls inside the window.</p>
+      <p className="poll-muted">Change in the latent polling margin. P(change &gt; 0) is the posterior probability that the latent polling margin moved toward Abbott over that window. It is not a probability that either candidate wins the election.</p>
       {rows.length === 0 ? <p>No change window is available yet.</p> : (
         <div className="poll-table-wrap">
           <table className="poll-table">
-            <thead><tr><th>Window</th><th>Change</th><th>95% interval of the change</th><th>New polls</th><th>Independent pollsters</th></tr></thead>
+            <thead><tr><th>Window</th><th>Change</th><th>95% interval of the change</th><th>P(change &gt; 0)</th><th>P(change &lt; 0)</th><th>New polls</th><th>Independent pollsters</th></tr></thead>
             <tbody>
               {rows.map((row) => (
                 <tr key={row.days}>
                   <td>{row.days} day{row.days === 1 ? "" : "s"}</td>
                   <td>{row.change >= 0 ? "+" : ""}{row.change.toFixed(2)}</td>
                   <td>{row.low95 == null || row.high95 == null ? "—" : `${row.low95.toFixed(1)} to ${row.high95.toFixed(1)}`}</td>
+                  <td>{row.probPositive == null ? "—" : `${Math.round(row.probPositive * 100)}%`}</td>
+                  <td>{row.probNegative == null ? "—" : `${Math.round(row.probNegative * 100)}%`}</td>
                   <td>{row.newPolls}</td>
                   <td>{row.newPollsters}</td>
                 </tr>
@@ -499,16 +558,22 @@ function ChangeAnalysis({ state }: { state: Snapshot }) {
       <h3>What each poll did to today's estimate</h3>
       <div className="poll-table-wrap">
         <table className="poll-table">
-          <thead><tr><th>Poll</th><th>Poll margin</th><th>Measurement SE</th><th>Without this poll</th><th>With this poll</th><th>Impact</th></tr></thead>
+          <thead><tr><th>Poll</th><th>Poll margin</th><th>Field expectation</th><th>Innovation</th><th>Sampling margin SE</th><th>Final observation SD</th><th>Kalman gain</th><th>Before</th><th>After</th><th>Update</th><th>Without today</th><th>Impact today</th></tr></thead>
           <tbody>
             {impacts.map((poll) => (
               <tr key={poll.id}>
                 <td>{poll.pollster}<div className="poll-muted">{poll.fieldLabel}</div></td>
-                <td>{poll.margin == null ? "—" : poll.margin.toFixed(1)}</td>
-                <td>{poll.impact?.measurementSe == null ? "—" : poll.impact.measurementSe.toFixed(1)}</td>
-                <td>{poll.impact?.withoutPoll == null ? "—" : poll.impact.withoutPoll.toFixed(1)}</td>
-                <td>{poll.impact?.withPoll == null ? "—" : poll.impact.withPoll.toFixed(1)}</td>
-                <td>{poll.impact?.impact == null ? "—" : `${poll.impact.impact >= 0 ? "+" : ""}${poll.impact.impact.toFixed(2)}`}</td>
+                <td>{fmtSigned(poll.margin)}</td>
+                <td>{fmtSigned(poll.impact?.expectedField)}</td>
+                <td>{fmtSigned(poll.impact?.innovation)}</td>
+                <td>{fmtNum(poll.impact?.samplingSe)}</td>
+                <td>{fmtNum(poll.impact?.finalObservationSd)}</td>
+                <td>{fmtNum(poll.impact?.gain)}</td>
+                <td>{fmtSigned(poll.impact?.before)}</td>
+                <td>{fmtSigned(poll.impact?.after)}</td>
+                <td>{fmtSigned(poll.impact?.update)}</td>
+                <td>{fmtSigned(poll.impact?.withoutPoll)}</td>
+                <td>{fmtSigned(poll.impact?.impact)}</td>
               </tr>
             ))}
           </tbody>
@@ -557,6 +622,15 @@ function Uncertainty({ state }: { state: Snapshot }) {
 
 function num(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "—";
+}
+
+function fmtNum(value: number | null | undefined) {
+  return value == null || Number.isNaN(value) ? "—" : value.toFixed(2);
+}
+
+function fmtSigned(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) return "—";
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
 }
 
 function DrawHistogram({ bins }: { bins: { x0: number; x1: number; count: number }[] }) {
@@ -679,7 +753,7 @@ function TrendChart({ state }: { state: Snapshot }) {
         { x: days, y: state.daily.map((row) => visual(row, "low50")), customdata: state.daily.map((row) => bandHover(row, "low50")), mode: "lines", fill: "tonexty", fillcolor: "rgba(15,43,82,0.28)", line: { width: 0 }, name: "50% interval", hovertemplate: "%{x}<br>50% %{customdata}<extra></extra>" },
         { x: days, y: state.daily.map((row) => denseEnough(row) ? (row.latent ?? row.weighted) : null), mode: "lines", name: "Latent trend", line: { color: "#0b2b52", width: 2.4 } },
         { x: days, y: state.daily.map((row) => denseEnough(row) ? (row.conservative ?? null) : null), mode: "lines", name: "Conservative average", line: { color: "#5c6b7a", width: 1.4, dash: "dash" } },
-        { x: days, y: state.daily.map((row) => denseEnough(row) ? (row.fast ?? null) : null), mode: "lines", name: "Fast trend", line: { color: "#9f1d2e", width: 1.4, dash: "dot" } },
+        { x: days, y: state.daily.map((row) => denseEnough(row) ? (row.fast ?? null) : null), mode: "lines", name: "Fast latent trend", line: { color: "#9f1d2e", width: 1.4, dash: "dot" } },
         { x: days, y: state.daily.map((row) => denseEnough(row) ? (row.straight ?? null) : null), mode: "lines", name: "Straight average", line: { color: "#1d4f91", width: 1.2 } },
         {
           x: modeled.map((poll) => poll.midpoint || poll.fieldLabel.slice(0, 10)),
@@ -882,6 +956,63 @@ function Subgroups({ state, dimension, onDimension }: { state: Snapshot; dimensi
             </ul>
           </article>
         ))}
+      </div>
+    </>
+  );
+}
+
+function ModelAudit({ state }: { state: Snapshot }) {
+  const audit = state.audit;
+  if (!audit) return <p>The model audit is not in this snapshot.</p>;
+  return (
+    <>
+      <section className="poll-card">
+        <h2>Current primary model</h2>
+        <div className="poll-meta">
+          <div><span>Daily process SD</span>{fmtNum(audit.processSd)}</div>
+          <div><span>Numerically best q</span>{fmtNum(audit.numericalBestQ)}</div>
+          <div><span>q inside the one-SE band</span>{(audit.qBand ?? []).join(", ") || "—"}</div>
+          <div><span>Selected score</span>{fmtNum(audit.selectionScore)}</div>
+          <div><span>Best score</span>{fmtNum(audit.numericalBestScore)}</div>
+          <div><span>Score standard error</span>{fmtNum(audit.selectionSe)}</div>
+          <div><span>Excess SD</span>{fmtNum(audit.excessSd)}</div>
+          <div><span>Firm-shock SD</span>{fmtNum(audit.firmSd)}</div>
+          <div><span>House prior SD</span>{fmtNum(audit.houseSd)}</div>
+          <div><span>Fast latent SD</span>{fmtNum(audit.qFast)}</div>
+          <div><span>Polls</span>{audit.polls ?? "—"}</div>
+          <div><span>Independent pollsters</span>{audit.pollsters ?? "—"}</div>
+          <div><span>Headline</span>{fmtSigned(audit.margin)}</div>
+          <div><span>Posterior SD</span>{fmtNum(audit.sd)}</div>
+        </div>
+        <p>{audit.whyQ}</p>
+        <p>{audit.whyFast}</p>
+        <p className="poll-muted">{audit.fieldDates}</p>
+        <p className="poll-muted">{audit.recency}</p>
+        <p className="poll-muted">{audit.sampleType}</p>
+        <p className="poll-muted">{audit.varianceFloor}</p>
+        <p className="poll-muted">{audit.pollsterDependence}</p>
+        <p className="poll-muted">{audit.houseEffects}</p>
+        <p className="poll-muted">{audit.bootstrap}</p>
+      </section>
+      <h2>State updates, in the order the filter saw them</h2>
+      <div className="poll-table-wrap">
+        <table className="poll-table">
+          <thead><tr><th>Poll</th><th>Margin</th><th>Innovation</th><th>Observation SD</th><th>Prior SD</th><th>Gain</th><th>Before</th><th>After</th></tr></thead>
+          <tbody>
+            {(audit.updates ?? []).map((row) => (
+              <tr key={row.pollId}>
+                <td>{row.pollster}</td>
+                <td>{fmtSigned(row.margin)}</td>
+                <td>{fmtSigned(row.innovation)}</td>
+                <td>{fmtNum(row.observationSd)}</td>
+                <td>{fmtNum(row.priorSd)}</td>
+                <td>{fmtNum(row.gain)}</td>
+                <td>{fmtSigned(row.before)}</td>
+                <td>{fmtSigned(row.after)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </>
   );
@@ -1134,9 +1265,11 @@ function Detail({ poll, onClose, onPost }: { poll: PollRow; onClose: () => void;
         <h3>Measurement variance</h3>
         {poll.measurement ? (
           <ul>
-            <li>Sampling variance {poll.measurement.samplingVariance.toFixed(2)} ({poll.measurement.samplingStatus}). SE {poll.measurement.samplingSe.toFixed(2)}.</li>
-            <li>Excess variance {poll.measurement.excessVariance.toFixed(2)}. Method variance {poll.measurement.methodVariance.toFixed(2)}. Population variance {poll.measurement.populationVariance.toFixed(2)}.</li>
-            <li>Total measurement variance {poll.measurement.totalVariance.toFixed(2)}. Total SE {poll.measurement.totalSe.toFixed(2)}.</li>
+            <li>Sampling margin SE {poll.impact?.samplingSe == null ? poll.measurement.samplingSe.toFixed(2) : poll.impact.samplingSe.toFixed(2)} ({poll.measurement.samplingStatus}). This is derived from the shares. It is not the reported candidate MOE.</li>
+            <li>Excess error SD {poll.impact?.excessSd == null ? "—" : poll.impact.excessSd.toFixed(2)}. Firm-shock SD {poll.impact?.firmShockSd == null ? "—" : poll.impact.firmShockSd.toFixed(2)}. Population/mode SD {poll.impact?.populationModeSd == null ? "—" : poll.impact.populationModeSd.toFixed(2)}.</li>
+            <li>Variance floor in the primary observation: {poll.impact?.varianceFloorSd == null ? "0" : poll.impact.varianceFloorSd.toFixed(2)}. The 2-point floor belongs to the comparison weights.</li>
+            <li>Final observation SD used by the filter {poll.impact?.finalObservationSd == null ? "—" : poll.impact.finalObservationSd.toFixed(2)}. Components are added as variances, then square-rooted.</li>
+            <li>Reported candidate MOE {poll.designEffectMoe ?? poll.moe ?? "not reported"}. MOE status {poll.measurement.moeStatus}.</li>
             <li>n_eff {poll.measurement.nEff == null ? "—" : Math.round(poll.measurement.nEff)} ({poll.measurement.nEffStatus}). MOE status {poll.measurement.moeStatus}.</li>
             <li>{poll.measurement.note}</li>
           </ul>

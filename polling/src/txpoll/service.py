@@ -690,6 +690,7 @@ def build_snapshot(polls, observations, config, as_of: date, software_version: s
         specification["excessVariance"] = primary["lab"]["selected"]["excessVariance"]
         specification["sigmaHouse"] = primary["lab"]["selected"]["sigmaHouse"]
         specification["firmVariance"] = primary["lab"]["selected"]["firmVariance"]
+        specification["qFast"] = primary["qFast"]
         specification["ewmaHalfLife"] = primary["ewmaHalfLife"]
         specification["conservativeHalfLife"] = primary["conservativeHalfLife"]
         specification["primaryEngine"] = "dynamic latent polling trend"
@@ -791,6 +792,7 @@ def build_snapshot(polls, observations, config, as_of: date, software_version: s
         "settings": config,
         "movement": [] if not primary else primary["changes"],
         "modelLab": None if not primary else primary["lab"],
+        "audit": None if not primary else primary["audit"],
         "links": [
             {
                 "left": link.left_poll_id,
@@ -1069,6 +1071,20 @@ def _attach_measurement(rows: list[dict], primary: dict) -> None:
                 "withoutPoll": impact["withoutPoll"],
                 "impact": impact["impact"],
                 "measurementSe": impact["measurementSe"],
+                "samplingSe": impact.get("samplingSe"),
+                "excessSd": impact.get("excessSd"),
+                "firmShockSd": impact.get("firmShockSd"),
+                "firmTermSd": impact.get("firmTermSd"),
+                "populationModeSd": impact.get("populationModeSd"),
+                "varianceFloorSd": impact.get("varianceFloorSd"),
+                "finalObservationSd": impact.get("finalObservationSd"),
+                "expectedField": impact.get("expectedField"),
+                "innovation": impact.get("innovation"),
+                "priorSd": impact.get("priorSd"),
+                "gain": impact.get("gain"),
+                "before": impact.get("before"),
+                "after": impact.get("after"),
+                "update": impact.get("update"),
             }
 
 
@@ -1107,9 +1123,9 @@ def _append_primary_comparisons(comparisons, primary, config, as_of) -> None:
         ),
         (
             "fast",
-            "Fast trend",
+            "Fast latent trend",
             last(primary["fast"]),
-            "Local linear trend with a 14-day bandwidth, held after the newest field midpoint. It is a diagnostic for possible movement. It is not a prediction.",
+            "The same observation model as the primary latent trend, with a larger daily process SD chosen on the 7-to-14-day historical consensus. It is a diagnostic. It does not trigger the movement sentence by itself.",
         ),
         (
             "straight",
@@ -1719,7 +1735,9 @@ def _model_change(poll_rows: list[dict], estimate, comparisons: dict, config: di
         "note": (
             "The archived snapshot is the older weighted local-linear fit. "
             "Version 1.1.0 replaced sponsor multipliers with source completeness; the weight rows below are that comparison, and they still apply only to the local-linear diagnostic. "
-            "Version 1.2.0 makes the latent polling margin the headline. The headline moved because the engine changed, not because the 2026 polls were retuned."
+            "Version 1.2.0 made the latent polling margin the headline. "
+            "Version 1.3.0 puts the firm shock inside the observation variance, replaces the fast local line with a faster latent model, and selects the daily process SD with a one-standard-error rule on future polling consensus. "
+            "The 2026 polls were not used to choose those values."
         ),
     }
 

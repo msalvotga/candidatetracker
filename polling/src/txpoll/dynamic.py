@@ -54,21 +54,35 @@ def observation_variance(poll: DynamicPoll, state_day: int, q2: float) -> float:
     return poll.R + window_gap_variance(n_days, q2) + q2 * gap_after
 
 
-def _dependent_R(polls: list[DynamicPoll], index: int, q2: float, firm_variance: float, dependence_days: int) -> float:
-    """Later polls from the same firm in a short window carry less new information."""
+def kalman_observation_variance(
+    polls: list[DynamicPoll],
+    index: int,
+    state_day: int,
+    q2: float,
+    firm_variance: float,
+    dependence_days: int,
+) -> tuple[float, int]:
+    """Variance passed into the Kalman update, and how many same-firm polls share the window.
+
+    Measurement pieces inside poll.R do not include the firm shock. The firm
+    shock is added here, in variance units. A later poll from the same firm
+    inside the dependence window gets a larger firm term, so three polls from
+    one organization move the state less than three polls from three organizations.
+    The field window adds process variance. It does not change the expected
+    value, because a driftless random walk is a martingale: the expected
+    average of x over the field dates, given the state on the update day,
+    equals that state.
+    """
     poll = polls[index]
-    state_day = max(poll.release, poll.field_end)
-    base = observation_variance(poll, state_day, q2)
-    if firm_variance <= 0:
-        return base
+    order = 1
     for earlier in polls[:index]:
         if earlier.pollster != poll.pollster:
             continue
         if abs(poll.release - earlier.release) <= dependence_days or abs(poll.field_end - earlier.field_end) <= dependence_days:
-            rho = firm_variance / (firm_variance + base)
-            rho = min(max(rho, 0.0), 0.85)
-            return base * (1.0 + rho) / (1.0 - rho)
-    return base
+            order += 1
+    firm_term = firm_variance * order
+    gap = observation_variance(poll, state_day, q2) - poll.R
+    return poll.R + firm_term + max(gap, 0.0), order
 
 
 def run_filter(
@@ -87,12 +101,13 @@ def run_filter(
     n = day1 - day0 + 1
     if n <= 0:
         empty = np.array([])
-        return {"mean": empty, "var": empty, "pred_var": empty, "filt_var": empty}
+        return {"mean": empty, "var": empty, "pred_var": empty, "filt_var": empty, "updates": []}
     q2 = q ** 2
     mean = np.zeros(n)
     var = np.zeros(n)
     pred_var = np.zeros(n)
     filt_var = np.zeros(n)
+    updates: list[dict] = []
     m = float(initial_mean)
     p = float(initial_sd ** 2)
     by_day: dict[int, list[int]] = {}
@@ -109,15 +124,38 @@ def run_filter(
         pred_var[i] = p
         for index in by_day.get(day, []):
             poll = polls[index]
-            y = poll.margin - float((house or {}).get(poll.pollster, 0.0))
-            r = _dependent_R(polls, index, q2, firm_variance, dependence_days)
-            gain = p / (p + r)
-            m = m + gain * (y - m)
+            house_effect = float((house or {}).get(poll.pollster, 0.0))
+            y = poll.margin - house_effect
+            r, order = kalman_observation_variance(polls, index, day, q2, firm_variance, dependence_days)
+            prior_mean = m
+            prior_var = p
+            gain = p / (p + r) if (p + r) > 0 else 0.0
+            innovation = y - m
+            m = m + gain * innovation
             p = (1.0 - gain) * p
+            updates.append(
+                {
+                    "pollId": poll.poll_id,
+                    "pollster": poll.pollster,
+                    "day": day,
+                    "margin": poll.margin,
+                    "houseEffect": house_effect,
+                    "expected": prior_mean,
+                    "innovation": innovation,
+                    "observationVariance": r,
+                    "observationSd": math.sqrt(max(r, 0.0)),
+                    "priorSd": math.sqrt(max(prior_var, 0.0)),
+                    "gain": gain,
+                    "before": prior_mean,
+                    "after": m,
+                    "update": m - prior_mean,
+                    "firmOrder": order,
+                }
+            )
         mean[i] = m
         var[i] = p
         filt_var[i] = p
-    return {"mean": mean, "var": var, "pred_var": pred_var, "filt_var": filt_var, "day0": day0}
+    return {"mean": mean, "var": var, "pred_var": pred_var, "filt_var": filt_var, "day0": day0, "updates": updates}
 
 
 def smooth(filtered: dict[str, np.ndarray], q: float) -> dict[str, np.ndarray]:
@@ -302,12 +340,20 @@ def fit_latent(
         if ses:
             extra = float(np.mean(ses)) / max(len(effects), 1)
     final_var = np.maximum(final["var"] + extra, 0.0)
+    field_average: dict[int, float] = {}
+    for poll in polls:
+        indexes = [day - day0 for day in range(poll.field_start, poll.field_end + 1) if day0 <= day <= day1]
+        if not indexes:
+            continue
+        field_average[poll.poll_id] = float(np.mean(final["mean"][indexes]))
     return {
         "filtered": second,
         "mean": final["mean"],
         "var": final_var,
         "gain": final["gain"],
         "house": effects,
+        "updates": second.get("updates") or [],
+        "fieldAverage": field_average,
         "day0": day0,
         "day1": day1,
     }

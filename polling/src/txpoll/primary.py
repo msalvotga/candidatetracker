@@ -23,7 +23,6 @@ from .dynamic import (
     fit_latent,
     gaussian_interval,
     leave_one_out_impacts,
-    local_linear_fast,
     straight_average_path,
 )
 from .measurement import Measurement, measure_margin
@@ -145,6 +144,7 @@ def _changes(fit: dict, polls: list[DynamicPoll], day1: int) -> list[dict]:
         start = day1 - horizon
         fresh = [poll for poll in polls if start < max(poll.release, poll.field_end) <= day1]
         low, high = (None, None) if sd is None else gaussian_interval(change, sd, Z95)
+        prob_pos, prob_neg = _direction_probability(change, sd)
         rows.append(
             {
                 "days": horizon,
@@ -152,11 +152,21 @@ def _changes(fit: dict, polls: list[DynamicPoll], day1: int) -> list[dict]:
                 "sd": sd,
                 "low95": low,
                 "high95": high,
+                "probPositive": prob_pos,
+                "probNegative": prob_neg,
                 "newPolls": len(fresh),
                 "newPollsters": len({poll.pollster for poll in fresh}),
             }
         )
     return rows
+
+
+def _direction_probability(change: float, sd: float | None) -> tuple[float | None, float | None]:
+    """Posterior probability the latent margin moved up or down. Not a win probability."""
+    if sd is None or not math.isfinite(sd) or sd <= 0 or not math.isfinite(change):
+        return None, None
+    prob_pos = 0.5 * (1.0 + math.erf((change / sd) / math.sqrt(2.0)))
+    return prob_pos, 1.0 - prob_pos
 
 
 def _uncertainty(mean: float, sd: float) -> dict:
@@ -188,23 +198,40 @@ def _normal_cdf(x: float, mean: float, sd: float) -> float:
     return 0.5 * (1.0 + math.erf((x - mean) / (sd * math.sqrt(2.0))))
 
 
-def _emerging(primary: np.ndarray, fast: np.ndarray, conservative: np.ndarray) -> str | None:
-    if len(primary) == 0 or not math.isfinite(float(primary[-1])):
+def _movement_alert(changes: list[dict], polls: list[DynamicPoll], updates: list[dict], day1: int) -> str | None:
+    """Corroborated movement in the primary latent margin. The fast model cannot trigger this."""
+    row = next((item for item in changes if item["days"] == 14), None)
+    if row is None or row.get("probPositive") is None:
         return None
-    fast_now = float(fast[-1]) if len(fast) else float("nan")
-    slow_now = float(conservative[-1]) if len(conservative) else float("nan")
-    level_gap = math.isfinite(fast_now) and abs(fast_now - float(primary[-1])) >= 2 and math.isfinite(slow_now) and abs(slow_now - float(primary[-1])) <= 1
-    move_gap = False
-    if len(primary) > 7 and len(fast) > 7 and math.isfinite(float(fast[-1])) and math.isfinite(float(fast[-8])):
-        move_gap = abs(float(fast[-1]) - float(fast[-8])) > 2 and abs(float(primary[-1]) - float(primary[-8])) < 0.5
-    if level_gap or move_gap:
-        return "Possible emerging movement; limited confirmation."
-    return None
+    if row["probPositive"] >= 0.80:
+        direction = 1.0
+    elif row["probNegative"] >= 0.80:
+        direction = -1.0
+    else:
+        return None
+    recent = [poll for poll in polls if day1 - 14 < max(poll.release, poll.field_end) <= day1]
+    if len({poll.pollster for poll in recent}) < 2:
+        return None
+    if _information(polls, day1, 7, 14)["effectivePollCount"] < 1.5:
+        return None
+    agreeing = {
+        update["pollster"]
+        for update in updates
+        if day1 - 14 < update["day"] <= day1 and update["innovation"] * direction > 0
+    }
+    if len(agreeing) < 2:
+        return None
+    return "Recent polling provides some evidence of movement in the estimated polling margin, but confirmation remains limited."
 
 
 def lab_view(calibration: dict) -> dict:
     selected = calibration["selected"]
-    best = min(calibration["stateSpace"], key=lambda row: row["raceRmse14"])
+    matching = [
+        row
+        for row in calibration["stateSpace"]
+        if row["q"] == selected["q"] and row["excessSd"] == selected["excessSd"] and row["firmSd"] == selected["firmSd"]
+    ]
+    best = matching[0] if matching else min(calibration["stateSpace"], key=lambda row: row.get("selectionScore") or row["raceRmse14"])
     rows = [
         {
             "model": "State-space",
@@ -283,6 +310,109 @@ def lab_view(calibration: dict) -> dict:
     }
 
 
+def _decorate_impacts(impacts: list[dict], fit: dict, measured: dict[int, Measurement], firm_variance: float) -> list[dict]:
+    updates = {row["pollId"]: row for row in fit.get("updates") or []}
+    averages = fit.get("fieldAverage") or {}
+    rows = []
+    for impact in impacts:
+        update = updates.get(impact["pollId"]) or {}
+        measurement = measured.get(impact["pollId"])
+        sampling_se = None if measurement is None else measurement.sampling_se
+        excess_sd = None if measurement is None else math.sqrt(max(measurement.excess_variance, 0.0))
+        population_sd = None
+        if measurement is not None:
+            population_sd = math.sqrt(max(measurement.population_variance + measurement.method_variance, 0.0))
+        order = int(update.get("firmOrder") or 1)
+        rows.append(
+            {
+                **impact,
+                "samplingSe": sampling_se,
+                "excessSd": excess_sd,
+                "firmShockSd": math.sqrt(max(firm_variance, 0.0)),
+                "firmTermSd": math.sqrt(max(firm_variance * order, 0.0)),
+                "populationModeSd": population_sd,
+                "varianceFloorSd": 0.0,
+                "finalObservationSd": update.get("observationSd"),
+                "expectedField": averages.get(impact["pollId"]),
+                "kalmanExpected": update.get("expected"),
+                "innovation": update.get("innovation"),
+                "priorSd": update.get("priorSd"),
+                "gain": update.get("gain"),
+                "before": update.get("before"),
+                "after": update.get("after"),
+                "update": update.get("update"),
+                "houseEffect": update.get("houseEffect"),
+                "firmOrder": order,
+            }
+        )
+    return rows
+
+
+def _audit(calibration: dict, fit: dict, polls: list[DynamicPoll], measured, margin: float, sd: float, changes: list[dict]) -> dict:
+    selected = calibration["selected"]
+    updates = fit.get("updates") or []
+    return {
+        "processSd": selected.get("q"),
+        "numericalBestQ": selected.get("numericalBestQ"),
+        "qBand": selected.get("qBand") or [],
+        "selectionScore": selected.get("selectionScore"),
+        "numericalBestScore": selected.get("numericalBestScore"),
+        "selectionSe": selected.get("selectionSe"),
+        "whyQ": calibration.get("whyQ"),
+        "excessSd": selected.get("excessSd"),
+        "firmSd": selected.get("firmSd"),
+        "houseSd": selected.get("sigmaHouse"),
+        "qFast": selected.get("qFast"),
+        "whyFast": calibration.get("whyFast"),
+        "polls": len(polls),
+        "pollsters": len({poll.pollster for poll in polls}),
+        "margin": margin,
+        "sd": sd,
+        "fieldDates": (
+            "A multi-day poll is not placed on its midpoint inside the filter. "
+            "The update uses the release day, or the last field day if that is later. "
+            "Because the random walk has no drift, the expected average of the latent margin over the field dates equals the latent state on that update day. "
+            "Disagreement inside the field window is added as process variance. The midpoint is only a chart label."
+        ),
+        "recency": "The primary model does not multiply polls by an exponential recency weight. The EWMA half-life is a comparison model.",
+        "sampleType": (
+            "Likely-voter and registered-voter multipliers are weights in the local-linear comparison. "
+            "They are not in the primary observation variance. "
+            "The historical file does not identify sample type, so no extra registered-voter variance was estimated."
+        ),
+        "varianceFloor": (
+            "The 2-point variance floor is tau in the comparison model's precision weight, 1 / (sampling SE² + tau²). "
+            "It is not added to the primary model's observation variance. "
+            "The primary non-sampling term is the calibrated excess variance."
+        ),
+        "pollsterDependence": (
+            "Every poll's observation variance includes the firm-shock variance. "
+            "A later poll from the same firm within 7 days includes that shock again, once per poll in the window, so the later poll adds less information."
+        ),
+        "bootstrap": (
+            "The primary 50/80/95 intervals are the Gaussian state posterior. They do not depend on bootstrap draws. "
+            "Bootstrap draws apply only to the local-linear comparison."
+        ),
+        "houseEffects": "House effects are normal, centered at zero, and shrunk by the historical prior. They are not a partisan-bias label.",
+        "updates": [
+            {
+                "pollId": row["pollId"],
+                "pollster": row["pollster"],
+                "margin": row["margin"],
+                "innovation": row["innovation"],
+                "observationSd": row["observationSd"],
+                "gain": row["gain"],
+                "before": row["before"],
+                "after": row["after"],
+                "priorSd": row["priorSd"],
+            }
+            for row in updates
+        ],
+        "changes": changes,
+        "measurementCount": len(measured),
+    }
+
+
 def fit_primary(polls, observations, as_of: date, ordinals: np.ndarray | None = None) -> dict | None:
     try:
         calibration = load_calibration()
@@ -320,7 +450,18 @@ def fit_primary(polls, observations, as_of: date, ordinals: np.ndarray | None = 
     low95, high95 = gaussian_interval(now, now_sd, Z95)
     slow = conservative_half_life(calibration)
     conservative = ewma_path(dynamic, day0, day1, slow)
-    fast = local_linear_fast(dynamic, day0, day1, 14.0)
+    q_fast = float(selected.get("qFast") or q)
+    fast_fit = fit if abs(q_fast - q) < 1e-9 else fit_latent(
+        dynamic,
+        day0,
+        day1,
+        q_fast,
+        sigma_house=float(selected["sigmaHouse"]),
+        firm_variance=float(selected["firmVariance"]),
+        dependence_days=7,
+        initial_sd=12.0,
+    )
+    fast = np.asarray(fast_fit["mean"], dtype=float)
     straight = straight_average_path(dynamic, day0, day1)
     impacts = leave_one_out_impacts(
         dynamic,
@@ -332,6 +473,8 @@ def fit_primary(polls, observations, as_of: date, ordinals: np.ndarray | None = 
         dependence_days=7,
         initial_sd=12.0,
     )
+    changes = _changes(fit, dynamic, day1)
+    impact_rows = _decorate_impacts(impacts, fit, measured, float(selected["firmVariance"]))
     return {
         "margin": now,
         "sd": now_sd,
@@ -351,12 +494,14 @@ def fit_primary(polls, observations, as_of: date, ordinals: np.ndarray | None = 
         "q": q,
         "house": fit["house"],
         "measurements": measured,
-        "impacts": {row["pollId"]: row for row in impacts},
-        "changes": _changes(fit, dynamic, day1),
+        "impacts": {row["pollId"]: row for row in impact_rows},
+        "changes": changes,
         "information": _information(dynamic, day1, 7, 30),
-        "emerging": _emerging(mean, fast, conservative),
+        "emerging": _movement_alert(changes, dynamic, fit.get("updates") or [], day1),
         "uncertainty": _uncertainty(now, now_sd),
         "lab": lab_view(calibration),
         "populationNote": selected.get("populationNote"),
         "day0": day0,
+        "qFast": q_fast,
+        "audit": _audit(calibration, fit, dynamic, measured, now, now_sd, changes),
     }

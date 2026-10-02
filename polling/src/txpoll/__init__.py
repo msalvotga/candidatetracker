@@ -1,3 +1,3 @@
 """Local polling archive and trend model for Texas statewide races."""
 
-MODEL_VERSION = "1.2.0"
+MODEL_VERSION = "1.3.0"

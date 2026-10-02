@@ -28,10 +28,12 @@ RAW_URL = "https://raw.githubusercontent.com/fivethirtyeight/data/master/pollste
 RAW_PATH = DATA_DIR / "historical" / "raw_polls.csv"
 RESULT_PATH = DATA_DIR / "historical" / "calibration.json"
 
-Q_GRID = (0.08, 0.12, 0.18, 0.25, 0.35, 0.50, 0.70, 1.00, 1.40)
+Q_GRID = (0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60, 0.70, 0.85, 1.00)
 EXCESS_SD = (0.25, 0.50, 1.0, 1.5, 2.0, 2.5, 3.5)
 HOUSE_SD = (1.0, 2.0, 3.0)
 FIRM_SD = (1.0, 2.0)
+SELECTION_DRAWS = 5000
+SELECTION_SEED = 2026
 HALF_LIVES = (7, 10, 14, 21, 28, 35, 42)
 
 
@@ -119,11 +121,33 @@ def _as_polls(rows: list[dict], excess: float) -> list[DynamicPoll]:
     return out
 
 
+def _consensus(window: list[DynamicPoll], firm_variance: float) -> float | None:
+    """Inverse-variance mean that does not treat repeated polls from one firm as independent."""
+    groups: dict[str, list[DynamicPoll]] = {}
+    for poll in window:
+        groups.setdefault(poll.pollster, []).append(poll)
+    total = 0.0
+    weight = 0.0
+    for group in groups.values():
+        precision = sum(1.0 / poll.R for poll in group if poll.R > 0)
+        if precision <= 0:
+            continue
+        mean = sum((poll.margin / poll.R) for poll in group if poll.R > 0) / precision
+        variance = firm_variance + 1.0 / precision
+        info = 1.0 / variance if variance > 0 else 0.0
+        total += info * mean
+        weight += info
+    if weight <= 0:
+        return None
+    return total / weight
+
+
 def _race_errors(race: dict, q: float, excess: float, firm_variance: float) -> dict[str, list[float]]:
     polls = _as_polls(race["polls"], excess)
     election = race["election"]
     errors = {7: [], 14: [], 28: []}
-    coverage = []
+    consensus_errors = {"7to14": [], "14to28": []}
+    coverage = {50: [], 80: [], 95: []}
     residuals = []
     loglik = []
     for days_before in (90, 60, 40, 28):
@@ -151,19 +175,30 @@ def _race_errors(race: dict, q: float, excess: float, firm_variance: float) -> d
                 error = poll.margin - now
                 errors[horizon].append(error)
                 if horizon == 14:
-                    scale = math.sqrt(max(pred_var + poll.R, 1e-8))
-                    coverage.append(1.0 if abs(error) <= 1.95996398 * scale else 0.0)
+                    scale = math.sqrt(max(pred_var + poll.R + firm_variance, 1e-8))
+                    coverage[50].append(1.0 if abs(error) <= 0.67448975 * scale else 0.0)
+                    coverage[80].append(1.0 if abs(error) <= 1.28155157 * scale else 0.0)
+                    coverage[95].append(1.0 if abs(error) <= 1.95996398 * scale else 0.0)
                     variance = scale ** 2
                     loglik.append(-0.5 * (math.log(2.0 * math.pi * variance) + (error ** 2) / variance))
                     if previous is not None:
                         residuals.append((previous, error))
                     previous = error
+        for key, start, end in (("7to14", 7, 14), ("14to28", 14, 28)):
+            window = [poll for poll in future if checkpoint + start < poll.release <= checkpoint + end]
+            target = _consensus(window, firm_variance)
+            if target is not None:
+                consensus_errors[key].append(target - now)
+    selection_parts = consensus_errors["7to14"] + consensus_errors["14to28"]
+    selection = _rmse(selection_parts) if selection_parts else _rmse(errors[14])
     return {
         "errors": errors,
+        "consensus": consensus_errors,
         "coverage": coverage,
         "pairs": residuals,
         "loglik": loglik,
         "raceRmse14": _rmse(errors[14]),
+        "selection": selection,
         "cycle": race["cycle"],
         "id": race["id"],
     }
@@ -196,18 +231,25 @@ def score_state_space(races: list[dict], q: float, excess_sd: float, firm_sd: fl
     firm = firm_sd ** 2
     pooled = {7: [], 14: [], 28: []}
     by_race_14 = []
-    coverage = []
+    selection_scores = []
+    coverage = {50: [], 80: [], 95: []}
     pairs = []
     race_scores = []
     loglik = []
+    consensus = {"7to14": [], "14to28": []}
     for race in races:
         result = _race_errors(race, q, excess, firm)
         for horizon, values in result["errors"].items():
             pooled[horizon].extend(values)
+        for key, values in result["consensus"].items():
+            consensus[key].extend(values)
         if result["raceRmse14"] is not None:
             by_race_14.append(result["raceRmse14"])
-            race_scores.append({"cycle": result["cycle"], "rmse": result["raceRmse14"]})
-        coverage.extend(result["coverage"])
+        if result["selection"] is not None:
+            selection_scores.append(result["selection"])
+            race_scores.append({"id": result["id"], "cycle": result["cycle"], "rmse": result["selection"]})
+        for level, values in result["coverage"].items():
+            coverage[level].extend(values)
         pairs.extend(result["pairs"])
         loglik.extend(result["loglik"])
     return {
@@ -218,11 +260,16 @@ def score_state_space(races: list[dict], q: float, excess_sd: float, firm_sd: fl
         "rmse14": _rmse(pooled[14]),
         "rmse28": _rmse(pooled[28]),
         "mae14": _mae(pooled[14]),
+        "consensus7to14": _rmse(consensus["7to14"]),
+        "consensus14to28": _rmse(consensus["14to28"]),
         "raceRmse14": float(np.mean(by_race_14)) if by_race_14 else None,
-        "coverage95": float(np.mean(coverage)) if coverage else None,
+        "selectionScore": float(np.mean(selection_scores)) if selection_scores else None,
+        "coverage50": float(np.mean(coverage[50])) if coverage[50] else None,
+        "coverage80": float(np.mean(coverage[80])) if coverage[80] else None,
+        "coverage95": float(np.mean(coverage[95])) if coverage[95] else None,
         "logLik14": float(np.mean(loglik)) if loglik else None,
         "residualAutocorr": _autocorr(pairs),
-        "races": len(by_race_14),
+        "races": len(selection_scores),
         "raceScores": race_scores,
     }
 
@@ -387,6 +434,84 @@ def _comparison_scores(races: list[dict], excess_sd: float) -> list[dict]:
     return rows
 
 
+def _bootstrap_se(values: list[float]) -> float | None:
+    if len(values) < 8:
+        return None
+    rng = np.random.default_rng(SELECTION_SEED)
+    array = np.asarray(values, dtype=float)
+    n = len(array)
+    draws = np.empty(SELECTION_DRAWS)
+    for i in range(SELECTION_DRAWS):
+        draws[i] = float(array[rng.integers(0, n, n)].mean())
+    return float(draws.std(ddof=1))
+
+
+def _select_q(table: list[dict]) -> dict:
+    """Numerical minimum, then the smoothest q inside a one-standard-error band."""
+    ranked = [row for row in table if row.get("selectionScore") is not None]
+    ranked.sort(key=lambda row: (row["selectionScore"], row["q"]))
+    best = ranked[0]
+    se = _bootstrap_se([item["rmse"] for item in best.get("raceScores", [])])
+    cutoff = best["selectionScore"] if se is None else best["selectionScore"] + se
+    same = [
+        row
+        for row in ranked
+        if row["excessSd"] == best["excessSd"] and row["firmSd"] == best["firmSd"] and row["selectionScore"] <= cutoff + 1e-12
+    ]
+    chosen = min(same, key=lambda row: row["q"])
+    higher = [
+        row
+        for row in ranked
+        if row["excessSd"] == chosen["excessSd"]
+        and row["firmSd"] == chosen["firmSd"]
+        and row["q"] > chosen["q"] + 1e-9
+        and row.get("consensus7to14") is not None
+    ]
+    fast = None
+    fast_band: list[float] = []
+    if higher:
+        higher.sort(key=lambda row: (row["consensus7to14"], row["q"]))
+        fast_best = higher[0]
+        fast_cutoff = fast_best["consensus7to14"] if se is None else fast_best["consensus7to14"] + se
+        fast_band_rows = [row for row in higher if row["consensus7to14"] <= fast_cutoff + 1e-12]
+        fast = min(fast_band_rows, key=lambda row: row["q"])
+        fast_band = sorted(row["q"] for row in fast_band_rows)
+    return {
+        "numericalBest": best,
+        "scoreSe": se,
+        "cutoff": cutoff,
+        "band": sorted(row["q"] for row in same),
+        "chosen": chosen,
+        "fast": fast,
+        "fastBand": fast_band,
+    }
+
+
+def _leave_one_race_q(table: list[dict]) -> dict[str, int]:
+    ids = sorted({score["id"] for row in table for score in row.get("raceScores", []) if "id" in score})
+    counts: dict[str, int] = {}
+    for held in ids:
+        scored = []
+        for row in table:
+            values = [score["rmse"] for score in row["raceScores"] if score.get("id") != held]
+            if len(values) < 8:
+                continue
+            scored.append((float(np.mean(values)), float(np.std(values, ddof=1) / math.sqrt(len(values))), row))
+        if not scored:
+            continue
+        scored.sort(key=lambda item: item[0])
+        best_mean, se, best_row = scored[0]
+        band = [
+            row
+            for mean, _se, row in scored
+            if row["excessSd"] == best_row["excessSd"] and row["firmSd"] == best_row["firmSd"] and mean <= best_mean + se + 1e-12
+        ]
+        pick = min(band, key=lambda row: row["q"])
+        key = f"{pick['q']}"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def run_calibration(path: Path = RAW_PATH) -> dict:
     races = load_governor_races(path)
     cycles = sorted({race["cycle"] for race in races})
@@ -397,31 +522,48 @@ def run_calibration(path: Path = RAW_PATH) -> dict:
                 # House-effect scale is applied in the live two-pass fit.
                 # The search scores the filter with firm-level dependence and excess variance.
                 state_rows.append(score_state_space(races, q, excess_sd, firm_sd))
-    state_rows.sort(key=lambda row: (row["raceRmse14"] is None, row["raceRmse14"] or 1e9))
-    best = state_rows[0]
+    state_rows.sort(key=lambda row: (row["selectionScore"] is None, row["selectionScore"] or 1e9, row["q"]))
+    choice = _select_q(state_rows)
+    best = choice["numericalBest"]
+    chosen = choice["chosen"]
+    fast_row = choice["fast"]
+    race_q_counts = _leave_one_race_q(state_rows)
     cycle_choices = _leave_one_cycle(state_rows, ("q", "excessSd", "firmSd"))
     q_votes = sorted({row["q"] for row in cycle_choices})
-    house_sd = _estimate_house_sd(races, best["q"], best["excessSd"] ** 2, best["firmSd"] ** 2)
-    method_variance = _estimate_method_variance(races, best["q"], best["excessSd"] ** 2, best["firmSd"] ** 2)
-    ewma_rows = [score_ewma(races, half_life, best["excessSd"]) for half_life in HALF_LIVES]
+    house_sd = _estimate_house_sd(races, chosen["q"], chosen["excessSd"] ** 2, chosen["firmSd"] ** 2)
+    method_variance = _estimate_method_variance(races, chosen["q"], chosen["excessSd"] ** 2, chosen["firmSd"] ** 2)
+    ewma_rows = [score_ewma(races, half_life, chosen["excessSd"]) for half_life in HALF_LIVES]
     ewma_cycle = _leave_one_cycle(ewma_rows, ("halfLife",))
     ewma_rows.sort(key=lambda row: (row["raceRmse14"] is None, row["raceRmse14"] or 1e9))
     best_ewma = ewma_rows[0]
-    comparisons = _comparison_scores(races, best["excessSd"])
+    comparisons = _comparison_scores(races, chosen["excessSd"])
     payload = {
         "source": "FiveThirtyEight pollster-ratings raw_polls.csv, type_simple Gov-G",
         "url": RAW_URL,
         "generatedFromRaces": len(races),
         "cycles": cycles,
         "excludedFromObjective": "The 2026 Texas gubernatorial polls are not in this file and were not used to choose q or the EWMA half-life.",
-        "objective": "Unweighted mean of per-race RMSE for polls released 14 days after each checkpoint. Checkpoints are 90, 60, 40, and 28 days before election day.",
+        "objective": (
+            "For each historical race, RMSE against the measurement-weighted consensus of independent pollsters "
+            "in the windows 7–14 and 14–28 days after each checkpoint. "
+            "Individual future-poll RMSE, MAE, log likelihood, residual autocorrelation, and 50/80/95 coverage are reported beside that score. "
+            "Checkpoints are 90, 60, 40, and 28 days before election day. "
+            "When several daily process SDs are within one bootstrap standard error of the best score, the smallest process SD is used."
+        ),
         "dateLimitation": "This file has one date per poll. Calibration treats that date as a one-day field window. The live Texas model averages the latent margin across the stored field dates.",
         "selected": {
-            "q": best["q"],
-            "excessSd": best["excessSd"],
-            "excessVariance": best["excessSd"] ** 2,
-            "firmSd": best["firmSd"],
-            "firmVariance": best["firmSd"] ** 2,
+            "q": chosen["q"],
+            "numericalBestQ": best["q"],
+            "qBand": choice["band"],
+            "selectionScore": chosen["selectionScore"],
+            "numericalBestScore": best["selectionScore"],
+            "selectionSe": choice["scoreSe"],
+            "qFast": None if fast_row is None else fast_row["q"],
+            "qFastBand": choice["fastBand"],
+            "excessSd": chosen["excessSd"],
+            "excessVariance": chosen["excessSd"] ** 2,
+            "firmSd": chosen["firmSd"],
+            "firmVariance": chosen["firmSd"] ** 2,
             "sigmaHouse": house_sd,
             "ewmaHalfLife": best_ewma["halfLife"],
             "nonprobabilityVariance": method_variance,
@@ -434,10 +576,23 @@ def run_calibration(path: Path = RAW_PATH) -> dict:
             ),
         },
         "whyQ": (
-            f"Daily process SD {best['q']}, excess SD {best['excessSd']}, and firm-shock SD {best['firmSd']} "
-            f"had the lowest average 14-day future-poll RMSE across {best['races']} gubernatorial races "
-            f"({best['raceRmse14']:.2f} points). Leave-one-cycle refits selected process SD values {q_votes}. "
+            f"The lowest future-consensus score was daily process SD {best['q']} "
+            f"(excess SD {best['excessSd']}, firm-shock SD {best['firmSd']}, score {best['selectionScore']:.2f}). "
+            f"A {SELECTION_DRAWS}-draw bootstrap of races put the standard error of that score at "
+            f"{choice['scoreSe'] if choice['scoreSe'] is not None else float('nan'):.2f}. "
+            f"Process SDs inside that band, at the same excess and firm values, were {choice['band']}. "
+            f"The one-standard-error rule selects the smoothest of them, {chosen['q']}. "
+            f"Leave-one-cycle numerical minima were {q_votes}. "
             "The 2026 Texas race was not in the objective."
+        ),
+        "whyFast": (
+            None
+            if fast_row is None
+            else (
+                f"Fast latent process SD {fast_row['q']} is the smoothest value above the primary SD "
+                f"whose 7-to-14-day consensus RMSE ({fast_row['consensus7to14']:.2f}) is within one standard error "
+                f"of the best faster candidate. The band was {choice['fastBand']}."
+            )
         ),
         "whyHalfLife": (
             f"EWMA half-life {int(best_ewma['halfLife'])} days had the lowest average 14-day future-poll RMSE "
@@ -453,6 +608,7 @@ def run_calibration(path: Path = RAW_PATH) -> dict:
         "ewma": _strip_scores(ewma_rows),
         "comparisons": comparisons,
         "leaveOneCycle": cycle_choices,
+        "leaveOneRaceQ": race_q_counts,
         "leaveOneCycleEwma": ewma_cycle,
     }
     RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)

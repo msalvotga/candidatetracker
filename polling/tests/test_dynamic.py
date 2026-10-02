@@ -11,6 +11,7 @@ from txpoll.dynamic import (
     DynamicPoll,
     change_variance,
     fit_latent,
+    kalman_observation_variance,
     run_filter,
     smooth,
     window_gap_variance,
@@ -61,6 +62,15 @@ class DynamicTests(unittest.TestCase):
         smoothed = smooth(filtered, 0.2)
         variance = change_variance(smoothed["var"], smoothed["gain"], 10)
         self.assertAlmostEqual(variance, 10 * 0.04, places=6)
+
+    def test_a_later_poll_from_the_same_firm_has_a_larger_observation_variance(self):
+        polls = [DynamicPoll(i, "A", 4.0, 9.0, 10 + i, 10 + i, 10 + i) for i in range(3)]
+        first, first_order = kalman_observation_variance(polls, 0, 10, 0.04, 4.0, 7)
+        third, third_order = kalman_observation_variance(polls, 2, 12, 0.04, 4.0, 7)
+        self.assertEqual(first_order, 1)
+        self.assertEqual(third_order, 3)
+        self.assertGreater(third, first)
+        self.assertAlmostEqual(first, 9.0 + 4.0)
 
     def test_three_independent_pollsters_move_the_state_more_than_one_firm(self):
         def polls(names):
