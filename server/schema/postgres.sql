@@ -549,6 +549,11 @@ VALUES
   ('56181', 'May 2, 2026 Special Election', 1, 1, '', '', '', '', '', '')
 ON CONFLICT (election_id) DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS ballot_lookup_chunks (
+  chunk_no INTEGER PRIMARY KEY,
+  bytes BYTEA NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS county_roster_documents (
   doc_key TEXT PRIMARY KEY,
   payload JSONB NOT NULL,

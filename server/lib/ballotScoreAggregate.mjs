@@ -1,5 +1,5 @@
-import { createReadStream } from "node:fs";
 import { parse } from "csv-parse";
+import { openCsvStream } from "./ballotLookupStore.mjs";
 import { DAY_DEFS, parseIsoDate, parseVotingDayNumber, votingDayFromDate } from "./ballotScoreCalendar.mjs";
 
 const REQUIRED = {
@@ -317,13 +317,9 @@ function createGeoBook() {
   return { geos, ensure, places };
 }
 
-function streamRows(filePath, onRow) {
-  return new Promise((resolve, rejectStream) => {
-    if (!filePath) {
-      resolve();
-      return;
-    }
-    const parser = createReadStream(filePath).pipe(
+async function streamRows(filePath, onRow) {
+  if (!filePath) return;
+  const parser = (await openCsvStream(filePath)).pipe(
       parse({
         columns: true,
         bom: true,
@@ -336,9 +332,10 @@ function streamRows(filePath, onRow) {
     parser.on("data", (row) => {
       onRow(row);
     });
-    parser.on("end", resolve);
-    parser.on("error", rejectStream);
-  });
+    await new Promise((resolve, rejectStream) => {
+      parser.on("end", resolve);
+      parser.on("error", rejectStream);
+    });
 }
 
 function parseCount(raw) {

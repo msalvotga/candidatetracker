@@ -1,4 +1,3 @@
-import { createReadStream } from "node:fs";
 import { access, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +18,7 @@ import {
 } from "./galvestonRoster.mjs";
 import { parseTravisRosterZip } from "./travisEvRosterParse.mjs";
 import { readRosterDocument, writeRosterDocument } from "./countyRosterDocuments.mjs";
+import { openLookupCsvStream } from "./ballotLookupStore.mjs";
 import { ELLIS_ROSTER_PAGE, ellisMailRosterLink, parseEllisRosterZip } from "./ellisRoster.mjs";
 import {
   MONTGOMERY_ROSTER_PAGE,
@@ -391,15 +391,15 @@ function vuidId(raw) {
 async function matchLookupVuids(need) {
   const hits = new Map();
   if (!need.size) return hits;
-  const filePath = datasetPath("lookup");
+  let input;
   try {
-    await access(filePath);
+    input = await openLookupCsvStream();
   } catch {
     return hits;
   }
   const wanted = new Set([...need].map(vuidId));
   await new Promise((resolve, reject) => {
-    const parser = createReadStream(filePath).pipe(
+    const parser = input.pipe(
       parse({ columns: true, bom: true, relax_quotes: true, relax_column_count: true }),
     );
     let settled = false;
@@ -549,9 +549,15 @@ function lookupHeaderNames(headerLine) {
 }
 
 async function readLookupHeader(filePath) {
-  const file = await stat(filePath);
+  let stamp = "database";
+  try {
+    const file = await stat(filePath);
+    stamp = `${file.mtimeMs}:${file.size}`;
+  } catch {
+    stamp = "database";
+  }
+  const stream = await openLookupCsvStream();
   const header = await new Promise((resolve, reject) => {
-    const stream = createReadStream(filePath, { encoding: "utf8", start: 0, end: 8191 });
     let buf = "";
     let settled = false;
     const finish = (value) => {
@@ -572,7 +578,7 @@ async function readLookupHeader(filePath) {
       reject(error);
     });
   });
-  return { stamp: `${file.mtimeMs}:${file.size}`, header };
+  return { stamp, header };
 }
 
 async function readProfileStamp() {

@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { aggregateBallotFiles } from "../lib/ballotScoreAggregate.mjs";
 import { writeRosterDocument } from "../lib/countyRosterDocuments.mjs";
+import { lookupStoredInDatabase } from "../lib/ballotLookupStore.mjs";
 import { ensureDb } from "../db.mjs";
 import {
   BALLOT_EV_DIR,
@@ -42,7 +43,7 @@ async function main() {
     const files = {};
     for (const kind of ["lookup", "static2022", "roster2026"]) {
       const filePath = datasetPath(kind);
-      files[kind] = (await exists(filePath)) ? filePath : null;
+      files[kind] = (await exists(filePath) || (kind === "lookup" && (await lookupStoredInDatabase()))) ? filePath : null;
     }
     const runningStatus = await readEvStatus();
     const { datasets, model } = await aggregateBallotFiles({
