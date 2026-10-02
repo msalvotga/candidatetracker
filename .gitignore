@@ -33,6 +33,8 @@ server/data/county-rosters/
 polling/data/*.sqlite
 polling/data/*.sqlite-*
 polling/data/raw/
+polling/data/historical/raw_polls.csv
+polling/data/historical/governor_polls_historical.csv
 polling/data/exports/
 polling/data/_peek.py
 **/__pycache__/

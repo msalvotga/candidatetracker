@@ -2,6 +2,10 @@
 # This file is the default. The settings screen can override it.
 # Overrides live in the database and can be reset to this file.
 #
+# model_version must change whenever a default that affects the estimate changes.
+# Do not edit the numbers below without incrementing model_version.
+model_version: "1.2.0"
+#
 # The modeled quantity is the polling margin, in percentage points:
 #   margin = share(margin.candidate_a) - share(margin.candidate_b)
 # Positive means candidate_a is ahead. This is not a win probability.
@@ -65,8 +69,11 @@ recency:
       - { min_days_out: 31, half_life_days: 21 }
       - { min_days_out: 0, half_life_days: 14 }
 
+# Sponsor type is metadata. It is not a default weight.
+# apply_in_default_model adds these factors on top of source completeness.
+# The comparison page can also refit with sponsor factors instead of source completeness.
 sponsorship_weights:
-  # Assumptions about influence, not factual quality grades.
+  apply_in_default_model: false
   nonpartisan_public: 1.00
   media: 1.00
   university: 1.00
@@ -74,6 +81,13 @@ sponsorship_weights:
   candidate_campaign: 0.70
   political_party: 0.70
   unknown: 0.85
+
+# How completely the poll can be documented. Not a sponsor or ideology score.
+source_completeness:
+  original_with_methodology_or_crosstabs: 1.00
+  original_topline_limited_methodology: 0.90
+  institutional_or_media_publication: 0.85
+  aggregator_only: 0.70
 
 clustering:
   # Polls from the same canonical pollster whose midpoints form a chain
@@ -96,16 +110,34 @@ trend:
   bootstrap_draws: 400
   bootstrap_seed: 2026
   # Cluster bootstrap resamples polling organizations, not individual polls.
+  # Intervals are percentiles of those draws, not a normal approximation.
+  interval_method: percentile
+  # Display only. The stored series still has an estimate on earlier days.
+  minimum_polls_to_draw: 3
 
 state_space:
-  # Daily random-walk standard deviation of the latent margin, in percentage points.
+  # Legacy midpoint filter used only as a comparison path.
+  # The primary model's daily process SD is read from historical calibration,
+  # not from the number below, and not from the 2026 Texas governor polls.
   process_sd_per_day: 0.35
   initial_sd: 8.0
-  # Engine B does not turn the state into a win probability.
+  dependence_days: 7
+  recent_evidence_days: 30
+
+measurement:
+  # Search grids. The deployed q, excess variance, house prior, and EWMA
+  # half-life live in polling/data/historical/calibration.json.
+  exclude: "2026 Texas governor polls are not used to choose q or the EWMA half-life."
+  q_grid: [0.08, 0.12, 0.18, 0.25, 0.35, 0.50, 0.70, 1.00, 1.40]
+  excess_sd_grid: [0.25, 0.50, 1.0, 1.5, 2.0, 2.5, 3.5]
+  firm_sd_grid: [1.0, 2.0]
+  ewma_half_lives: [7, 10, 14, 21, 28, 35, 42]
 
 outliers:
   # |residual| / sqrt(SE^2 + tau^2). Flag only. Do not auto-delete.
+  # outlier_multiplier stays 1. A flag does not change the weight.
   standardized_threshold: 2.5
+  multiplier: 1.0
 
 validation:
   percentage_sum_tolerance: 1.5

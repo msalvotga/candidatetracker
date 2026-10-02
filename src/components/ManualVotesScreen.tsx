@@ -1,11 +1,9 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchAppSettings,
-  fetchElectionSourceConfigs,
   fetchVoteDesk,
   fetchVoteDeskCounty,
   saveVoteDeskManual,
-  type ElectionSourceConfig,
   type VoteDeskCountyBoard,
   type VoteDeskPayload,
 } from "../lib/dataBackend";
@@ -204,14 +202,12 @@ function asDeskCounty(countyKey: string, race: BoardRace): DeskCounty {
 }
 
 export function ManualVotesScreen({
-  onOpenSettings,
+  electionId,
   onVotesApplied,
 }: {
-  onOpenSettings: () => void;
+  electionId: string;
   onVotesApplied: (electionId: string) => void;
 }) {
-  const [electionId, setElectionId] = useState<string | null>(null);
-  const [configs, setConfigs] = useState<ElectionSourceConfig[]>([]);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [view, setView] = useState<ViewId>("race");
   const [governorOnly, setGovernorOnly] = useState(false);
@@ -253,10 +249,8 @@ export function ManualVotesScreen({
     let cancelled = false;
     (async () => {
       try {
-        const [settings, electionConfigs] = await Promise.all([fetchAppSettings(), fetchElectionSourceConfigs()]);
+        const settings = await fetchAppSettings();
         if (cancelled) return;
-        setConfigs(electionConfigs.elections ?? []);
-        setElectionId((settings.manualVoteElectionId ?? "").trim());
         setGovernorOnly(settings.manualVoteGovernorOnly === true);
       } catch (e) {
         if (!cancelled) setSetupError(e instanceof Error ? e.message : "Could not load settings");
@@ -455,11 +449,6 @@ export function ManualVotesScreen({
     });
   }, [countyByKey, countyDir, countySort]);
 
-  const electionLabel = useMemo(() => {
-    if (!electionId) return "";
-    return configs.find((config) => config.electionId === electionId)?.label || `Election ${electionId}`;
-  }, [configs, electionId]);
-
   useEffect(() => {
     if (!governorOnly || !desk?.races?.length) return;
     const governor = desk.races.find((race) => isGovernorName(race.name));
@@ -521,20 +510,11 @@ export function ManualVotesScreen({
     );
   }
 
-  if (electionId == null) {
-    return <div className="enr-panel">Loading manual votes…</div>;
-  }
-
   if (!electionId) {
     return (
       <div className="enr-panel">
         <h2 className="enr-manualVotes__title">Manual votes</h2>
-        <p>
-          Choose which election this page fills in. Open Settings and set <strong>Election for manual entry</strong>.
-        </p>
-        <button type="button" className="enr-primaryBtn" onClick={onOpenSettings}>
-          Open settings
-        </button>
+        <p>Choose an SOS election in the menu at the top of the page.</p>
       </div>
     );
   }
@@ -610,7 +590,6 @@ export function ManualVotesScreen({
             </select>
           </label>
         ) : null}
-        <p className="enr-muted enr-manualVotes__election">{electionLabel}</p>
       </div>
 
       {loadError ? <p className="enr-errorInline">{loadError}</p> : null}

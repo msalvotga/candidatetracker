@@ -2,6 +2,42 @@
 
 Each knob below is a choice. The settings screen can change the ones that are exposed. Reset restores `polling/config/model.yaml`.
 
+The headline in version 1.2.0 is the latent daily margin. The half-life, τ, sample-type multipliers, and source-completeness factors below still build the local-linear comparison. They do not set the primary line.
+
+## Daily process standard deviation (q)
+
+**What it does.** Sets how large a one-day shock in the latent Abbott-minus-Hinojosa margin is allowed to be.
+
+**Why it exists.** The polling environment moves. A tiny q freezes the line. A huge q lets one noisy poll rewrite it.
+
+**How it was chosen.** Grid search on historical gubernatorial general-election polls, scored by average per-race RMSE against polls released 14 days later. The 2026 Texas race was not in that file and was not in the objective. Leave-one-cycle refits are on the model lab page. The deployed value is whatever `polling/data/historical/calibration.json` selected.
+
+**If increased.** The latent line follows new polls faster, and the posterior widens more quickly across days with no polls.
+
+**If decreased.** The line is stickier. A real shift takes more agreeing polls to show up.
+
+## Excess variance
+
+**What it does.** Adds a constant, in points squared, to every poll’s measurement variance, on top of sampling variance.
+
+**Why it exists.** Sampling error is not the whole error. Without it, a very large sample would dominate the latent line.
+
+**How it was chosen.** Same historical grid as q. It is not τ. τ remains the floor inside the local-linear comparison weights.
+
+**If increased.** Every poll looks noisier. Precise polls lose some of their advantage.
+
+**If decreased.** Precise polls move the latent line more. Zero would let sampling error pretend to be the whole error.
+
+## EWMA half-life
+
+**What it does.** Decays poll weights in the comparison averages only. The primary model does not use it.
+
+**How it was chosen.** The half-lives 7, 10, 14, 21, 28, 35, and 42 were scored on the same 14-day future-poll RMSE. The winner is shown on the overview and in the model lab, with the reason. The conservative line uses the best half-life among 21, 28, 35, and 42 when the overall winner is faster than that.
+
+**If increased.** The comparison average remembers older polls longer.
+
+**If decreased.** The comparison average hugs the newest polls.
+
 ## Variance floor (τ)
 
 **What it does.** Adds a constant, in points, to the denominator of the precision weight: `1 / (SE² + τ²)`.
@@ -60,17 +96,29 @@ Each knob below is a choice. The settings screen can change the ones that are ex
 
 **If switched to model-based.** The switch is in the config so the estimator has a place to live. Until enough overlapping LV and RV polls exist to estimate a shrunk effect, the multipliers above are what the fit uses. The code does not drop the RV multiplier just because the switch was flipped.
 
+## Source completeness
+
+**What it does.** Multiplies weight by how completely the poll’s original release is in the archive.
+
+**Why it exists.** A number that can be checked against a pollster document is easier to audit than a number that exists only on an aggregator. This is not a judgment about the sponsor’s politics.
+
+**Defaults.** Original source with methodology or crosstabs 1.00. Original topline with limited methodology 0.90. Institutional or media publication 0.85. Aggregator only 0.70.
+
+**If increased.** That documentation class moves the trend more.
+
+**If decreased.** It moves the trend less. The row stays in the archive.
+
 ## Sponsor multipliers
 
-**What they do.** Multiply weight by the sponsor category.
+**What they do.** They can multiply weight by sponsor category. In version 1.1.0 they do not, unless the settings switch is turned on. The comparison page can also refit with these factors instead of source completeness.
 
-**Why they exist.** A candidate poll is still evidence, and it is not the same kind of evidence as a news-media poll. The factor is an influence assumption.
+**Why they exist.** The earlier model used them. They are kept so that choice can be inspected. A campaign poll is not automatically less informative because a campaign paid for it.
 
-**Defaults.** Public, media, and university 1.00. Advocacy and unknown 0.85. Candidate or party 0.70.
+**Defaults.** The switch is off. The unused table is still public/media/university 1.00, advocacy and unknown 0.85, candidate or party 0.70.
 
-**If increased.** That category moves the trend more.
+**If the switch is turned on.** Those factors are applied in addition to source completeness, and the version of the result should be read as an override of 1.1.0.
 
-**If decreased.** It moves the trend less. Zero would drop the category without deleting the rows. The archive does not do that on its own.
+**If a table value is increased or decreased.** Only the sensitivity row, or a model with the switch on, moves.
 
 ## Cluster window and method
 

@@ -162,23 +162,6 @@ export function SettingsScreen({
     }
   }
 
-  async function onSetManualVoteElection(electionId: string) {
-    setBusy(true);
-    setSaveMsg(null);
-    try {
-      const updated = await updateAppSettings({
-        disableAutoIngest: appSettings.disableAutoIngest,
-        manualVoteElectionId: electionId,
-      });
-      setAppSettings(updated);
-      setSaveMsg(electionId ? "Manual votes election saved." : "Manual votes election cleared.");
-    } catch (e) {
-      setSaveMsg(e instanceof Error ? e.message : "Failed to save manual votes election");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function onToggleAutoIngest(nextDisabled: boolean) {
     setBusy(true);
     setSaveMsg(null);
@@ -448,28 +431,11 @@ export function SettingsScreen({
           <section className="enr-panel enr-settings__section">
             <SettingsCollapse title="Manual votes">
             <p className="enr-muted">
-              The Manual votes tab, next to Home, is filled out for one election. Early voting, mail, and election day
-              entered there replace SOS or county-site numbers for a county when the manual total is higher, or when
-              that county is set to always use the manual numbers.
+              Manual votes, ballot scores, and county rosters follow the election selected in the menu at the top of
+              the page. Early voting, mail, and election day entered on Manual votes replace SOS or county-site numbers
+              for a county when the manual total is higher, or when that county is set to always use the manual numbers.
+              Ballot scores and county rosters are loaded for the 2026 General Election.
             </p>
-            <label className="enr-field">
-              Election for manual entry
-              <select
-                className="enr-input"
-                value={appSettings.manualVoteElectionId ?? ""}
-                disabled={busy}
-                onChange={(e) => void onSetManualVoteElection(e.target.value)}
-              >
-                <option value="">Choose an election</option>
-                {electionConfigs
-                  .filter((c) => c.usesCivixSos !== false && /^\d+$/.test(c.electionId))
-                  .map((c) => (
-                    <option key={c.electionId} value={c.electionId}>
-                      {c.label || `Election ${c.electionId}`}
-                    </option>
-                  ))}
-              </select>
-            </label>
             <label className="enr-field" style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <input
                 type="checkbox"

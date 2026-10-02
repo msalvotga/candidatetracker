@@ -18,6 +18,13 @@
   font-weight: 700;
 }
 
+.poll-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
 .poll-page h1 {
   margin: 4px 0 6px;
   font-size: 28px;
@@ -66,6 +73,10 @@
   border: 1px solid #d7dee8;
   border-radius: 6px;
   padding: 14px;
+}
+
+.poll-card > summary {
+  cursor: pointer;
 }
 
 .poll-margin {

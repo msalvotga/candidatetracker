@@ -10,37 +10,37 @@ Candidate shares are still stored and shown. They are not averaged separately an
 
 Third-party and undecided voters are **not** reallocated into the two-candidate margin unless `experimental_reallocate_remainder` is turned on. It is off.
 
-## Field date
+## Field dates
 
-The observation date is the midpoint of fieldwork.
+The midpoint is still stored and shown:
 
 > midpoint = start + (end − start) / 2
 
-June 3–4 is the morning of June 4 in fractional days (June 3.5), not a date that was quietly rounded. If the end is before the start, the record fails validation.
+The primary model does not treat every interview as if it happened on that midpoint. A poll fielded September 20–26 is an observation of the average latent margin on those days, with equal weight on each day unless a source reports interviews by day. None of the current polls do.
+
+If the end is before the start, the record fails validation.
 
 ## Measurement uncertainty
 
-A poll of 2,000 respondents is not twice as informative as a poll of 1,000. Sampling variance shrinks with the square root of the sample, and it is not the only error.
+The modeled quantity is the margin, Abbott minus Hinojosa. A reported margin of error belongs to one candidate share. It is not the margin of error of the difference.
 
-When a source prints a margin of error, it is treated as an approximate 95% interval:
+When the shares are proportions and `n_eff` is the effective sample size:
 
-> standard error of a proportion = (MOE / 100) / 1.96
+> Var(pA − pB) = [pA + pB − (pA − pB)²] / n_eff
 
-If the source also prints a margin of error that already includes the design effect, that larger figure is the one used. Both numbers stay on the record. The University of Texas August poll is the example: ±2.83, and ±3.58 once weighting is included. The model uses 3.58.
+The sampling variance in points-squared is that number times 10,000. Its square root is the sampling standard error of the margin.
 
-The quantity in the model is a **difference of two shares**. Under a simplified multinomial approximation, with shares written as proportions:
+`n_eff` is **reported** when the source gives an effective sample size. If the source gives a classical 95% margin of error, `n_eff` is **estimated** by inverting that MOE at a 50/50 share, and the margin variance is then **derived** from the two shares. A design-effect MOE is preferred when the source prints both. The University of Texas August poll is the example: ±2.83, and ±3.58 once weighting is included. The model uses 3.58.
 
-> variance(Abbott − Hinojosa) ≈ [pA + pB − (pA − pB)²] / n_eff
+A credibility interval or a non-probability “equivalent margin of error” is stored and labeled **reported**. It is not inverted into `n_eff`. If no classical MOE is usable, `n_eff` is set equal to the raw sample size and labeled **estimated**.
 
-The standard error of the margin, in points, is 100 times the square root of that variance.
+The poll’s measurement variance is:
 
-`n_eff` is taken from the source when the source gives an effective sample size. Otherwise it is inverted from the margin of error, assuming the published MOE is the conventional one at a 50/50 proportion:
+> R = sampling variance + excess variance + method variance + population variance
 
-> n_eff ≈ 0.25 / (standard error)²
+Excess variance is the historically calibrated non-sampling piece. It does not go to zero when the sample is huge. Method variance is extra uncertainty for non-probability or online-only methods, estimated from the gap between online and live-phone residuals in the historical file. Population variance would be an extra term for registered-voter or adult samples. That file does not label sample type, so no separate population variance was estimated. Registered-voter polls still enter. Their extra uncertainty, if any, sits inside the shared excess term.
 
-That inversion is labeled **estimated**. If there is no margin of error, `n_eff` is set equal to the raw sample size and also labeled estimated, because the design effect is unknown and that choice is optimistic. The variance floor below is what keeps the optimism from running away.
-
-Emerson’s “credibility interval” and Univision/YouGov’s “equivalent margin of error” are used as the uncertainty input and labeled as such. They are not classical simple-random-sample margins of error.
+Sampling error is not total polling error.
 
 ## Variance floor
 
@@ -77,14 +77,18 @@ If adaptive half-life is on, the half-life depends on how far Election Day (3 No
 
 On 2 October 2026 that rule selects 21 days.
 
-## Sponsorship
+## Source completeness
 
-Sponsorship is recorded. Partisan polls are not deleted. The default multipliers are assumptions about influence, not grades of honesty:
+Model version 1.1.0. Sponsor type is still stored and shown. It is not a default weight. A campaign-sponsored poll is not automatically down-weighted because a campaign paid for it.
 
-- nonpartisan/public, media, university: 1.00
-- advocacy: 0.85
-- candidate or party: 0.70
-- unknown: 0.85
+The default multiplier measures whether the underlying poll can be documented:
+
+- original pollster source with methodology or crosstabs: 1.00
+- original pollster topline with limited methodology: 0.90
+- credible institutional or media publication with poll details: 0.85
+- aggregator-only result, original source not resolved: 0.70
+
+Sponsor-category multipliers remain in the config for a sensitivity row and for an optional switch. Both are off in the default model.
 
 ## Same-pollster clustering
 
@@ -96,49 +100,71 @@ A weight-cap alternative is in the config (`clustering.method: cap`) and is not 
 
 ## Total weight
 
-> raw weight = precision × recency × sample type × sponsorship × cluster adjustment
+> raw weight = precision × recency × sample type × source completeness × cluster adjustment × outlier factor
+
+The outlier factor is 1. A flagged outlier is not down-weighted. Sponsor type is not in this product unless the optional switch is on. House effects, when enabled, change the margin rather than the weight.
 
 The raw weights are then divided by their sum. Every poll in the model shows each factor and the final share. A poll at 26% of the model is 26% because those factors multiplied out that way, not because it was assigned a grade.
 
+## Primary model — latent daily margin
+
+Model version 1.2.0. The headline is a latent polling margin for every day:
+
+> x_t = x_(t−1) + daily shock
+
+The shock is normal with standard deviation `q`, chosen by historical backtest. It is not a 21-day half-life, and it is not a cap on how far the line may move in a day.
+
+A poll is a noisy reading of the average of `x_t` over its field dates, plus a shrunk house effect, plus error with variance R. A high-MOE poll therefore moves the latent line less than a low-MOE poll. Three polls from one firm move it less than three polls from three firms, because a second poll from the same firm inside seven days shares a transitory shock.
+
+The posterior is Gaussian. The displayed number is the posterior mean, which is also the median. The 50%, 80%, and 95% intervals are central posterior intervals. They are not bootstrap percentiles and not a chance of winning.
+
+House effects are normal with a prior standard deviation estimated from older gubernatorial races. Few polls shrink the estimate toward zero. The number is where that pollster has sat relative to the latent margin. It is not labeled partisan bias.
+
+The line is a nowcast of the polling environment. It is not an election forecast.
+
+## Comparison models
+
+These are shown with the latent line. They are not the headline.
+
+**Conservative average.** An exponentially weighted mean. Its half-life is the best of 21, 28, 35, and 42 days on the historical score, unless the overall winner is already that slow.
+
+**Fast trend.** A local linear fit with a 14-day bandwidth, held after the newest field midpoint. If it jumps while the latent and conservative lines stay put, the page says “Possible emerging movement; limited confirmation.” That sentence is not a prediction.
+
+**Straight average.** Equal weight on every qualifying poll released by that day.
+
+**Weighted local linear trend.** The previous default. Precision, recency, sample type, source completeness, and clustering still build its weights. Sponsor type does not. Past the newest midpoint the line is held. Its intervals, when inspected in the comparison machinery, remain a cluster bootstrap.
+
+**EWMA at 7, 10, 14, 21, 28, 35, and 42 days.** Scored in the model lab. The selected comparison half-life is the one with the lowest average 14-day future-poll RMSE across historical gubernatorial races. The primary model does not decay polls with that half-life. Older polls lose influence because process noise accumulates between their release and today.
+
 ## Engine A — weighted local linear trend
 
-This is the default.
+This is a comparison, not the default.
 
 For each day, polls are combined with a local linear regression. A tricube kernel gives a poll its full poll-weight when the day is on top of its midpoint, and zero weight when the day is more than the bandwidth away (default 28 days). Inside the window the regression is a weighted straight line, and the value used is the line’s height on that day.
 
 Past the newest field midpoint, the line is **held** at the fitted value on that midpoint. A local line will otherwise extrapolate whatever slope the last few polls happened to trace. That slope is not a forecast, and early versions of this fit ran away from the polls for that reason. The hold is labeled on the overview.
 
+The chart does not draw that line until three qualifying polls are in the series. Earlier days stay in the stored series and are labeled insufficient polling density. The visible axis follows the polls and the drawn line. If a stored interval extends past that axis, the picture is clipped and the tooltip keeps the stored number. The stored series is not rewritten.
+
 ## Uncertainty for Engine A
 
-Intervals come from a **cluster bootstrap**. Each draw resamples polling organizations with replacement, keeps every poll from the drawn organizations, refits the trend, and stores the path. The 80% band is the 10th to 90th percentile of those paths. The 95% band is the 2.5th to 97.5th.
+Intervals come from a **cluster bootstrap**. Each draw resamples polling organizations with replacement, keeps every poll from the drawn organizations, refits the trend, and stores the path. The displayed margin is the local-linear fit, not the mean or median of those draws.
+
+The intervals are percentile intervals, not a normal approximation and not a highest-density interval. The 80% band is the 10th to 90th percentile of those paths. The 95% band is the 2.5th to 97.5th. Draws are not clipped.
 
 Resampling organizations, rather than polls, means five polls from one shop are not treated as five independent measurements. With few organizations the band is wide. That width is the point. It is uncertainty about the polling trend, not a chance of winning.
 
-## Engine B — state-space trend
+## Legacy midpoint filter
 
-The latent margin is a random walk:
-
-> today’s margin = yesterday’s margin + a daily shock
-
-The daily shock has a default standard deviation of 0.35 points. The filter starts from the average of the poll margins, with an initial standard deviation of 8 points, so the start is not dogmatic.
-
-A poll is an observation of the latent margin on its field midpoint, plus noise. The observation standard deviation is `sqrt(SE² + τ²)`, the same sampling error and the same floor as Engine A. If house-effect adjustment is on, the poll is shifted by the shrunk house effect before it enters the filter.
-
-The reported line is the smoothed latent margin. The 95% band is the smoothed mean plus or minus 1.96 smoothed standard deviations. The interval is Gaussian and model-based. It is not a bootstrap, and it is not a win probability.
-
-House effects and sample-type effects are **not** estimated inside the filter by default. House-effect adjustment starts off. Sample type changes Engine A’s weights; it does not silently add a bias term in Engine B.
+A simpler random walk, with observations on the field midpoint and a fixed daily shock of 0.35 points, remains in the comparison table as “State-space trend” only when that older path is still computed beside the local-linear series. The headline path is the field-window filter described above. Its daily shock comes from calibration, not from 0.35.
 
 ## House effects
 
-A house effect is the average gap between a pollster’s margins and the trend on those midpoints, pulled toward zero.
+In the primary model, each pollster’s house effect is drawn from a normal prior centered at zero. The prior standard deviation is the between-pollster spread of mean residuals in historical gubernatorial races. The posterior mixes that prior with the pollster’s residuals against the latent margin. One poll is pulled hard toward zero. Many polls that sit on the same side of the latent line can keep a larger estimate. The screen shows the estimate and its standard error.
 
-> displayed effect = raw average × n / (n + k)
+The sign is points of margin, Abbott minus Hinojosa. It is not a finding that the pollster is biased.
 
-`n` is the number of polls. `k` defaults to 8. Three polls keep 3/11 of their raw average. Ten polls keep 10/18. One or two polls do not get a number; the screen says the effect is not estimated.
-
-The sign is “+X Abbott” or “−X Hinojosa”. It is a description of where that pollster has sat relative to the other polling, not a finding that the pollster is biased.
-
-The adjustment switch subtracts the shrunk effect from the poll before the trend is refit. It is off until you turn it on.
+The settings switch still controls whether the local-linear comparison subtracts a house effect. The primary model includes the shrunk effect either way.
 
 ## Outliers
 

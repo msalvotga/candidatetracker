@@ -6,7 +6,7 @@ The modeled number is a margin in percentage points, not a win probability.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import Any
 
@@ -79,6 +79,9 @@ class PrecisionEstimate:
     n_eff_estimated: bool
     moe_used: float | None
     note: str
+    design_effect: float | None = None
+    design_effect_estimated: bool = False
+    sampling_variance_pp: float = 0.0
 
 
 def estimate_margin_precision(
@@ -128,7 +131,29 @@ def estimate_margin_precision(
 
     var = variance_margin_proportion(p_a, p_b, n_eff)
     se_pp = math.sqrt(max(var, 0.0)) * 100.0
-    return PrecisionEstimate(se_pp, n_eff, estimated, moe, "; ".join(note_parts))
+    design_effect = None
+    design_estimated = False
+    if sample_size and sample_size > 0 and n_eff:
+        design_effect = float(sample_size) / float(n_eff)
+        design_estimated = estimated
+        if moe is None:
+            note_parts.append("No MOE was reported. n_eff was set equal to N, so the design effect is treated as 1")
+        elif design_estimated:
+            note_parts.append("design effect estimated as sample size / n_eff")
+        else:
+            note_parts.append("design effect is sample size / reported n_eff")
+    elif moe is None:
+        note_parts.append("No MOE was reported")
+    return PrecisionEstimate(
+        se_pp,
+        n_eff,
+        estimated,
+        moe,
+        "; ".join(note_parts),
+        design_effect,
+        design_estimated,
+        se_pp ** 2,
+    )
 
 
 def precision_weight(se_margin_pp: float, tau_pp: float) -> float:
@@ -174,6 +199,102 @@ def sample_type_weight(sample_type: str | None, config: dict[str, Any]) -> tuple
 def sponsorship_weight(sponsor_type: str | None, config: dict[str, Any]) -> float:
     table = config["sponsorship_weights"]
     return float(table.get(sponsor_type or "unknown", table.get("unknown", 0.85)))
+
+
+def source_completeness_code(*, tiers: list[int], has_methodology: bool, has_crosstabs: bool) -> str:
+    """Document how the poll was sourced. This is not a sponsor or ideology score."""
+    has_original = any(int(tier) <= 1 for tier in tiers)
+    has_publication = any(int(tier) in {2, 4} for tier in tiers)
+    if has_original and (has_methodology or has_crosstabs):
+        return "original_with_methodology_or_crosstabs"
+    if has_original:
+        return "original_topline_limited_methodology"
+    if has_publication:
+        return "institutional_or_media_publication"
+    return "aggregator_only"
+
+
+def source_completeness_weight(code: str | None, config: dict[str, Any]) -> float:
+    table = config["source_completeness"]
+    key = code or "aggregator_only"
+    if key not in table:
+        key = "aggregator_only"
+    return float(table[key])
+
+
+SOURCE_COMPLETENESS_LABELS = {
+    "original_with_methodology_or_crosstabs": "Original pollster source with methodology or crosstabs",
+    "original_topline_limited_methodology": "Original pollster topline with limited methodology",
+    "institutional_or_media_publication": "Institutional or media publication with poll details",
+    "aggregator_only": "Aggregator-only result; original source not resolved",
+}
+
+
+def nearest_same_pollster_gap(names: list[str], midpoints: list[float]) -> list[float | None]:
+    gaps: list[float | None] = []
+    for index, name in enumerate(names):
+        best = None
+        for other_index, other in enumerate(names):
+            if other_index == index or other != name:
+                continue
+            gap = abs(midpoints[index] - midpoints[other_index])
+            if best is None or gap < best:
+                best = gap
+        gaps.append(best)
+    return gaps
+
+
+DRAW_PERCENTILES = (
+    ("p2_5", 2.5),
+    ("p5", 5.0),
+    ("p10", 10.0),
+    ("p16", 16.0),
+    ("p25", 25.0),
+    ("p50", 50.0),
+    ("p75", 75.0),
+    ("p84", 84.0),
+    ("p90", 90.0),
+    ("p95", 95.0),
+    ("p97_5", 97.5),
+)
+
+
+def summarize_draws(draws) -> dict[str, Any]:
+    """Percentile summary. Draws are not clipped, winsorized, or bounded."""
+    values = np.asarray(draws, dtype=float)
+    values = values[np.isfinite(values)]
+    if len(values) == 0:
+        return {"n": 0, "method": "percentile"}
+    mean = float(values.mean())
+    sd = float(values.std(ddof=0))
+    skew = 0.0 if sd == 0 else float(np.mean(((values - mean) / sd) ** 3))
+    summary: dict[str, Any] = {
+        "n": int(len(values)),
+        "mean": mean,
+        "median": float(np.percentile(values, 50)),
+        "sd": sd,
+        "minimum": float(values.min()),
+        "maximum": float(values.max()),
+        "skewness": skew,
+        "method": "percentile",
+        "interval80": "10th to 90th percentile of the cluster-bootstrap draws",
+        "interval95": "2.5th to 97.5th percentile of the cluster-bootstrap draws",
+    }
+    for name, percentile in DRAW_PERCENTILES:
+        summary[name] = float(np.percentile(values, percentile))
+    return summary
+
+
+def histogram_bins(draws, bins: int = 16) -> list[dict[str, float | int]]:
+    values = np.asarray(draws, dtype=float)
+    values = values[np.isfinite(values)]
+    if len(values) == 0:
+        return []
+    counts, edges = np.histogram(values, bins=bins)
+    return [
+        {"x0": float(edges[i]), "x1": float(edges[i + 1]), "count": int(counts[i])}
+        for i in range(len(counts))
+    ]
 
 
 def cluster_ids(pollster: list[str], midpoints: list[float], window_days: float) -> list[int]:
@@ -276,6 +397,11 @@ class Observation:
     precision_note: str
     source_label: str
     review_status: str
+    source_completeness: str = "aggregator_only"
+    same_sample_note: str = ""
+    design_effect: float | None = None
+    design_effect_estimated: bool = False
+    sampling_variance_pp: float = 0.0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -291,6 +417,18 @@ class WeightedPoll:
     cluster_size: int
     raw_weight: float
     normalized_weight: float
+    source_quality: float = 1.0
+    source_quality_code: str = ""
+    sponsor_table: float = 1.0
+    outlier_factor: float = 1.0
+    age_days: float = 0.0
+    base_half_life: float = 0.0
+    effective_half_life: float = 0.0
+    sampling_variance: float = 0.0
+    variance_floor: float = 0.0
+    total_variance: float = 0.0
+    precision_share: float = 0.0
+    nearest_gap_days: float | None = None
     house_effect: float | None = None
     adjusted_margin: float | None = None
 
@@ -302,10 +440,21 @@ def build_weights(
     *,
     sample_types: set[str] | None = None,
     weight_mode: str = "full",
+    quality: str = "source",
 ) -> tuple[list[WeightedPoll], float, str]:
-    """weight_mode: full | equal | sample_size."""
+    """weight_mode: full | equal | sample_size.
+
+    quality:
+      source — source-completeness multiplier, no sponsor multiplier (the default)
+      sponsor — legacy sponsor-type multiplier, no source-completeness multiplier
+      both — source completeness and, only if configured, sponsor type
+      none — neither multiplier
+    """
     half_life, half_life_label = half_life_for_date(config, as_of)
+    base_half_life = float(config["recency"]["half_life_days"])
     tau = float(config["precision"]["tau_pp"])
+    outlier_factor = float(config.get("outliers", {}).get("multiplier", 1.0))
+    apply_sponsor = bool(config.get("sponsorship_weights", {}).get("apply_in_default_model"))
     selected = []
     for obs in observations:
         if sample_types and (obs.sample_type or "Other") not in sample_types:
@@ -315,37 +464,53 @@ def build_weights(
         return [], half_life, half_life_label
 
     as_of_ord = float(as_of.toordinal())
-    raw = []
     precision_parts = []
     recency_parts = []
     sample_parts = []
-    sponsor_parts = []
+    source_parts = []
+    sponsor_applied = []
+    sponsor_table = []
+    ages = []
+    variances = []
     for obs in selected:
         prec = precision_weight(obs.se_margin_pp, tau)
         age = max(0.0, as_of_ord - obs.midpoint)
         rec = recency_weight(age, half_life)
         st_w, st_key = sample_type_weight(obs.sample_type, config)
-        sp = sponsorship_weight(obs.sponsor_type, config)
+        source = source_completeness_weight(obs.source_completeness, config)
+        sponsor = sponsorship_weight(obs.sponsor_type, config)
+        if quality == "sponsor":
+            use_source, use_sponsor = False, True
+        elif quality == "none":
+            use_source, use_sponsor = False, False
+        else:
+            use_source, use_sponsor = True, apply_sponsor
         if weight_mode == "equal":
-            prec, rec, st_w, sp = 1.0, 1.0, 1.0, 1.0
+            prec, rec, st_w, source, sponsor = 1.0, 1.0, 1.0, 1.0, 1.0
+            use_source = use_sponsor = False
         elif weight_mode == "sample_size":
             prec = float(obs.sample_size or 0)
-            rec, st_w, sp = 1.0, 1.0, 1.0
+            rec, st_w, source, sponsor = 1.0, 1.0, 1.0, 1.0
+            use_source = use_sponsor = False
         precision_parts.append(prec)
         recency_parts.append(rec)
         sample_parts.append((st_w, st_key))
-        sponsor_parts.append(sp)
+        source_parts.append(source if use_source else 1.0)
+        sponsor_applied.append(sponsor if use_sponsor else 1.0)
+        sponsor_table.append(sponsor)
+        ages.append(age)
+        sampling = obs.sampling_variance_pp or (obs.se_margin_pp ** 2)
+        variances.append((sampling, tau ** 2, sampling + tau ** 2))
 
     pre_cluster = [
-        precision_parts[i] * recency_parts[i] * sample_parts[i][0] * sponsor_parts[i]
+        precision_parts[i] * recency_parts[i] * sample_parts[i][0] * source_parts[i] * sponsor_applied[i] * outlier_factor
         for i in range(len(selected))
     ]
+    names = [obs.pollster_canonical for obs in selected]
+    midpoints = [obs.midpoint for obs in selected]
+    gaps = nearest_same_pollster_gap(names, midpoints)
     if weight_mode == "full":
-        cids = cluster_ids(
-            [obs.pollster_canonical for obs in selected],
-            [obs.midpoint for obs in selected],
-            float(config["clustering"]["window_days"]),
-        )
+        cids = cluster_ids(names, midpoints, float(config["clustering"]["window_days"]))
         factors = cluster_adjustments(
             cids,
             str(config["clustering"]["method"]),
@@ -360,6 +525,7 @@ def build_weights(
         counts[cid] = counts.get(cid, 0) + 1
     raw_weights = [pre_cluster[i] * factors[i] for i in range(len(selected))]
     normalized = normalize(raw_weights)
+    precision_total = sum(precision_parts) or 1.0
     weighted = []
     for i, obs in enumerate(selected):
         weighted.append(
@@ -369,11 +535,23 @@ def build_weights(
                 recency=recency_parts[i],
                 sample_type_factor=sample_parts[i][0],
                 sample_type_key=sample_parts[i][1],
-                sponsorship=sponsor_parts[i],
+                sponsorship=sponsor_applied[i],
                 cluster_factor=factors[i],
                 cluster_size=counts[cids[i]],
                 raw_weight=raw_weights[i],
                 normalized_weight=normalized[i],
+                source_quality=source_parts[i],
+                source_quality_code=obs.source_completeness,
+                sponsor_table=sponsor_table[i],
+                outlier_factor=outlier_factor if weight_mode == "full" else 1.0,
+                age_days=ages[i],
+                base_half_life=base_half_life,
+                effective_half_life=half_life,
+                sampling_variance=variances[i][0],
+                variance_floor=variances[i][1],
+                total_variance=variances[i][2],
+                precision_share=precision_parts[i] / precision_total,
+                nearest_gap_days=gaps[i],
                 adjusted_margin=obs.margin,
             )
         )
@@ -450,34 +628,23 @@ def cluster_bootstrap(
         for name_index in drawn:
             indexes.extend(groups[names[int(name_index)]])
         sample = [weighted[i] for i in indexes]
-        # Renormalize inside build? The sample already has weights. Re-normalize.
+        # Renormalize the already computed raw weights. Do not clip the margins.
         total = sum(item.raw_weight for item in sample) or 1.0
-        resampled = []
-        for item in sample:
-            resampled.append(
-                WeightedPoll(
-                    observation=item.observation,
-                    precision=item.precision,
-                    recency=item.recency,
-                    sample_type_factor=item.sample_type_factor,
-                    sample_type_key=item.sample_type_key,
-                    sponsorship=item.sponsorship,
-                    cluster_factor=item.cluster_factor,
-                    cluster_size=item.cluster_size,
-                    raw_weight=item.raw_weight,
-                    normalized_weight=item.raw_weight / total,
-                    adjusted_margin=item.adjusted_margin,
-                )
-            )
+        resampled = [replace(item, normalized_weight=item.raw_weight / total) for item in sample]
         path = series_from_weights(resampled, config, as_of, grid=grid)
         paths.append(path["estimate"])
     stack = np.vstack(paths)
+    current = stack[:, -1]
     return {
         "low95": np.nanpercentile(stack, 2.5, axis=0),
         "low80": np.nanpercentile(stack, 10, axis=0),
         "high80": np.nanpercentile(stack, 90, axis=0),
         "high95": np.nanpercentile(stack, 97.5, axis=0),
         "base": base,
+        "currentDraws": current,
+        "drawSummary": summarize_draws(current),
+        "histogram": histogram_bins(current),
+        "intervalMethod": "percentile",
     }
 
 

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/apiBase";
+import { electionHasRosterScores } from "../lib/rosterScoreElection";
+import { ElectionDatasetNotice } from "./ElectionDatasetNotice";
 import { TEXAS_COUNTIES } from "../lib/texasCounties";
 
 type RosterDay = { date: string; voters?: number; missingVuid?: number; earlyInPerson?: number; mail?: number };
@@ -255,7 +257,7 @@ function formatWhen(iso: string | null) {
   return date.toLocaleString("en-US", { timeZone: "America/Chicago", dateStyle: "medium", timeStyle: "short" });
 }
 
-export function CountyRosterScreen() {
+export function CountyRosterScreen({ electionId }: { electionId: string }) {
   const [view, setView] = useState<"voted" | "counties">("voted");
   const [board, setBoard] = useState<Board | null>(null);
   const [voted, setVoted] = useState<VotedPage | null>(null);
@@ -441,6 +443,10 @@ export function CountyRosterScreen() {
   const pageCount = Math.max(1, Math.ceil((voted?.total ?? 0) / PAGE_SIZE));
   const rangeStart = voted && voted.total > 0 ? voted.offset + 1 : 0;
   const rangeEnd = voted ? Math.min(voted.offset + voted.rows.length, voted.total) : 0;
+
+  if (electionId && !electionHasRosterScores(electionId)) {
+    return <ElectionDatasetNotice dataset="County rosters" />;
+  }
 
   return (
       <main className="enr-ballot">

@@ -9,17 +9,30 @@ import unittest
 from datetime import date
 from pathlib import Path
 
+import numpy as np
+
+from txpoll import MODEL_VERSION
 from txpoll.calc import (
+    Observation,
+    build_weights,
+    cluster_adjustments,
+    cluster_bootstrap,
     cluster_ids,
     estimate_margin_precision,
     field_midpoint,
+    histogram_bins,
+    local_linear_at,
     margin_pp,
     n_eff_from_moe,
     precision_weight,
     recency_weight,
     sample_type_weight,
     se_proportion_from_moe,
+    series_from_weights,
+    source_completeness_code,
+    source_completeness_weight,
     standardized_residual,
+    summarize_draws,
     variance_margin_proportion,
 )
 from txpoll.config import load_yaml
@@ -143,6 +156,79 @@ class CalculationTests(unittest.TestCase):
         self.assertEqual(ids[0], ids[1])
         self.assertNotEqual(ids[0], ids[2])
 
+    def test_polls_a_month_apart_are_not_one_cluster(self):
+        ids = cluster_ids(["Emerson College Polling", "Emerson College Polling"], [0, 33], window_days=7)
+        factors = cluster_adjustments(ids, "sqrt_dampen", 1.5, [1.0, 1.0])
+        self.assertNotEqual(ids[0], ids[1])
+        self.assertEqual(factors, [1.0, 1.0])
+
+    def test_two_polls_inside_the_window_share_a_sqrt_dampen(self):
+        ids = cluster_ids(["Fox News", "Fox News"], [0, 4], window_days=7)
+        factors = cluster_adjustments(ids, "sqrt_dampen", 1.5, [1.0, 1.0])
+        self.assertAlmostEqual(factors[0], 1 / math.sqrt(2))
+        self.assertAlmostEqual(factors[1], 1 / math.sqrt(2))
+
+    def test_model_version_matches_the_config(self):
+        config = load_yaml("model.yaml")
+        self.assertEqual(MODEL_VERSION, "1.2.0")
+        self.assertEqual(config["model_version"], MODEL_VERSION)
+        self.assertFalse(config["sponsorship_weights"]["apply_in_default_model"])
+
+    def test_source_completeness_replaces_sponsor_type_in_the_default_weight(self):
+        config = load_yaml("model.yaml")
+        media = _observation(1, "media", "original_with_methodology_or_crosstabs")
+        unknown = _observation(2, "unknown", "original_with_methodology_or_crosstabs")
+        weighted, _half, _label = build_weights([media, unknown], config, date(2026, 10, 2))
+        self.assertAlmostEqual(weighted[0].normalized_weight, weighted[1].normalized_weight)
+        self.assertEqual(weighted[0].sponsorship, 1.0)
+        self.assertEqual(weighted[1].sponsorship, 1.0)
+        self.assertAlmostEqual(weighted[0].source_quality, 1.0)
+        aggregator = _observation(3, "media", "aggregator_only", midpoint=date(2026, 9, 1).toordinal())
+        self.assertAlmostEqual(source_completeness_weight("aggregator_only", config), 0.70)
+        self.assertEqual(
+            source_completeness_code(tiers=[3], has_methodology=False, has_crosstabs=False),
+            "aggregator_only",
+        )
+        self.assertEqual(
+            source_completeness_code(tiers=[1], has_methodology=True, has_crosstabs=False),
+            "original_with_methodology_or_crosstabs",
+        )
+        legacy, _h, _l = build_weights([media, unknown], config, date(2026, 10, 2), quality="sponsor")
+        self.assertGreater(legacy[0].normalized_weight, legacy[1].normalized_weight)
+        self.assertIsNotNone(aggregator)
+
+    def test_percentiles_are_not_clipped(self):
+        draws = np.array([-12.0, -3.0, 0.0, 1.0, 4.0, 5.0, 5.6, 40.0])
+        summary = summarize_draws(draws)
+        self.assertEqual(summary["method"], "percentile")
+        self.assertEqual(summary["minimum"], -12.0)
+        self.assertEqual(summary["maximum"], 40.0)
+        self.assertAlmostEqual(summary["p2_5"], float(np.percentile(draws, 2.5)))
+        self.assertAlmostEqual(summary["p97_5"], float(np.percentile(draws, 97.5)))
+        self.assertGreater(summary["p97_5"], 5.6)
+        self.assertLess(summary["maximum"], 100)
+        bins = histogram_bins(draws, bins=4)
+        self.assertEqual(sum(item["count"] for item in bins), len(draws))
+        self.assertAlmostEqual(bins[-1]["x1"], 40.0)
+
+    def test_displayed_margin_is_the_local_linear_fit(self):
+        config = load_yaml("model.yaml")
+        config["trend"]["bootstrap_draws"] = 25
+        early = _observation(1, "media", "original_with_methodology_or_crosstabs", margin=1, midpoint=date(2026, 8, 1).toordinal())
+        late = _observation(2, "unknown", "original_with_methodology_or_crosstabs", margin=8, midpoint=date(2026, 9, 20).toordinal(), pollster="Other Poll")
+        weighted, _half, _label = build_weights([early, late], config, date(2026, 10, 2))
+        series = series_from_weights(weighted, config, date(2026, 10, 2))
+        newest = max(item.observation.midpoint for item in weighted)
+        held = local_linear_at(series["x"], series["y"], series["w"], newest, float(config["trend"]["bandwidth_days"]))
+        self.assertAlmostEqual(float(series["estimate"][-1]), held)
+        bands = cluster_bootstrap(weighted, config, date(2026, 10, 2), draws=25)
+        summary = bands["drawSummary"]
+        self.assertEqual(summary["maximum"], float(np.nanmax(bands["currentDraws"])))
+        self.assertEqual(summary["minimum"], float(np.nanmin(bands["currentDraws"])))
+        self.assertAlmostEqual(float(bands["high95"][-1]), summary["p97_5"])
+        self.assertAlmostEqual(float(bands["low80"][-1]), summary["p10"])
+        self.assertEqual(bands["intervalMethod"], "percentile")
+
     def test_canonical_record_is_the_approved_primary(self):
         key = choose_canonical(
             [
@@ -190,6 +276,7 @@ class SnapshotTests(unittest.TestCase):
         try:
             init_db()
             from txpoll.db import get_session
+            from txpoll.service import effective_config, load_polls, observations_for_model
 
             session = get_session()
             summary = import_historical(session, force=True)
@@ -207,6 +294,36 @@ class SnapshotTests(unittest.TestCase):
             self.assertGreater(snapshot["overview"]["high95"], snapshot["overview"]["margin"])
             self.assertIn("not a forecast", snapshot["meta"]["disclaimer"])
             self.assertIsNone(snapshot["comparisons"]["rcp"])
+            self.assertEqual(snapshot["meta"]["modelVersion"], "1.2.0")
+            self.assertEqual(snapshot["uncertainty"]["method"], "gaussian_posterior")
+            self.assertEqual(snapshot["meta"]["engine"], "Dynamic latent polling trend")
+            self.assertIsNotNone(snapshot["overview"]["low50"])
+            self.assertIn("measurement", next(row for row in snapshot["polls"] if row["externalKey"] == "fox-2026-09"))
+            self.assertTrue(snapshot["modelLab"]["rows"])
+            self.assertNotIn(2026, snapshot["modelLab"]["cycles"])
+            self.assertEqual(snapshot["uncertainty"]["pointEstimate"], snapshot["overview"]["margin"])
+            self.assertGreaterEqual(snapshot["uncertainty"]["maximum"], snapshot["uncertainty"]["p97_5"])
+            self.assertLessEqual(snapshot["uncertainty"]["minimum"], snapshot["uncertainty"]["p2_5"])
+            self.assertAlmostEqual(snapshot["overview"]["low80"], snapshot["uncertainty"]["p10"])
+            self.assertAlmostEqual(snapshot["overview"]["high95"], snapshot["uncertainty"]["p97_5"])
+            held_out = [row for row in snapshot["polls"] if not row["inModel"]]
+            self.assertTrue(held_out)
+            self.assertTrue(all(row["modelStatus"] and row["modelStatusDetail"] for row in held_out))
+            mason = next(row for row in snapshot["polls"] if row["externalKey"] == "mason-dixon-2026-09")
+            self.assertEqual(mason["modelStatus"], "excluded_conflicting_sources")
+            self.assertTrue(all(row["weights"]["sponsorship"] == 1 for row in snapshot["polls"] if row["weights"]))
+            emerson = [row for row in snapshot["polls"] if row["inModel"] and row["canonical"] == "Emerson College Polling"]
+            self.assertEqual(len(emerson), 2)
+            self.assertTrue(all(row["weights"]["clusterSize"] == 1 for row in emerson))
+            from txpoll.service import set_exclusion
+
+            quantus = next(row for row in snapshot["polls"] if row["externalKey"] == "quantus-2026-06")
+            set_exclusion(session, quantus["id"], False, "")
+            included = observations_for_model(load_polls(session), effective_config(session))
+            self.assertIn(quantus["id"], {item.poll_id for item in included})
+            mason = next(row for row in snapshot["polls"] if row["externalKey"] == "mason-dixon-2026-09")
+            with self.assertRaises(ValueError):
+                set_exclusion(session, mason["id"], False, "")
             # Fox July's asterisk remainder is not the tracker's 4 points.
             fox = next(row for row in snapshot["polls"] if row["externalKey"] == "fox-2026-07")
             self.assertTrue(any("TPP says someone else/DK is 4" in note for note in fox["warnings"]))
@@ -216,6 +333,38 @@ class SnapshotTests(unittest.TestCase):
             reset_engine()
             os.environ.pop("POLLING_DATABASE_URL", None)
             Path(handle.name).unlink(missing_ok=True)
+
+
+def _observation(poll_id, sponsor_type, source_code, margin=4.0, midpoint=None, pollster="Example Poll"):
+    midpoint = date(2026, 9, 20).toordinal() if midpoint is None else midpoint
+    return Observation(
+        poll_id=poll_id,
+        external_key=f"k-{poll_id}",
+        pollster=pollster,
+        pollster_canonical=pollster,
+        sponsor=None,
+        sponsor_type=sponsor_type,
+        midpoint=float(midpoint),
+        field_label="2026-09-20",
+        release_date="2026-09-21",
+        sample_size=1000,
+        sample_type="LV",
+        reported_moe=3.0,
+        ballot_configuration="two_candidate",
+        share_a=50 + margin / 2,
+        share_b=50 - margin / 2,
+        other_pp=None,
+        undecided_pp=None,
+        margin=margin,
+        se_margin_pp=3.0,
+        n_eff=1000,
+        n_eff_estimated=True,
+        precision_note="test",
+        source_label="test",
+        review_status="approved",
+        source_completeness=source_code,
+        sampling_variance_pp=9.0,
+    )
 
 
 if __name__ == "__main__":

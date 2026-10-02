@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/apiBase";
+import { electionHasRosterScores } from "../lib/rosterScoreElection";
+import { ElectionDatasetNotice } from "./ElectionDatasetNotice";
 import { BallotScoreHeatmap, type BallotMapCell } from "./BallotScoreHeatmap";
 import {
   FALLBACK_DAYS,
@@ -167,7 +169,7 @@ function mapLines(row: ViewRow, mode: "absolute" | "compare", dayLabel: string):
   };
 }
 
-export function BallotScoreScreen() {
+export function BallotScoreScreen({ electionId }: { electionId: string }) {
   const [summary, setSummary] = useState<BallotScoreSummary | null>(null);
   const [ev, setEv] = useState<EvPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -292,6 +294,10 @@ export function BallotScoreScreen() {
   const evCum2026on2022 = bucketStat(cumulativeBucket(evState, evDay, "y2026"), "score2022");
   const evDaily2022 = bucketStat(dailyBucket(evState, evDay, "y2022"), "score2022");
   const evCum2022 = bucketStat(cumulativeBucket(evState, evDay, "y2022"), "score2022");
+
+  if (electionId && !electionHasRosterScores(electionId)) {
+    return <ElectionDatasetNotice dataset="Ballot scores" />;
+  }
 
   return (
     <main className="enr-ballot">

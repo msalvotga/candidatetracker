@@ -99,6 +99,9 @@ def main(argv: list[str] | None = None) -> int:
             unmerge_poll(session, args.id)
             recompute(session, software_version())
             print("ok")
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     finally:
         session.close()
     return 0

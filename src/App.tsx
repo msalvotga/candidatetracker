@@ -366,7 +366,6 @@ export function App() {
     () => civixElectionIdFromCatalog(selectedElectionId),
     [selectedElectionId],
   );
-
   useEffect(() => {
     if (useBackend !== true) {
       setIngestStatus(null);
@@ -592,6 +591,7 @@ export function App() {
 
   return (
     <div className="enr-app">
+      {screen === "polling" ? null : (
       <AppChrome
         active={screen}
         onNavigate={(next) => {
@@ -609,6 +609,7 @@ export function App() {
         onSelectElection={setSelectedElectionId}
         listLoading={listLoading}
       />
+      )}
 
       {screen === "dashboard" && current && ribbonReporting ? (
         <ReportingRibbon
@@ -624,16 +625,30 @@ export function App() {
       {screen === "settings" ? (
         <SettingsScreen onCatalogChanged={bumpCatalog} backendLabel={backendLabel} />
       ) : null}
-      {screen === "ballot-score" ? <BallotScoreScreen /> : null}
-      {screen === "county-roster" ? <CountyRosterScreen /> : null}
+        {screen === "ballot-score" ? (
+        <BallotScoreScreen electionId={trackedCivixElectionId ?? ""} />
+      ) : null}
+      {screen === "county-roster" ? (
+        <CountyRosterScreen electionId={trackedCivixElectionId ?? ""} />
+      ) : null}
       {screen === "ev-roster" && EV_ROSTER_ENABLED ? <EvRosterScreen /> : null}
-      {screen === "polling" ? <PollingScreen /> : null}
+      {screen === "polling" ? (
+        <PollingScreen
+          onLeave={() => {
+            setScreen("dashboard");
+            if (window.location.hash === "#polling") {
+              window.history.replaceState(null, "", window.location.pathname + window.location.search);
+            }
+          }}
+        />
+      ) : null}
 
       {screen === "dashboard" || screen === "manual-votes" ? (
       <main className="enr-main">
         {screen === "manual-votes" ? (
           <ManualVotesScreen
-            onOpenSettings={() => setScreen("settings")}
+            key={selectedElectionId ?? "none"}
+            electionId={trackedCivixElectionId ?? ""}
             onVotesApplied={(electionId) => {
               if (civixElectionIdFromCatalog(selectedElectionId) === electionId) {
                 void refreshLoadedElection();

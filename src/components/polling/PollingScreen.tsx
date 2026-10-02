@@ -29,22 +29,62 @@ type PollRow = {
   approved: boolean;
   inModel: boolean;
   excluded: boolean;
+  modelStatus: string;
+  modelStatusLabel: string;
+  modelStatusDetail: string;
+  preferredVersion: string | null;
+  sourceCompleteness: string;
+  sourceCompletenessLabel: string;
+  sameSampleNote: string;
+  canonical: string;
   warnings: string[];
   messages: { level: string; code: string; message: string }[];
   weights: null | {
     precision: number;
+    precisionShare: number;
     recency: number;
     sampleType: number;
+    sourceQuality: number;
     sponsorship: number;
+    sponsorTable: number;
     cluster: number;
     clusterSize: number;
+    nearestGapDays: number | null;
+    outlierFactor: number;
+    raw: number;
     final: number;
     seMargin: number;
     nEff: number | null;
     nEffEstimated: boolean;
     precisionNote: string;
+    designEffect: number | null;
+    designEffectEstimated: boolean;
+    samplingVariance: number;
+    varianceFloor: number;
+    totalVariance: number;
+    ageDays: number;
+    baseHalfLife: number;
+    effectiveHalfLife: number;
+    rawMargin: number;
+    adjustedMargin: number | null;
     houseEffect: number | null;
+    formula: string;
   };
+  measurement?: {
+    samplingVariance: number;
+    excessVariance: number;
+    methodVariance: number;
+    populationVariance: number;
+    totalVariance: number;
+    samplingSe: number;
+    totalSe: number;
+    nEff: number | null;
+    nEffStatus: string;
+    samplingStatus: string;
+    moeStatus: string;
+    note: string;
+  } | null;
+  impact?: { withPoll: number; withoutPoll: number | null; impact: number | null; measurementSe: number } | null;
   sources: { tier: number; type: string; url: string; publisher: string | null; isPrimary: boolean; notes: string | null; localFile: string | null }[];
   methodology: string | null;
   results: { candidate: string; party: string | null; percentage: number | null; symbol: string | null; type: string }[];
@@ -60,8 +100,18 @@ type Snapshot = {
     generatedAt: string;
     softwareVersion: string;
     disclaimer: string;
+    modelVersion: string;
+    baseHalfLifeDays: number;
     halfLifeDays: number;
     halfLifeLabel: string;
+    weightFormula: string;
+    intervalMethod: string;
+    pointEstimateDefinition: string;
+    engine?: string;
+    processSd?: number | null;
+    ewmaHalfLife?: number | null;
+    whyQ?: string | null;
+    whyHalfLife?: string | null;
     colors: { candidate_a_color?: string; candidate_b_color?: string };
     candidateA: string;
     candidateB: string;
@@ -69,8 +119,15 @@ type Snapshot = {
   overview: {
     label: string;
     margin: number | null;
+    interval50Label?: string | null;
     interval80Label: string | null;
     interval95Label: string | null;
+    emerging?: string | null;
+    recentPolls?: number | null;
+    recentPollsters?: number | null;
+    averageMeasurementSe?: number | null;
+    median?: number | null;
+    sd?: number | null;
     pollsInModel: number;
     pollstersInModel: number;
     pollsStored: number;
@@ -82,10 +139,47 @@ type Snapshot = {
     lastFieldMidpoint: string | null;
     trendHoldNote: string;
     houseEffectApplied: boolean;
+    statusCounts: { total: number; included: number; pending: number; excluded: number };
+    effectivePollCount: number | null;
+    weightConcentration: { largest: number | null; top3: number | null; top5: number | null };
+    minimumPollsToDraw: number;
   };
+  specification: Record<string, unknown>;
+  uncertainty: Record<string, number | string | null> & { histogram?: { x0: number; x1: number; count: number }[]; pointEstimateDefinition?: string; method?: string };
+  sensitivity: {
+    minimum: number;
+    maximum: number;
+    median: number;
+    range: number;
+    minimumLabel: string;
+    maximumLabel: string;
+    medianLabel: string;
+    sentence: string;
+    largestChanges: { name: string; label: string; gapFromPrimary: number }[];
+  };
+  modelChange: null | {
+    priorVersion: string;
+    currentVersion: string;
+    priorLabel: string;
+    currentLabel: string;
+    priorMargin: number;
+    currentMargin: number;
+    priorInterval80: string | null;
+    priorInterval95: string | null;
+    note: string;
+    weightChanges: { pollster: string; field: string; priorWeight: number; currentWeight: number; reason: string }[];
+  };
+  clusterDiagnostics: { pollster: string; midpoint: string; clusterSize: number; clusterFactor: number; nearestGapDays: number | null; relation: string; sameSampleNote: string }[];
   daily: {
     date: string;
+    pollsToDate: number | null;
     weighted: number | null;
+    latent?: number | null;
+    low50?: number | null;
+    high50?: number | null;
+    conservative?: number | null;
+    fast?: number | null;
+    straight?: number | null;
     low80: number | null;
     high80: number | null;
     low95: number | null;
@@ -96,18 +190,51 @@ type Snapshot = {
     lvOnly: number | null;
     rvOnly: number | null;
   }[];
+  movement?: { days: number; change: number; sd: number | null; low95: number | null; high95: number | null; newPolls: number; newPollsters: number }[];
+  modelLab?: {
+    whyQ: string;
+    whyHalfLife: string;
+    whyHouse?: string;
+    objective: string;
+    excludedFromObjective: string;
+    dateLimitation: string;
+    source: string;
+    races: number;
+    cycles: number[];
+    selected: Record<string, unknown>;
+    leaveOneCycleQ: number[];
+    leaveOneCycleHalfLife: number[];
+    rows: { model: string; selected: boolean; rmse7: number | null; rmse14: number | null; rmse28: number | null; mae: number | null; coverage95: number | null; logLik14: number | null; residualAutocorr: number | null; detail: string }[];
+  };
   polls: PollRow[];
-  comparisons: Record<string, string | number | null>;
+  comparisons: Record<string, string | number | null> & {
+    rows?: {
+      id: string;
+      name: string;
+      label: string | null;
+      margin: number | null;
+      explanation: string;
+      polls: number | null;
+      window: string | null;
+      meanAgeDays: number | null;
+      weightedMidpoint: string | null;
+      lv: number | null;
+      rv: number | null;
+      ballots: string[];
+    }[];
+  };
   subgroups: {
     dimension: string;
+    group: string;
     normalized: string;
     originalLabels: string[];
     polls: number;
+    trendPolls: number;
     knownN: number | null;
     nMissing: number;
     currentLabel: string;
     precisionNote: string;
-    points: { pollster: string; date: string; margin: number; n: number | null }[];
+    points: { pollster: string; date: string; margin: number; n: number | null; sourceUrl: string | null; sourcePublisher: string | null }[];
   }[];
   pollsters: {
     pollster: string;
@@ -119,12 +246,13 @@ type Snapshot = {
     houseEffect: number | null;
     houseSe: number | null;
   }[];
-  quality: { label: string; note: string; meanCompleteness: number | null; issues: Record<string, number> };
+  quality: { label: string; note: string; meanCompleteness: number | null; issues: Record<string, number>; checks: { code: string; count: number; note: string }[] };
   settings: {
     recency: { half_life_days: number; adaptive: { enabled: boolean } };
-    sample_type: { mode: string; weights: { LV: number; RV: number; Adults: number } };
+    sample_type: { mode: string; weights: { LV: number; RV: number; Adults: number; Other?: number } };
     precision: { tau_pp: number };
-    sponsorship_weights: Record<string, number>;
+    source_completeness: Record<string, number>;
+    sponsorship_weights: Record<string, number | boolean>;
     outliers: { standardized_threshold: number };
     clustering: { window_days: number; method: string };
     house_effects: { apply: boolean };
@@ -133,14 +261,14 @@ type Snapshot = {
   };
 };
 
-const TABS = ["Overview", "Polls", "Comparison", "Subgroups", "Pollsters", "Settings", "Review"] as const;
+const TABS = ["Overview", "Polls", "Comparison", "Model lab", "Subgroups", "Pollsters", "Settings", "Review"] as const;
 
 function pct(value: number | null | undefined, digits = 0) {
   if (value == null || Number.isNaN(value)) return "—";
   return `${value.toFixed(digits)}`;
 }
 
-export function PollingScreen() {
+export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
   const [state, setState] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<(typeof TABS)[number]>("Overview");
@@ -149,7 +277,7 @@ export function PollingScreen() {
   const [sampleFilter, setSampleFilter] = useState("all");
   const [pollsterFilter, setPollsterFilter] = useState("all");
   const [ballotFilter, setBallotFilter] = useState("all");
-  const [modelOnly, setModelOnly] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("all");
   const [dimension, setDimension] = useState("all");
 
   async function load() {
@@ -188,7 +316,10 @@ export function PollingScreen() {
   const pollsters = useMemo(() => [...new Set(state?.polls.map((poll) => poll.pollster) ?? [])], [state]);
   const ballots = useMemo(() => [...new Set(state?.polls.map((poll) => poll.ballot || "unspecified") ?? [])], [state]);
   const filtered = (state?.polls ?? []).filter((poll) => {
-    if (modelOnly && !poll.inModel) return false;
+    if (statusFilter === "included" && !poll.inModel) return false;
+    if (statusFilter === "pending" && poll.modelStatus !== "pending_review") return false;
+    if (statusFilter === "excluded" && (poll.inModel || poll.modelStatus === "pending_review")) return false;
+    if (statusFilter === "out" && poll.inModel) return false;
     if (sampleFilter !== "all" && poll.sampleType !== sampleFilter) return false;
     if (pollsterFilter !== "all" && poll.pollster !== pollsterFilter) return false;
     if (ballotFilter !== "all" && (poll.ballot || "unspecified") !== ballotFilter) return false;
@@ -201,7 +332,10 @@ export function PollingScreen() {
   return (
     <div className="poll-page">
       <div className="poll-wrap">
-        <div className="poll-kicker">Polling laboratory · {state.meta.asOf}</div>
+        <div className="poll-top">
+          <div className="poll-kicker">Polling laboratory · {state.meta.asOf}</div>
+          {onLeave ? <button type="button" className="linkish" onClick={onLeave}>Election night tracker</button> : null}
+        </div>
         <h1>Texas Governor Poll Trend</h1>
         <p className="poll-disclaimer">{state.meta.disclaimer} A positive number is a lead for {state.meta.candidateA}. The RealClearPolitics average is never an input.</p>
         {error ? <div className="poll-error">{error}</div> : null}
@@ -212,7 +346,7 @@ export function PollingScreen() {
         </div>
         {busy ? <p className="poll-muted">Recalculating…</p> : null}
 
-        {tab === "Overview" ? <Overview state={state} onSelect={setSelectedId} /> : null}
+        {tab === "Overview" ? <Overview state={state} onSelect={setSelectedId} onOpenOut={() => { setStatusFilter("out"); setTab("Polls"); }} /> : null}
         {tab === "Polls" ? (
           <PollTable
             rows={filtered}
@@ -221,16 +355,18 @@ export function PollingScreen() {
             sampleFilter={sampleFilter}
             pollsterFilter={pollsterFilter}
             ballotFilter={ballotFilter}
-            modelOnly={modelOnly}
+            statusFilter={statusFilter}
             onSample={setSampleFilter}
             onPollster={setPollsterFilter}
             onBallot={setBallotFilter}
-            onModelOnly={setModelOnly}
+            onStatus={setStatusFilter}
             onSelect={setSelectedId}
             selectedId={selectedId}
+            onPost={post}
           />
         ) : null}
         {tab === "Comparison" ? <Comparison state={state} /> : null}
+        {tab === "Model lab" ? <ModelLab state={state} /> : null}
         {tab === "Subgroups" ? <Subgroups state={state} dimension={dimension} onDimension={setDimension} /> : null}
         {tab === "Pollsters" ? <Pollsters state={state} /> : null}
         {tab === "Settings" ? <Settings state={state} onSave={(patch) => post("/api/polling/settings", patch)} onReset={() => post("/api/polling/settings/reset")} /> : null}
@@ -241,7 +377,7 @@ export function PollingScreen() {
   );
 }
 
-function Overview({ state, onSelect }: { state: Snapshot; onSelect: (id: number) => void }) {
+function Overview({ state, onSelect, onOpenOut }: { state: Snapshot; onSelect: (id: number) => void; onOpenOut: () => void }) {
   const modeled = state.polls.filter((poll) => poll.inModel).sort((a, b) => (b.weights?.final ?? 0) - (a.weights?.final ?? 0));
   return (
     <>
@@ -251,26 +387,40 @@ function Overview({ state, onSelect }: { state: Snapshot; onSelect: (id: number)
           <div className="poll-margin" style={{ color: (state.overview.margin ?? 0) >= 0 ? state.meta.colors.candidate_a_color : state.meta.colors.candidate_b_color }}>
             {state.overview.label}
           </div>
+          <p>50% interval: {state.overview.interval50Label ?? "—"}</p>
           <p>80% interval: {state.overview.interval80Label ?? "—"}</p>
           <p>95% interval: {state.overview.interval95Label ?? "—"}</p>
+          {state.overview.emerging ? <p className="poll-warn">{state.overview.emerging}</p> : null}
           <p className="poll-muted">{state.overview.trendHoldNote} Newest fieldwork midpoint: {state.overview.lastFieldMidpoint ?? "—"}.</p>
           <div className="poll-meta">
-            <div><span>Polls in model</span>{state.overview.pollsInModel} of {state.overview.pollsStored}</div>
+            <div><span>Polls in model</span><button type="button" className="linkish" onClick={onOpenOut}>{state.overview.pollsInModel} of {state.overview.pollsStored}</button></div>
             <div><span>Pollsters</span>{state.overview.pollstersInModel}</div>
+            <div><span>Polls in recent evidence</span>{state.overview.recentPolls ?? "—"}</div>
+            <div><span>Distinct pollsters, recent</span>{state.overview.recentPollsters ?? "—"}</div>
+            <div><span>Effective poll count</span>{state.overview.effectivePollCount == null ? "—" : state.overview.effectivePollCount.toFixed(2)}</div>
+            <div><span>Average measurement SE</span>{state.overview.averageMeasurementSe == null ? "—" : state.overview.averageMeasurementSe.toFixed(1)}</div>
             <div><span>LV / RV counts</span>{state.overview.lvCount} / {state.overview.rvCount}</div>
-            <div><span>LV / RV weight</span>{pct((state.overview.lvWeightShare ?? 0) * 100)}% / {pct((state.overview.rvWeightShare ?? 0) * 100)}%</div>
-            <div><span>Half-life</span>{state.meta.halfLifeDays} days</div>
-            <div><span>House effects</span>{state.overview.houseEffectApplied ? "Applied" : "Off"}</div>
+            <div><span>House effects</span>{state.overview.houseEffectApplied ? "Shrunk toward zero" : "Off"}</div>
           </div>
-          <p className="poll-muted">{state.meta.halfLifeLabel}. Latest release: {state.overview.latestRelease?.pollster ?? "—"} {state.overview.latestRelease?.releaseDate ?? ""}.</p>
+          <p className="poll-muted">{state.meta.pointEstimateDefinition}</p>
+          <p className="poll-muted">{state.meta.whyQ}</p>
+          <p className="poll-muted">Comparison EWMA half-life: {state.meta.ewmaHalfLife ?? "—"} days. {state.meta.whyHalfLife}</p>
         </section>
         <TrendChart state={state} />
       </div>
+      <Specification state={state} />
+      <ChangeAnalysis state={state} />
+      <Uncertainty state={state} />
+      {state.modelChange ? <ModelChange change={state.modelChange} /> : null}
       <h2>What is driving the estimate</h2>
       <div className="poll-table-wrap">
         <table className="poll-table">
           <thead>
-            <tr><th>Poll</th><th>Margin</th><th>Precision</th><th>Recency</th><th>Sample</th><th>Sponsor</th><th>Cluster</th><th>Final weight</th></tr>
+            <tr>
+              <th>Poll</th><th>Margin</th>
+              <th title="Inverse-variance factor: 1 / (margin SE² + tau²). It is not a share of the model. The final weight multiplies it by recency, sample type, source completeness, clustering, and the outlier factor, then normalizes.">Precision factor</th>
+              <th>Recency</th><th>Sample</th><th>Source completeness</th><th>Cluster</th><th>Final weight</th>
+            </tr>
           </thead>
           <tbody>
             {modeled.map((poll) => (
@@ -280,7 +430,7 @@ function Overview({ state, onSelect }: { state: Snapshot; onSelect: (id: number)
                 <td>{poll.weights ? poll.weights.precision.toFixed(3) : "—"}</td>
                 <td>{poll.weights ? poll.weights.recency.toFixed(2) : "—"}</td>
                 <td>{poll.weights ? `${poll.sampleType} × ${poll.weights.sampleType.toFixed(2)}` : "—"}</td>
-                <td>{poll.weights ? poll.weights.sponsorship.toFixed(2) : "—"}</td>
+                <td title={poll.sourceCompletenessLabel}>{poll.weights ? poll.weights.sourceQuality.toFixed(2) : "—"}</td>
                 <td>{poll.weights ? `${poll.weights.cluster.toFixed(2)} (${poll.weights.clusterSize})` : "—"}</td>
                 <td>{poll.weights ? `${(poll.weights.final * 100).toFixed(1)}%` : "—"}</td>
               </tr>
@@ -292,8 +442,208 @@ function Overview({ state, onSelect }: { state: Snapshot; onSelect: (id: number)
   );
 }
 
+function Specification({ state }: { state: Snapshot }) {
+  const spec = state.specification;
+  return (
+    <section className="poll-card">
+      <h2>Current model specification</h2>
+      <div className="poll-meta">
+        <div><span>Version</span>{String(spec.modelVersion)}</div>
+        <div><span>Primary engine</span>{String(spec.primaryEngine ?? "dynamic latent polling trend")}</div>
+        <div><span>Daily process SD</span>{spec.processSd == null ? "—" : `${Number(spec.processSd).toFixed(2)} points`}</div>
+        <div><span>Excess variance</span>{spec.excessVariance == null ? "—" : `${Number(spec.excessVariance).toFixed(2)}`}</div>
+        <div><span>House-effect prior SD</span>{spec.sigmaHouse == null ? "—" : `${Number(spec.sigmaHouse).toFixed(2)}`}</div>
+        <div><span>EWMA comparison</span>{spec.ewmaHalfLife == null ? "—" : `${String(spec.ewmaHalfLife)} days`}</div>
+        <div><span>Conservative comparison</span>{spec.conservativeHalfLife == null ? "—" : `${String(spec.conservativeHalfLife)} days`}</div>
+        <div><span>LV / RV / Adults</span>{String(spec.lvMultiplier)} / {String(spec.rvMultiplier)} / {String(spec.adultsMultiplier)}</div>
+        <div><span>Variance floor</span>{String(spec.tauPp)} pp</div>
+        <div><span>Cluster window</span>{String(spec.clusterWindowDays)} days</div>
+        <div><span>Bandwidth</span>{String(spec.bandwidthDays)} days</div>
+        <div><span>House effects</span>{spec.houseEffectsApplied ? "On" : "Off"}</div>
+        <div><span>Bootstrap draws</span>{String(spec.bootstrapDraws)}</div>
+        <div><span>Interval</span>{String(spec.intervalMethod)}</div>
+        <div><span>Sponsor multipliers</span>{spec.sponsorMultipliersInDefault ? "On" : "Off"}</div>
+        <div><span>Outlier factor</span>{String(spec.outlierMultiplier)}</div>
+      </div>
+      <p className="poll-muted">{String(spec.whyQ ?? "")}</p>
+      <p className="poll-muted">{String(spec.whyHalfLife ?? "")} The weight formula still applies to the local-linear comparison: {String(spec.weightFormula)}.</p>
+    </section>
+  );
+}
+
+function ChangeAnalysis({ state }: { state: Snapshot }) {
+  const rows = state.movement ?? [];
+  const impacts = state.polls.filter((poll) => poll.inModel && poll.impact);
+  return (
+    <section className="poll-card">
+      <h2>Change analysis</h2>
+      <p className="poll-muted">Change in the latent polling margin, with the posterior uncertainty of that change. New polls are those whose information date falls inside the window.</p>
+      {rows.length === 0 ? <p>No change window is available yet.</p> : (
+        <div className="poll-table-wrap">
+          <table className="poll-table">
+            <thead><tr><th>Window</th><th>Change</th><th>95% interval of the change</th><th>New polls</th><th>Independent pollsters</th></tr></thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.days}>
+                  <td>{row.days} day{row.days === 1 ? "" : "s"}</td>
+                  <td>{row.change >= 0 ? "+" : ""}{row.change.toFixed(2)}</td>
+                  <td>{row.low95 == null || row.high95 == null ? "—" : `${row.low95.toFixed(1)} to ${row.high95.toFixed(1)}`}</td>
+                  <td>{row.newPolls}</td>
+                  <td>{row.newPollsters}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <h3>What each poll did to today's estimate</h3>
+      <div className="poll-table-wrap">
+        <table className="poll-table">
+          <thead><tr><th>Poll</th><th>Poll margin</th><th>Measurement SE</th><th>Without this poll</th><th>With this poll</th><th>Impact</th></tr></thead>
+          <tbody>
+            {impacts.map((poll) => (
+              <tr key={poll.id}>
+                <td>{poll.pollster}<div className="poll-muted">{poll.fieldLabel}</div></td>
+                <td>{poll.margin == null ? "—" : poll.margin.toFixed(1)}</td>
+                <td>{poll.impact?.measurementSe == null ? "—" : poll.impact.measurementSe.toFixed(1)}</td>
+                <td>{poll.impact?.withoutPoll == null ? "—" : poll.impact.withoutPoll.toFixed(1)}</td>
+                <td>{poll.impact?.withPoll == null ? "—" : poll.impact.withPoll.toFixed(1)}</td>
+                <td>{poll.impact?.impact == null ? "—" : `${poll.impact.impact >= 0 ? "+" : ""}${poll.impact.impact.toFixed(2)}`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function Uncertainty({ state }: { state: Snapshot }) {
+  const u = state.uncertainty;
+  const gaussian = u.method === "gaussian_posterior";
+  const rows: [string, string][] = [
+    ["Draws", String(u.n ?? "—")],
+    ["Mean", num(u.mean)],
+    ["Median", num(u.median)],
+    ["SD", num(u.sd)],
+    ["Minimum", num(u.minimum)],
+    ["Maximum", num(u.maximum)],
+    ["2.5th", num(u.p2_5)],
+    ["5th", num(u.p5)],
+    ["10th", num(u.p10)],
+    ["16th", num(u.p16)],
+    ["25th", num(u.p25)],
+    ["50th", num(u.p50)],
+    ["75th", num(u.p75)],
+    ["84th", num(u.p84)],
+    ["90th", num(u.p90)],
+    ["95th", num(u.p95)],
+    ["97.5th", num(u.p97_5)],
+    ["Skewness", num(u.skewness)],
+  ];
+  return (
+    <section className="poll-card">
+      <h2>{gaussian ? "Posterior uncertainty" : "Uncertainty draws"}</h2>
+      <p className="poll-muted">{gaussian
+        ? "The latent margin's posterior is Gaussian. The mean and the median match. The 50% interval is the mean plus or minus 0.67 standard deviations, the 80% interval plus or minus 1.28, and the 95% interval plus or minus 1.96. The histogram is that normal curve scaled to 400. It is not a bootstrap and not a win probability."
+        : "These are the cluster-bootstrap draws for the local-linear comparison. The 80% interval is the 10th to 90th percentile. The 95% interval is the 2.5th to 97.5th percentile."} {u.pointEstimateDefinition}</p>
+      <div className="poll-meta">
+        {rows.map(([label, value]) => <div key={label}><span>{label}</span>{value}</div>)}
+      </div>
+      <DrawHistogram bins={u.histogram ?? []} />
+    </section>
+  );
+}
+
+function num(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "—";
+}
+
+function DrawHistogram({ bins }: { bins: { x0: number; x1: number; count: number }[] }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const host = ref.current;
+    if (!host || bins.length === 0) return;
+    let plotly: { purge: (el: HTMLElement) => void } | null = null;
+    let cancelled = false;
+    (async () => {
+      const Plotly = (await import("plotly.js-basic-dist")).default;
+      if (cancelled || !host) return;
+      plotly = Plotly;
+      await Plotly.newPlot(host, [{
+        type: "bar",
+        x: bins.map((bin) => (bin.x0 + bin.x1) / 2),
+        y: bins.map((bin) => bin.count),
+        width: bins.map((bin) => Math.max(0.2, (bin.x1 - bin.x0) * 0.9)),
+        marker: { color: "#0b2b52" },
+        hovertemplate: "%{x:.1f}<br>%{y} draws<extra></extra>",
+      }], {
+        margin: { l: 40, r: 12, t: 10, b: 36 },
+        height: 220,
+        paper_bgcolor: "#fff",
+        plot_bgcolor: "#fff",
+        xaxis: { title: "Simulated margin (points)" },
+        yaxis: { title: "Draws" },
+        showlegend: false,
+      }, { responsive: true, displaylogo: false });
+    })();
+    return () => {
+      cancelled = true;
+      if (plotly && host) plotly.purge(host);
+    };
+  }, [bins]);
+  return <div ref={ref} />;
+}
+
+function ModelChange({ change }: { change: NonNullable<Snapshot["modelChange"]> }) {
+  return (
+    <section className="poll-card">
+      <h2>Before and after {change.currentVersion}</h2>
+      <p>{change.note}</p>
+      <div className="poll-meta">
+        <div><span>{change.priorVersion}</span>{change.priorLabel}</div>
+        <div><span>{change.currentVersion}</span>{change.currentLabel}</div>
+        <div><span>Prior 80%</span>{change.priorInterval80 || "—"}</div>
+        <div><span>Prior 95%</span>{change.priorInterval95 || "—"}</div>
+      </div>
+      {change.weightChanges.length === 0 ? <p className="poll-muted">No poll weight moved by more than 0.05 points of share.</p> : (
+        <div className="poll-table-wrap">
+          <table className="poll-table">
+            <thead><tr><th>Poll</th><th>Prior weight</th><th>Current weight</th><th>Why</th></tr></thead>
+            <tbody>
+              {change.weightChanges.map((row) => (
+                <tr key={`${row.pollster}-${row.field}`}>
+                  <td>{row.pollster}<div className="poll-muted">{row.field}</div></td>
+                  <td>{(row.priorWeight * 100).toFixed(1)}%</td>
+                  <td>{(row.currentWeight * 100).toFixed(1)}%</td>
+                  <td style={{ whiteSpace: "normal", minWidth: 280 }}>{row.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function chartAxis(state: Snapshot) {
+  const minPolls = state.overview.minimumPollsToDraw || 3;
+  const modeled = state.polls.filter((poll) => poll.inModel && poll.margin != null);
+  const dense = state.daily.filter((row) => (row.pollsToDate ?? 0) >= minPolls);
+  const core = [
+    ...modeled.map((poll) => poll.margin as number),
+    ...dense.map((row) => row.latent ?? row.weighted).filter((value): value is number => value != null),
+  ];
+  return {
+    yMin: core.length ? Math.min(...core) - 6 : -15,
+    yMax: core.length ? Math.max(...core) + 6 : 15,
+  };
+}
+
 function TrendChart({ state }: { state: Snapshot }) {
   const ref = useRef<HTMLDivElement>(null);
+  const axis = chartAxis(state);
   useEffect(() => {
     const host = ref.current;
     if (!host) return;
@@ -306,13 +656,31 @@ function TrendChart({ state }: { state: Snapshot }) {
       const days = state.daily.map((row) => row.date);
       const a = state.meta.colors.candidate_a_color || "#9f1d2e";
       const modeled = state.polls.filter((poll) => poll.inModel && poll.margin != null);
+      const minPolls = state.overview.minimumPollsToDraw || 3;
+      const denseEnough = (row: Snapshot["daily"][number]) => (row.pollsToDate ?? 0) >= minPolls;
+      const { yMin, yMax } = chartAxis(state);
+      const visual = (row: Snapshot["daily"][number], key: "low95" | "high95" | "low80" | "high80" | "low50" | "high50") => {
+        if (!denseEnough(row) || row[key] == null) return null;
+        return Math.min(yMax, Math.max(yMin, row[key] as number));
+      };
+      const bandHover = (row: Snapshot["daily"][number], key: "low95" | "high95" | "low80" | "high80" | "low50" | "high50") => {
+        const actual = row[key];
+        if (actual == null) return "";
+        const shown = visual(row, key);
+        if (shown != null && Math.abs(shown - actual) > 0.05) return `${actual.toFixed(1)} (extends beyond the axis)`;
+        return actual.toFixed(1);
+      };
       const traces = [
-        { x: days, y: state.daily.map((row) => row.high95), mode: "lines", line: { width: 0 }, hoverinfo: "skip", showlegend: false },
-        { x: days, y: state.daily.map((row) => row.low95), mode: "lines", fill: "tonexty", fillcolor: "rgba(15,43,82,0.12)", line: { width: 0 }, name: "95% interval", hovertemplate: "%{x}<br>95% band %{y:.1f}<extra></extra>" },
-        { x: days, y: state.daily.map((row) => row.high80), mode: "lines", line: { width: 0 }, hoverinfo: "skip", showlegend: false },
-        { x: days, y: state.daily.map((row) => row.low80), mode: "lines", fill: "tonexty", fillcolor: "rgba(15,43,82,0.2)", line: { width: 0 }, name: "80% interval" },
-        { x: days, y: state.daily.map((row) => row.weighted), mode: "lines", name: "Weighted trend", line: { color: "#0b2b52", width: 2.4 } },
-        { x: days, y: state.daily.map((row) => row.stateSpace), mode: "lines", name: "State-space", line: { color: "#1d4f91", width: 1.4, dash: "dot" } },
+        { x: days, y: state.daily.map((row) => visual(row, "high95")), customdata: state.daily.map((row) => bandHover(row, "high95")), mode: "lines", line: { width: 0 }, hoverinfo: "skip", showlegend: false },
+        { x: days, y: state.daily.map((row) => visual(row, "low95")), customdata: state.daily.map((row) => bandHover(row, "low95")), mode: "lines", fill: "tonexty", fillcolor: "rgba(15,43,82,0.12)", line: { width: 0 }, name: "95% interval", hovertemplate: "%{x}<br>95% %{customdata}<extra></extra>" },
+        { x: days, y: state.daily.map((row) => visual(row, "high80")), mode: "lines", line: { width: 0 }, hoverinfo: "skip", showlegend: false },
+        { x: days, y: state.daily.map((row) => visual(row, "low80")), customdata: state.daily.map((row) => bandHover(row, "low80")), mode: "lines", fill: "tonexty", fillcolor: "rgba(15,43,82,0.2)", line: { width: 0 }, name: "80% interval", hovertemplate: "%{x}<br>80% %{customdata}<extra></extra>" },
+        { x: days, y: state.daily.map((row) => visual(row, "high50")), mode: "lines", line: { width: 0 }, hoverinfo: "skip", showlegend: false },
+        { x: days, y: state.daily.map((row) => visual(row, "low50")), customdata: state.daily.map((row) => bandHover(row, "low50")), mode: "lines", fill: "tonexty", fillcolor: "rgba(15,43,82,0.28)", line: { width: 0 }, name: "50% interval", hovertemplate: "%{x}<br>50% %{customdata}<extra></extra>" },
+        { x: days, y: state.daily.map((row) => denseEnough(row) ? (row.latent ?? row.weighted) : null), mode: "lines", name: "Latent trend", line: { color: "#0b2b52", width: 2.4 } },
+        { x: days, y: state.daily.map((row) => denseEnough(row) ? (row.conservative ?? null) : null), mode: "lines", name: "Conservative average", line: { color: "#5c6b7a", width: 1.4, dash: "dash" } },
+        { x: days, y: state.daily.map((row) => denseEnough(row) ? (row.fast ?? null) : null), mode: "lines", name: "Fast trend", line: { color: "#9f1d2e", width: 1.4, dash: "dot" } },
+        { x: days, y: state.daily.map((row) => denseEnough(row) ? (row.straight ?? null) : null), mode: "lines", name: "Straight average", line: { color: "#1d4f91", width: 1.2 } },
         {
           x: modeled.map((poll) => poll.midpoint || poll.fieldLabel.slice(0, 10)),
           y: modeled.map((poll) => poll.margin),
@@ -330,7 +698,7 @@ function TrendChart({ state }: { state: Snapshot }) {
         margin: { l: 48, r: 16, t: 24, b: 40 },
         paper_bgcolor: "#fff",
         plot_bgcolor: "#fff",
-        yaxis: { title: "Abbott margin (points)", zeroline: true, zerolinecolor: "#9aa6b2" },
+        yaxis: { title: "Abbott margin (points)", zeroline: true, zerolinecolor: "#9aa6b2", range: [yMin, yMax] },
         xaxis: { title: "Date" },
         legend: { orientation: "h", y: 1.12 },
         hovermode: "closest",
@@ -341,7 +709,13 @@ function TrendChart({ state }: { state: Snapshot }) {
       if (plotly && host) plotly.purge(host);
     };
   }, [state]);
-  return <div className="poll-card poll-chart" ref={ref} />;
+  const exceeds = state.daily.some((row) => (row.pollsToDate ?? 0) >= (state.overview.minimumPollsToDraw || 3) && row.high95 != null && row.low95 != null && (row.high95 > axis.yMax + 0.05 || row.low95 < axis.yMin - 0.05));
+  return (
+    <div className="poll-card poll-chart">
+      <div ref={ref} />
+      <p className="poll-muted">The latent line starts once {state.overview.minimumPollsToDraw || 3} qualifying polls are in the series. Bands are the posterior of that latent margin. The fast trend is a diagnostic. If it moves while the latent and conservative lines stay put, the overview says so. That sentence is not a prediction. Stored intervals are not clipped{exceeds ? "; a tooltip notes where a band extends past the axis" : ""}.</p>
+    </div>
+  );
 }
 
 function PollTable(props: {
@@ -351,14 +725,16 @@ function PollTable(props: {
   sampleFilter: string;
   pollsterFilter: string;
   ballotFilter: string;
-  modelOnly: boolean;
+  statusFilter: string;
   onSample: (value: string) => void;
   onPollster: (value: string) => void;
   onBallot: (value: string) => void;
-  onModelOnly: (value: boolean) => void;
+  onStatus: (value: string) => void;
   onSelect: (id: number) => void;
   selectedId: number | null;
+  onPost: (path: string, payload?: unknown) => Promise<void>;
 }) {
+  const [reason, setReason] = useState("");
   return (
     <>
       <div className="poll-filters">
@@ -374,14 +750,23 @@ function PollTable(props: {
           <option value="all">All ballots</option>
           {props.ballots.map((name) => <option key={name}>{name}</option>)}
         </select>
-        <label><input type="checkbox" checked={props.modelOnly} onChange={(event) => props.onModelOnly(event.target.checked)} /> In model only</label>
+        <select value={props.statusFilter} onChange={(event) => props.onStatus(event.target.value)} aria-label="Model status">
+          <option value="all">All polls</option>
+          <option value="included">Included only</option>
+          <option value="excluded">Excluded only</option>
+          <option value="pending">Pending review</option>
+          <option value="out">Not in the model</option>
+        </select>
+        <label>Exclusion reason
+          <input value={reason} placeholder="Required when excluding" onChange={(event) => setReason(event.target.value)} />
+        </label>
       </div>
       <div className="poll-table-wrap">
         <table className="poll-table">
           <thead>
             <tr>
               <th>Pollster</th><th>Sponsor</th><th>Field</th><th>Released</th><th>N</th><th>Sample</th><th>MOE</th>
-              <th>Abbott</th><th>Hinojosa</th><th>Other</th><th>Undecided</th><th>Margin</th><th>Ballot</th><th>Weight</th><th>Review</th>
+              <th>Abbott</th><th>Hinojosa</th><th>Other</th><th>Undecided</th><th>Margin</th><th>Ballot</th><th>Weight</th><th>Model status</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -401,7 +786,14 @@ function PollTable(props: {
                 <td>{poll.margin == null ? "—" : poll.margin.toFixed(1)}</td>
                 <td>{poll.ballot || "—"}</td>
                 <td>{poll.weights ? `${(poll.weights.final * 100).toFixed(1)}%` : "—"}</td>
-                <td>{poll.inModel ? "In model" : poll.status}{poll.outlier?.flagged ? " · outlier flag" : ""}</td>
+                <td style={{ whiteSpace: "normal", minWidth: 180 }}>{poll.modelStatusLabel}{poll.outlier?.flagged ? " · outlier flag" : ""}</td>
+                <td>
+                  {poll.inModel ? (
+                    <button type="button" className="poll-btn" onClick={() => props.onPost(`/api/polling/polls/${poll.id}/exclusion`, { excluded: true, reason })}>Exclude</button>
+                  ) : (
+                    <button type="button" className="poll-btn" onClick={() => props.onPost(`/api/polling/polls/${poll.id}/exclusion`, { excluded: false })}>Include</button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -412,37 +804,65 @@ function PollTable(props: {
 }
 
 function Comparison({ state }: { state: Snapshot }) {
-  const rows: [string, string][] = [
-    ["Weighted trend", String(state.comparisons.weightedLabel ?? "—")],
-    ["State-space trend", String(state.comparisons.stateSpaceLabel ?? "—")],
-    ["Unweighted local mean", String(state.comparisons.unweightedLabel ?? "—")],
-    ["Sample-size weighted", String(state.comparisons.sampleSizeLabel ?? "—")],
-    ["LV only", String(state.comparisons.lvLabel ?? "—")],
-    ["RV only", String(state.comparisons.rvLabel ?? "—")],
-    ["Published RCP average", "Not ingested"],
-  ];
+  const rows = state.comparisons.rows ?? [];
+  const sensitivity = state.sensitivity;
   return (
-    <section className="poll-card">
-      <p>These are sensitivity checks. They are all polling margins. None of them is a win probability. {String(state.comparisons.rcpNote ?? "")}</p>
-      <div className="poll-table-wrap">
-        <table className="poll-table">
-          <tbody>
-            {rows.map(([label, value]) => <tr key={label}><th>{label}</th><td>{value}</td></tr>)}
-          </tbody>
-        </table>
-      </div>
-    </section>
+    <>
+      <section className="poll-card">
+        <h2>Sensitivity summary</h2>
+        <p>{sensitivity?.sentence}</p>
+        <div className="poll-meta">
+          <div><span>Minimum</span>{sensitivity?.minimumLabel ?? "—"}</div>
+          <div><span>Median</span>{sensitivity?.medianLabel ?? "—"}</div>
+          <div><span>Maximum</span>{sensitivity?.maximumLabel ?? "—"}</div>
+          <div><span>Range</span>{sensitivity ? `${sensitivity.range.toFixed(1)} points` : "—"}</div>
+        </div>
+        {sensitivity?.largestChanges?.length ? (
+          <p className="poll-muted">Largest gaps from the latent trend: {sensitivity.largestChanges.map((row) => `${row.name} (${row.label}, ${row.gapFromPrimary >= 0 ? "+" : ""}${row.gapFromPrimary.toFixed(1)})`).join("; ")}.</p>
+        ) : null}
+        <p className="poll-muted">This is the spread across specifications. It is not an election probability. {String(state.comparisons.rcpNote ?? "")}</p>
+      </section>
+      {rows.map((row) => (
+        <details key={row.id} className="poll-card" open={row.id === "weighted"}>
+          <summary><strong>{row.name}</strong> — {row.label ?? "—"}</summary>
+          <p>{row.explanation}</p>
+          <div className="poll-meta">
+            <div><span>Polls used</span>{row.polls ?? "—"}</div>
+            <div><span>Field window</span>{row.window ?? "—"}</div>
+            <div><span>Mean poll age</span>{row.meanAgeDays == null ? "—" : `${row.meanAgeDays.toFixed(0)} days`}</div>
+            <div><span>Weighted midpoint</span>{row.weightedMidpoint ?? "—"}</div>
+            <div><span>LV / RV</span>{row.lv == null ? "—" : `${row.lv} / ${row.rv}`}</div>
+            <div><span>Ballots</span>{row.ballots?.length ? row.ballots.join(", ") : "—"}</div>
+          </div>
+        </details>
+      ))}
+    </>
   );
 }
 
+const DIMENSION_LABELS: [string, string][] = [
+  ["all", "All dimensions"],
+  ["age", "Age"],
+  ["race_ethnicity", "Race / ethnicity"],
+  ["party", "Party"],
+  ["ideology", "Ideology"],
+  ["gender", "Gender"],
+  ["education", "Education"],
+  ["region", "Geography"],
+  ["urbanicity", "Urbanicity"],
+  ["vote_history", "Prior vote"],
+];
+
 function Subgroups({ state, dimension, onDimension }: { state: Snapshot; dimension: string; onDimension: (value: string) => void }) {
-  const dimensions = ["all", ...new Set(state.subgroups.map((card) => card.dimension))];
+  const known = new Set(DIMENSION_LABELS.map(([key]) => key));
+  const extra = [...new Set(state.subgroups.map((card) => card.dimension))].filter((item) => !known.has(item));
+  const dimensions = [...DIMENSION_LABELS, ...extra.map((item) => [item, item] as [string, string])];
   const cards = state.subgroups.filter((card) => dimension === "all" || card.dimension === dimension);
   return (
     <>
       <div className="poll-filters">
         <select value={dimension} onChange={(event) => onDimension(event.target.value)} aria-label="Subgroup dimension">
-          {dimensions.map((item) => <option key={item} value={item}>{item}</option>)}
+          {dimensions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
       </div>
       <p className="poll-muted">Subgroup trends are diagnostic. They are not fed back into the statewide topline. A line is withheld until there are at least three approved polls in the same compatible group.</p>
@@ -452,12 +872,12 @@ function Subgroups({ state, dimension, onDimension }: { state: Snapshot; dimensi
             <div className="poll-kicker">{card.dimension}</div>
             <h3>{card.normalized}</h3>
             <div className="poll-margin" style={{ fontSize: 22 }}>{card.currentLabel}</div>
-            <p>{card.polls} polls. Known subgroup n: {card.knownN ?? "not reported"}. Cells missing n: {card.nMissing}.</p>
+            <p>{card.polls} polls available. {card.trendPolls} in the subgroup trend. Known subgroup n: {card.knownN ?? "not reported"}. Cells missing n: {card.nMissing}.</p>
             <p className="poll-muted">{card.precisionNote}</p>
-            <p className="poll-muted">Original labels: {card.originalLabels.join(", ")}</p>
+            <p className="poll-muted">Normalized group: {card.group}. Original labels: {card.originalLabels.join(", ")}</p>
             <ul>
               {card.points.map((point) => (
-                <li key={`${point.pollster}-${point.date}`}>{point.date} {point.pollster}: {point.margin.toFixed(1)} {point.n == null ? "(n not reported)" : `(n=${point.n})`}</li>
+                <li key={`${point.pollster}-${point.date}`}>{point.date} {point.pollster}: {point.margin.toFixed(1)} {point.n == null ? "(subgroup sample size not reported)" : `(n=${point.n})`} {point.sourceUrl ? <a href={point.sourceUrl}>{point.sourcePublisher || "source"}</a> : null}</li>
               ))}
             </ul>
           </article>
@@ -467,8 +887,48 @@ function Subgroups({ state, dimension, onDimension }: { state: Snapshot; dimensi
   );
 }
 
+function ModelLab({ state }: { state: Snapshot }) {
+  const lab = state.modelLab;
+  if (!lab) return <p>Historical calibration has not been loaded.</p>;
+  const fmt = (value: number | null | undefined) => value == null ? "—" : value.toFixed(2);
+  return (
+    <>
+      <section className="poll-card">
+        <h2>Why this default</h2>
+        <p>{lab.whyQ}</p>
+        <p>{lab.whyHalfLife}</p>
+        <p>{lab.whyHouse}</p>
+        <p className="poll-muted">{lab.objective} {lab.excludedFromObjective}</p>
+        <p className="poll-muted">{lab.dateLimitation} Source: {lab.source}. {lab.races} races, cycles {lab.cycles.join(", ")}.</p>
+        <p className="poll-muted">Leave-one-cycle process SD values: {lab.leaveOneCycleQ.join(", ") || "—"}. Leave-one-cycle EWMA half-lives: {lab.leaveOneCycleHalfLife.join(", ") || "—"}.</p>
+      </section>
+      <div className="poll-table-wrap">
+        <table className="poll-table">
+          <thead><tr><th>Model</th><th>7-day RMSE</th><th>14-day RMSE</th><th>28-day RMSE</th><th>MAE</th><th>95% coverage</th><th>Log lik.</th><th>Residual autocorr.</th></tr></thead>
+          <tbody>
+            {lab.rows.map((row) => (
+              <tr key={row.model}>
+                <td>{row.selected ? `${row.model} (selected)` : row.model}<div className="poll-muted">{row.detail}</div></td>
+                <td>{fmt(row.rmse7)}</td>
+                <td>{fmt(row.rmse14)}</td>
+                <td>{fmt(row.rmse28)}</td>
+                <td>{fmt(row.mae)}</td>
+                <td>{row.coverage95 == null ? "—" : `${(row.coverage95 * 100).toFixed(0)}%`}</td>
+                <td>{fmt(row.logLik14)}</td>
+                <td>{fmt(row.residualAutocorr)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
 function Pollsters({ state }: { state: Snapshot }) {
   return (
+    <>
+    <p className="poll-muted">House effects are shrunk toward zero. A pollster with few polls stays near zero. The number is where that pollster has sat relative to the latent margin. It is not a partisan-bias label.</p>
     <div className="poll-table-wrap">
       <table className="poll-table">
         <thead><tr><th>Pollster</th><th>Polls in model</th><th>Avg N</th><th>Samples</th><th>Avg weight</th><th>House effect</th></tr></thead>
@@ -486,6 +946,26 @@ function Pollsters({ state }: { state: Snapshot }) {
         </tbody>
       </table>
     </div>
+    <h2>Cluster check</h2>
+    <p className="poll-muted">Polls from the same pollster are dampened only when their field midpoints fall in one chain with gaps of at most the cluster window. A later poll from the same firm is a new observation. An LV and RV result from one sample is one observation; the other frame is an alternate.</p>
+    <div className="poll-table-wrap">
+      <table className="poll-table">
+        <thead><tr><th>Pollster</th><th>Midpoint</th><th>In window</th><th>Factor</th><th>Nearest gap</th><th>Same sample</th></tr></thead>
+        <tbody>
+          {(state.clusterDiagnostics ?? []).map((row) => (
+            <tr key={`${row.pollster}-${row.midpoint}`}>
+              <td>{row.pollster}</td>
+              <td>{row.midpoint}</td>
+              <td>{row.clusterSize}</td>
+              <td>{row.clusterFactor.toFixed(2)}</td>
+              <td>{row.nearestGapDays == null ? "—" : row.nearestGapDays.toFixed(1)}</td>
+              <td style={{ whiteSpace: "normal", minWidth: 240 }}>{row.sameSampleNote}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    </>
   );
 }
 
@@ -517,11 +997,26 @@ function Settings({ state, onSave, onReset }: { state: Snapshot; onSave: (patch:
         <label>Abbott color<input value={form.display.candidate_a_color} onChange={(event) => setForm({ ...form, display: { ...form.display, candidate_a_color: event.target.value } })} /></label>
         <label>Hinojosa color<input value={form.display.candidate_b_color} onChange={(event) => setForm({ ...form, display: { ...form.display, candidate_b_color: event.target.value } })} /></label>
       </div>
-      <h3>Sponsor multipliers</h3>
+      <h3>Source completeness</h3>
+      <p className="poll-muted">These multipliers measure whether the original poll can be documented. They are not a sponsor or ideology score.</p>
       <div className="poll-settings">
-        {Object.entries(form.sponsorship_weights).map(([key, value]) => (
-          <label key={key}>{key}
-            <input type="number" step="0.05" value={value} onChange={(event) => setForm({ ...form, sponsorship_weights: { ...form.sponsorship_weights, [key]: Number(event.target.value) } })} />
+        {Object.entries(form.source_completeness).map(([key, value]) => (
+          <label key={key}>{key.replaceAll("_", " ")}
+            <input type="number" step="0.05" value={value} onChange={(event) => setForm({ ...form, source_completeness: { ...form.source_completeness, [key]: Number(event.target.value) } })} />
+          </label>
+        ))}
+      </div>
+      <h3>Sponsor multipliers, sensitivity only</h3>
+      <p className="poll-muted">Sponsor type stays on every poll. It does not change the default weight unless this switch is on. The comparison page also has a row that uses these factors instead of source completeness.</p>
+      <label>Apply sponsor multipliers in the default model
+        <select value={form.sponsorship_weights.apply_in_default_model ? "yes" : "no"} onChange={(event) => setForm({ ...form, sponsorship_weights: { ...form.sponsorship_weights, apply_in_default_model: event.target.value === "yes" } })}>
+          <option value="no">Off</option><option value="yes">On</option>
+        </select>
+      </label>
+      <div className="poll-settings">
+        {Object.entries(form.sponsorship_weights).filter(([key]) => key !== "apply_in_default_model").map(([key, value]) => (
+          <label key={key}>{key.replaceAll("_", " ")}
+            <input type="number" step="0.05" value={Number(value)} onChange={(event) => setForm({ ...form, sponsorship_weights: { ...form.sponsorship_weights, [key]: Number(event.target.value) } })} />
           </label>
         ))}
       </div>
@@ -529,7 +1024,7 @@ function Settings({ state, onSave, onReset }: { state: Snapshot; onSave: (patch:
         <button type="button" className="poll-btn primary" onClick={() => onSave(form)}>Apply</button>{" "}
         <button type="button" className="poll-btn" onClick={onReset}>Reset to defaults</button>
       </p>
-      <p className="poll-muted">Sample-type mode is "{form.sample_type.mode}". Multipliers are the live adjustment. A model-based sample-type effect is not estimated until there is enough overlapping LV and RV fieldwork, and flipping the switch does not drop the RV multiplier on its own. Sponsor weights are assumptions, not quality grades.</p>
+      <p className="poll-muted">Sample-type mode is "{form.sample_type.mode}". Multipliers are the live adjustment. A model-based sample-type effect is not estimated until there is enough overlapping LV and RV fieldwork, and flipping the switch does not drop the RV multiplier on its own. Model version {state.meta.modelVersion}. Changing a default in model.yaml requires a version increment; this screen stores an override on top of that file.</p>
     </section>
   );
 }
@@ -543,7 +1038,7 @@ function Review({ state, onPost }: { state: Snapshot; onPost: (path: string, pay
         <h2>Data completeness</h2>
         <p>{state.quality.note} Mean score: {state.quality.meanCompleteness ?? "—"}.</p>
         <div className="poll-meta">
-          {Object.entries(state.quality.issues).map(([key, value]) => <div key={key}><span>{key}</span>{value}</div>)}
+          {(state.quality.checks ?? []).map((check) => <div key={check.code} title={check.note}><span>{check.code}</span>{check.count}</div>)}
         </div>
       </section>
       <h2>Queue</h2>
@@ -602,6 +1097,10 @@ function Detail({ poll, onClose, onPost }: { poll: PollRow; onClose: () => void;
       <article className="poll-card">
         <button type="button" className="poll-btn" onClick={onClose}>Close</button>
         <h2>{poll.pollster}</h2>
+        <p><strong>{poll.modelStatusLabel}.</strong> {poll.modelStatusDetail}</p>
+        {poll.preferredVersion ? <p>Preferred version: {poll.preferredVersion}</p> : null}
+        <p>Ballot: {poll.ballot || "unspecified"}. Data completeness {poll.completeness.score}. Source: {poll.sourceCompletenessLabel}.</p>
+        <p>{poll.sameSampleNote}</p>
         <p>{poll.sponsor || "Sponsor not recorded"} · {poll.sponsorType} · {poll.fieldLabel || "Field dates missing"} · released {poll.releaseDate || "—"}</p>
         <p>N {poll.sampleSize ?? "missing"} {poll.sampleType || ""} · MOE {poll.moe ?? "—"}{poll.designEffectMoe ? ` (design-effect ${poll.designEffectMoe})` : ""} · {poll.ballot}</p>
         <p>{poll.population}</p>
@@ -621,24 +1120,50 @@ function Detail({ poll, onClose, onPost }: { poll: PollRow; onClose: () => void;
         <p>Data completeness {poll.completeness.score}. This is not an ideological score.</p>
         {poll.outlier ? <p>Residual {poll.outlier.residual.toFixed(1)} vs the trend on the midpoint (fitted {poll.outlier.fitted.toFixed(1)}). Standardized residual {poll.outlier.standardized.toFixed(2)}.{poll.outlier.flagged ? " Flagged." : " Not flagged."}</p> : null}
         <p>
-          <input value={reason} placeholder="Reason required to exclude" onChange={(event) => setReason(event.target.value)} />{" "}
-          <button type="button" className="poll-btn" onClick={() => onPost(`/api/polling/polls/${poll.id}/exclusion`, { excluded: true, reason })}>Exclude</button>{" "}
-          {poll.excluded ? <button type="button" className="poll-btn" onClick={() => onPost(`/api/polling/polls/${poll.id}/exclusion`, { excluded: false })}>Include</button> : null}
+          {poll.inModel ? (
+            <>
+              <input value={reason} placeholder="Reason required to exclude" onChange={(event) => setReason(event.target.value)} />{" "}
+              <button type="button" className="poll-btn" onClick={() => onPost(`/api/polling/polls/${poll.id}/exclusion`, { excluded: true, reason })}>Exclude from model</button>
+            </>
+          ) : (
+            <button type="button" className="poll-btn primary" onClick={() => onPost(`/api/polling/polls/${poll.id}/exclusion`, { excluded: false })}>Include in model</button>
+          )}
         </p>
       </article>
       <article className="poll-card">
+        <h3>Measurement variance</h3>
+        {poll.measurement ? (
+          <ul>
+            <li>Sampling variance {poll.measurement.samplingVariance.toFixed(2)} ({poll.measurement.samplingStatus}). SE {poll.measurement.samplingSe.toFixed(2)}.</li>
+            <li>Excess variance {poll.measurement.excessVariance.toFixed(2)}. Method variance {poll.measurement.methodVariance.toFixed(2)}. Population variance {poll.measurement.populationVariance.toFixed(2)}.</li>
+            <li>Total measurement variance {poll.measurement.totalVariance.toFixed(2)}. Total SE {poll.measurement.totalSe.toFixed(2)}.</li>
+            <li>n_eff {poll.measurement.nEff == null ? "—" : Math.round(poll.measurement.nEff)} ({poll.measurement.nEffStatus}). MOE status {poll.measurement.moeStatus}.</li>
+            <li>{poll.measurement.note}</li>
+          </ul>
+        ) : <p>No measurement variance, because this poll is not in the model.</p>}
+        {poll.impact ? <p>Removing this poll moves today's latent margin from {poll.impact.withPoll.toFixed(1)} to {poll.impact.withoutPoll == null ? "—" : poll.impact.withoutPoll.toFixed(1)}. Impact {poll.impact.impact == null ? "—" : poll.impact.impact.toFixed(2)}.</p> : null}
         <h3>Weight</h3>
         {poll.weights ? (
-          <ul>
-            <li>Precision contribution {poll.weights.precision.toFixed(4)} — {poll.weights.precisionNote}</li>
-            <li>Margin SE {poll.weights.seMargin.toFixed(2)} points. n_eff {poll.weights.nEff == null ? "—" : Math.round(poll.weights.nEff)}{poll.weights.nEffEstimated ? " (estimated)" : ""}</li>
-            <li>Recency {poll.weights.recency.toFixed(3)}</li>
-            <li>Sample type × {poll.weights.sampleType.toFixed(2)}</li>
-            <li>Sponsor × {poll.weights.sponsorship.toFixed(2)}</li>
-            <li>Cluster × {poll.weights.cluster.toFixed(2)} across {poll.weights.clusterSize} poll{poll.weights.clusterSize === 1 ? "" : "s"}</li>
-            <li>Final normalized weight {(poll.weights.final * 100).toFixed(1)}%</li>
-          </ul>
-        ) : <p>Not in the model.</p>}
+          <>
+            <p className="poll-muted">{poll.weights.formula}</p>
+            <p className="poll-muted">House effects, when enabled, change the margin used in the fit. They are not a weight. Applied house effect on this poll: {poll.weights.houseEffect == null ? "not estimated" : poll.weights.houseEffect.toFixed(1)}.</p>
+            <ul>
+              <li>Raw margin {poll.weights.rawMargin.toFixed(1)}. Adjusted margin {poll.weights.adjustedMargin == null ? "—" : poll.weights.adjustedMargin.toFixed(1)}.</li>
+              <li>Reported N {poll.sampleSize ?? "missing"}. Reported MOE {poll.designEffectMoe ?? poll.moe ?? "not reported"}.</li>
+              <li>Design effect {poll.weights.designEffect == null ? "not computed" : poll.weights.designEffect.toFixed(2)}{poll.weights.designEffectEstimated ? " (estimated)" : ""}.</li>
+              <li>Effective N {poll.weights.nEff == null ? "—" : Math.round(poll.weights.nEff)}{poll.weights.nEffEstimated ? " (estimated)" : ""}. {poll.weights.precisionNote}</li>
+              <li>Sampling variance {poll.weights.samplingVariance.toFixed(2)}. Variance floor {poll.weights.varianceFloor.toFixed(2)}. Total variance {poll.weights.totalVariance.toFixed(2)}.</li>
+              <li>Raw inverse-variance precision {poll.weights.precision.toFixed(4)}. Normalized precision share {(poll.weights.precisionShare * 100).toFixed(1)}%.</li>
+              <li>Recency {poll.weights.recency.toFixed(3)}. Age {poll.weights.ageDays.toFixed(1)} days. Base half-life {poll.weights.baseHalfLife}. Effective half-life {poll.weights.effectiveHalfLife}.</li>
+              <li>Sample type × {poll.weights.sampleType.toFixed(2)}</li>
+              <li>Source completeness × {poll.weights.sourceQuality.toFixed(2)} ({poll.sourceCompletenessLabel})</li>
+              <li>Sponsor type is {poll.sponsorType}. Table factor {poll.weights.sponsorTable.toFixed(2)}. Applied factor {poll.weights.sponsorship.toFixed(2)}.</li>
+              <li>Cluster × {poll.weights.cluster.toFixed(2)} across {poll.weights.clusterSize} poll{poll.weights.clusterSize === 1 ? "" : "s"}. Nearest same-pollster gap {poll.weights.nearestGapDays == null ? "none" : `${poll.weights.nearestGapDays.toFixed(1)} days`}.</li>
+              <li>Outlier factor × {poll.weights.outlierFactor.toFixed(2)}</li>
+              <li>Pre-normalized weight {poll.weights.raw.toFixed(4)}. Final contribution {(poll.weights.final * 100).toFixed(1)}%.</li>
+            </ul>
+          </>
+        ) : <p>Not in the model, so it has no weight. Sponsor type remains {poll.sponsorType}. Source status: {poll.sourceCompletenessLabel}.</p>}
         <h3>Sources</h3>
         <ul>
           {poll.sources.map((source) => (

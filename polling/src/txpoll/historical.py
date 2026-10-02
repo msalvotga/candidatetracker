@@ -837,6 +837,72 @@ def historical_polls() -> list[dict]:
     ]
 
 
+# Machine-readable reasons for polls that are stored and held out of the model.
+# Included polls are not listed here. The classifier marks those as included.
+MODEL_STATUS = {
+    "tsu-yougov-2026-09": (
+        "excluded_insufficient_source",
+        "Excluded — insufficient source information",
+        "The topline is from the Texas Politics Project tracker only. No original TSU or YouGov release was archived, so the poll is not in the model.",
+    ),
+    "mason-dixon-2026-09": (
+        "excluded_conflicting_sources",
+        "Excluded — conflicting secondary accounts",
+        "Texas Politics Project and Political.org disagree on dates, sample type, sponsor, and the remainder. No Mason-Dixon document was archived, so field dates were not stored and the poll is not in the model.",
+    ),
+    "aarp-2026-09": (
+        "excluded_conflicting_moe",
+        "Excluded — conflicting margin of error",
+        "Secondary sources agree on 49–46 and n=895 likely voters, but the margin of error is ±3.0 in one index and ±3.3 in another. No AARP topline was archived, so the margin of error was left blank and the poll is not in the model.",
+    ),
+    "tsu-yougov-2026-07": (
+        "excluded_insufficient_source",
+        "Excluded — insufficient source information",
+        "Texas Politics Project tracker only. Someone else and don't know are a combined 5 and were not split. No original release was archived.",
+    ),
+    "nyt-siena-2026-06": (
+        "excluded_insufficient_source",
+        "Excluded — insufficient source information",
+        "Texas Politics Project tracker only. Someone else and don't know are combined at 5. This is not the September ReconMR survey that some aggregators mislabel as Siena.",
+    ),
+    "ut-tpp-2026-06": (
+        "excluded_insufficient_source",
+        "Excluded — insufficient source information",
+        "The statewide 47–40 topline is from the tracker. The August UT release states June suburban shares, and those cells are stored, but they are not a statewide topline.",
+    ),
+    "reconmr-2026-06": (
+        "excluded_incomplete_primary",
+        "Excluded — sample size not on the primary document",
+        "The July Texas Pulse memo confirms the June shares. N=807, the margin of error, and the June 1–4 window come from the tracker, not from that memo.",
+    ),
+    "quantus-2026-06": (
+        "excluded_insufficient_source",
+        "Excluded — insufficient source information",
+        "Texas Politics Project tracker only. Abbott 49, Hinojosa 41, and don't know 8 sum to 98. No original Quantus release was archived.",
+    ),
+    "tpor-2026-08": (
+        "excluded_missing_field_dates",
+        "Excluded — missing field dates",
+        "The September TPOR article gives the August margin, Dixon, and undecided, not the August levels. The 49–42 levels and n=1,000 are from 270toWin. Field dates were not found.",
+    ),
+    "overton-2026-08": (
+        "excluded_insufficient_source",
+        "Excluded — insufficient source information",
+        "Political.org is the only source in this import. No original Overton release was archived. The Texas Public Policy Foundation sponsorship is as described on that page.",
+    ),
+    "socal-2026-09": (
+        "excluded_insufficient_source",
+        "Excluded — insufficient source information",
+        "Political.org only. It says the margin of error was not published. Sponsorship was left unknown.",
+    ),
+    "big-data-2026-09": (
+        "excluded_missing_field_dates",
+        "Excluded — missing field dates",
+        "PollingSource lists a completed date, n=698, and a ±4 margin of error. No field window and no primary document were found.",
+    ),
+}
+
+
 def _src(tier, source_type, url, publisher, publication, primary, notes):
     return {
         "tier": tier,

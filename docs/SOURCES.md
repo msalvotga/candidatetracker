@@ -4,6 +4,14 @@ Aggregators are discovery tools. When an original release and an aggregator disa
 
 Tiers: 1 original pollster document, 2 sponsor release, 3 aggregator, 4 news writeup, 5 anything else.
 
+## Historical calibration
+
+Process noise, excess variance, the house-effect prior, and the comparison EWMA half-life are chosen from FiveThirtyEight’s pollster-ratings file, gubernatorial general-election rows only:
+
+https://raw.githubusercontent.com/fivethirtyeight/data/master/pollster-ratings/raw_polls.csv
+
+The copy used for the fit is `polling/data/historical/raw_polls.csv`. The selected parameters and the score table are `polling/data/historical/calibration.json`. That file has one date per poll, so each historical poll is treated as a one-day field window. The live Texas model still averages the latent margin across the stored field dates. The 2026 Texas governor race is not in the file and is not part of the objective. Senate and presidential rows were not used to pick the default.
+
 ## Discovery indexes
 
 - Texas Politics Project, [2026 gubernatorial poll tracker](https://texaspolitics.utexas.edu/blog/texas-2026-gubernatorial-poll-tracker). Retrieved 2 October 2026. The table runs from Quantus (3–4 June) through Fox News (24–28 September). The page’s own “updated” line still mentioned 23 September even though the Fox row was present.
