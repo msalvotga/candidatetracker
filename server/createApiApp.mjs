@@ -18,6 +18,7 @@ import { getSd4HistoricalPayloadForApi } from "./lib/sd4HistoricalPrecinct.mjs";
 import { buildElectionFileFromCountyFeeds } from "./lib/electionFileFromCountyResults.mjs";
 import { decodeBase64Json, decodeUploadPayload, encodeBase64Json } from "./lib/b64.mjs";
 import { isEvRosterEnabled } from "./lib/featureFlags.mjs";
+import { readBallotScoreSummary } from "./lib/ballotScoreSummary.mjs";
 import { registerPollingRoutes } from "./lib/pollingBridge.mjs";
 import { exportFileName, getVoterExport, publicExportJob, startVoterExport } from "./lib/ballotScoreVoters.mjs";
 import { applyLiveRosterToModel } from "./lib/ballotScoreAggregate.mjs";
