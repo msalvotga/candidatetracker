@@ -26,6 +26,7 @@ import { readEvPayload, readEvStatus, saveDatasetUpload, startRebuild } from "./
 import {
   listRosterVoters,
   readCountyRosterBoard,
+  rosterVotersCsv,
   readRosterSchedule,
   readRosterVoterRows,
   startAllCountyRosterPulls,
@@ -1386,6 +1387,26 @@ export function createApiApp() {
       res.json(await saveDatasetUpload(String(req.params.kind || ""), filename, req));
     } catch (e) {
       res.status(e.statusCode || 500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.get("/api/county-rosters/export.csv", async (req, res) => {
+    try {
+      const sort = String(req.query.sort ?? "voteDate");
+      const dir = String(req.query.dir ?? "asc");
+      const csv = await rosterVotersCsv({ sort, dir });
+      const stamp = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Chicago",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="county-rosters-${stamp}.csv"`);
+      res.send(csv);
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
     }
   });
 

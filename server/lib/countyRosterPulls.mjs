@@ -280,6 +280,165 @@ function normalizeRosterDate(raw) {
   return text || null;
 }
 
+function csvCell(value) {
+  const text = value == null ? "" : String(value);
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+
+const CSV_NAME_ALIASES = ["name", "fullname", "votername"];
+const CSV_IDENTITY_ALIASES = new Set([
+  ...CSV_NAME_ALIASES,
+  "firstname",
+  "first",
+  "middlename",
+  "middle",
+  "lastname",
+  "last",
+  "suffix",
+  "residenceaddress",
+  "residentialaddress",
+  "address",
+  "streetaddress",
+  "voteraddress",
+  "residencecity",
+  "city",
+  "votercity",
+  "residencestate",
+  "state",
+  "residencezip",
+  "zip",
+  "zipcode",
+  "voterzip",
+  "registrationdate",
+  "registrationdateofvoter",
+  "regdate",
+  "dateofregistration",
+  "effectivedateofregistration",
+  "voterregistrationdate",
+  "registrationaddr1",
+  "registrationaddr2",
+  "reghousenum",
+  "reghousesfx",
+  "regstprefix",
+  "regstname",
+  "regsttype",
+  "regstpost",
+  "regunittype",
+  "regunitnumber",
+  "regcity",
+  "regsta",
+  "regzip5",
+]);
+
+function profileField(fields, aliases) {
+  return fields.find((field) => aliases.includes(compactHeader(field.label)))?.value ?? "";
+}
+
+function csvVoterName(fields) {
+  const full = profileField(fields, CSV_NAME_ALIASES);
+  if (full) return full;
+  return [
+    profileField(fields, ["firstname", "first"]),
+    profileField(fields, ["middlename", "middle"]),
+    profileField(fields, ["lastname", "last"]),
+    profileField(fields, ["suffix"]),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function csvVoterAddress(fields) {
+  const line1 = profileField(fields, [
+    "registrationaddr1",
+    "residenceaddress",
+    "residentialaddress",
+    "address",
+    "streetaddress",
+    "voteraddress",
+  ]);
+  const line2 = profileField(fields, ["registrationaddr2"]);
+  const unit = [profileField(fields, ["regunittype"]), profileField(fields, ["regunitnumber"])].filter(Boolean).join(" ");
+  const composed = [
+    profileField(fields, ["reghousenum"]),
+    profileField(fields, ["reghousesfx"]),
+    profileField(fields, ["regstprefix"]),
+    profileField(fields, ["regstname"]),
+    profileField(fields, ["regsttype"]),
+    profileField(fields, ["regstpost"]),
+    unit,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const street = line1 ? [line1, line2].filter(Boolean) : [composed, line2].filter(Boolean);
+  const city = profileField(fields, ["regcity", "residencecity", "city", "votercity"]);
+  const state = profileField(fields, ["regsta", "residencestate", "state"]);
+  const zip = profileField(fields, ["regzip5", "residencezip", "zip", "zipcode", "voterzip"]);
+  const cityLine = [city, [state, zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  return [...street, cityLine].filter(Boolean).join(", ");
+}
+
+function csvScore(value) {
+  return value == null || !Number.isFinite(Number(value)) ? "" : String(value);
+}
+
+/** Columns match the Voted table, then name, address, and any other voter-file fields. */
+export function rosterVotersToCsv(voters) {
+  const extraLabels = [];
+  const seen = new Set();
+  for (const row of voters ?? []) {
+    for (const field of row.profile ?? []) {
+      const label = String(field.label ?? "").trim();
+      if (!label || CSV_IDENTITY_ALIASES.has(compactHeader(label)) || seen.has(label)) continue;
+      seen.add(label);
+      extraLabels.push(label);
+    }
+  }
+  extraLabels.sort((a, b) => a.localeCompare(b, "en"));
+  const header = [
+    "Vote date",
+    "VUID",
+    "Registration date",
+    "2026 model",
+    "2022 model",
+    "County",
+    "State House",
+    "State Senate",
+    "Congress",
+    "Matched",
+    "Name",
+    "Address",
+    ...extraLabels,
+  ];
+  const lines = [header.map(csvCell).join(",")];
+  for (const row of voters ?? []) {
+    const fields = Array.isArray(row.profile) ? row.profile : [];
+    const extras = new Map(fields.map((field) => [String(field.label ?? "").trim(), field.value]));
+    const cells = [
+      row.voteDate ?? "",
+      row.vuid ?? "",
+      row.registrationDate ?? "",
+      csvScore(row.score2026),
+      csvScore(row.score2022),
+      row.county ?? "",
+      row.txHouse ?? "",
+      row.txSenate ?? "",
+      row.usHouse ?? "",
+      row.matched === 1 ? "1" : "0",
+      csvVoterName(fields),
+      csvVoterAddress(fields),
+      ...extraLabels.map((label) => extras.get(label) ?? ""),
+    ];
+    lines.push(cells.map(csvCell).join(","));
+  }
+  return `\uFEFF${lines.join("\r\n")}`;
+}
+
+export async function rosterVotersCsv({ sort = "voteDate", dir = "asc" } = {}) {
+  const voters = sortRosterVoters(await readVoters(), sort === "registrationDate" ? "registrationDate" : "voteDate", dir);
+  return rosterVotersToCsv(voters);
+}
+
 export function sortRosterVoters(voters, sort = "voteDate", dir = "asc") {
   const sign = dir === "desc" ? -1 : 1;
   const tie = (a, b) => a.voteDate.localeCompare(b.voteDate) || a.vuid.localeCompare(b.vuid, undefined, { numeric: true });

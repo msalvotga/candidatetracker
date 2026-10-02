@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch } from "../lib/apiBase";
+import { apiFetch, apiUrl } from "../lib/apiBase";
 import { electionHasRosterScores } from "../lib/rosterScoreElection";
 import { ElectionDatasetNotice } from "./ElectionDatasetNotice";
 import { TEXAS_COUNTIES } from "../lib/texasCounties";
@@ -470,6 +470,9 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
               {pullingName ? `Pulling ${pullingName}…` : "Pull all rosters"}
             </button>
           ) : null}
+          <a className="enr-btn enr-btn--ghost" href={apiUrl(`/api/county-rosters/export.csv?sort=${voterSort}&dir=${voterDir}`)}>
+            Export CSV
+          </a>
         </div>
         {error ? <p className="enr-ballot__status enr-ballot__status--error">{error}</p> : null}
         {pullingName ? (

@@ -6,6 +6,7 @@ import {
   rosterCountyCounts,
   mergeRosterRecords,
   registrationDateFromProfile,
+  rosterVotersToCsv,
   sortRosterVoters,
   summarizeRosterRows,
   tieVoteToCounty,
@@ -179,4 +180,46 @@ test("auto-pulls at 9, 10, 11, and noon Central, Monday through Saturday, until 
     ["harris", "travis"],
   );
   assert.deepEqual(countiesDueForRosterPull({}, { ...HOURLY, enabled: false }, nine, voters), []);
+});
+
+test("exports the voted roster columns, name, address, and other voter-file fields", () => {
+  const csv = rosterVotersToCsv([
+    {
+      vuid: "100",
+      voteDate: "2026-10-01",
+      registrationDate: "2020-01-02",
+      score2026: 46.6,
+      score2022: 0.512,
+      county: "HARRIS",
+      txHouse: "134",
+      txSenate: "7",
+      usHouse: "38",
+      matched: 1,
+      profile: [
+        { label: "FirstName", value: "Ada" },
+        { label: "LastName", value: "Lovelace" },
+        { label: "RegistrationAddr1", value: "100 MAIN ST" },
+        { label: "RegCity", value: "Houston" },
+        { label: "RegSta", value: "TX" },
+        { label: "RegZip5", value: "77002" },
+        { label: "Party", value: "REP" },
+      ],
+    },
+    {
+      vuid: '200, "quoted"',
+      voteDate: "2026-10-02",
+      matched: 0,
+      profile: null,
+    },
+  ]);
+  const lines = csv.replace(/^\uFEFF/, "").split("\r\n");
+  assert.equal(
+    lines[0],
+    "Vote date,VUID,Registration date,2026 model,2022 model,County,State House,State Senate,Congress,Matched,Name,Address,Party",
+  );
+  assert.equal(
+    lines[1],
+    "2026-10-01,100,2020-01-02,46.6,0.512,HARRIS,134,7,38,1,Ada Lovelace,\"100 MAIN ST, Houston, TX 77002\",REP",
+  );
+  assert.equal(lines[2], '2026-10-02,"200, ""quoted""",,,,,,,,0,,,');
 });
