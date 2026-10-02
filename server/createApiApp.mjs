@@ -174,6 +174,23 @@ async function resolveCivixBundleForIngest(electionId, countyInfoUrl = "") {
     const bundle = Number.isFinite(num)
       ? await fetchCivixElectionBundleWithOverrides(num, { countyInfoUrl: override || undefined })
       : await fetchCivixElectionBundle(electionId);
+    if (!collectCivixSosRaces(bundle.election).length) {
+      const snap = await getLatestSosCivixSnapshot(eid);
+      if (snap && collectCivixSosRaces(snap.election).length) {
+        console.info(
+          `Civix returned no races for election ${eid}; using cached sos_results (${snap.fetchedAt || "unknown time"}).`,
+        );
+        return {
+          election: snap.election,
+          county: snap.county,
+          sosCountyInfoUrlConfigured: override,
+          sosCountyInfoUrlUsed: snap.sosCountyInfoUrlUsed || "",
+          live: false,
+          fetchedAt: snap.fetchedAt,
+          note: `Civix returned no races. Using last stored SOS snapshot${snap.fetchedAt ? ` from ${snap.fetchedAt}` : ""}.`,
+        };
+      }
+    }
     return {
       election: bundle.election,
       county: bundle.county,
