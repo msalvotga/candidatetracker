@@ -4,16 +4,33 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, MetaData, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from .config import database_url
 
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _poll_schema() -> str | None:
+    url = database_url()
+    if url.startswith("postgresql"):
+        return "polling"
+    return None
+
+
+POLL_SCHEMA = _poll_schema()
+
+
+def poll_fk():
+    target = f"{POLL_SCHEMA}.polls.id" if POLL_SCHEMA else "polls.id"
+    return ForeignKey(target, ondelete="CASCADE")
+
+
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(schema=POLL_SCHEMA)
 
 
 class Poll(Base):
@@ -69,7 +86,7 @@ class PollResult(Base):
     __tablename__ = "poll_results"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    poll_id: Mapped[int] = mapped_column(ForeignKey("polls.id", ondelete="CASCADE"), index=True)
+    poll_id: Mapped[int] = mapped_column(poll_fk(),  index=True)
     candidate: Mapped[str] = mapped_column(String(160))
     party: Mapped[str | None] = mapped_column(String(80))
     percentage: Mapped[float | None] = mapped_column(Float)
@@ -83,7 +100,7 @@ class Source(Base):
     __tablename__ = "sources"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    poll_id: Mapped[int | None] = mapped_column(ForeignKey("polls.id", ondelete="CASCADE"), index=True)
+    poll_id: Mapped[int | None] = mapped_column(poll_fk(),  index=True)
     source_type: Mapped[str] = mapped_column(String(40))
     tier: Mapped[int] = mapped_column(Integer, default=5)
     url: Mapped[str] = mapped_column(Text)
@@ -102,7 +119,7 @@ class Methodology(Base):
     __tablename__ = "methodologies"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    poll_id: Mapped[int] = mapped_column(ForeignKey("polls.id", ondelete="CASCADE"), unique=True)
+    poll_id: Mapped[int] = mapped_column(poll_fk(),  unique=True)
     sampling_method: Mapped[str | None] = mapped_column(Text)
     weighting_variables: Mapped[str | None] = mapped_column(Text)
     likely_voter_screen: Mapped[str | None] = mapped_column(Text)
@@ -120,7 +137,7 @@ class SubgroupResult(Base):
     __tablename__ = "subgroup_results"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    poll_id: Mapped[int] = mapped_column(ForeignKey("polls.id", ondelete="CASCADE"), index=True)
+    poll_id: Mapped[int] = mapped_column(poll_fk(),  index=True)
     dimension: Mapped[str] = mapped_column(String(80))
     subgroup_original: Mapped[str] = mapped_column(String(160))
     subgroup_normalized: Mapped[str] = mapped_column(String(160))
@@ -138,7 +155,7 @@ class PollReview(Base):
     __tablename__ = "poll_reviews"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    poll_id: Mapped[int] = mapped_column(ForeignKey("polls.id", ondelete="CASCADE"), unique=True)
+    poll_id: Mapped[int] = mapped_column(poll_fk(),  unique=True)
     validation_status: Mapped[str] = mapped_column(String(32), default="pending")
     validation_messages_json: Mapped[str] = mapped_column(Text, default="[]")
     auto_confidence: Mapped[float | None] = mapped_column(Float)
@@ -155,8 +172,8 @@ class PollLink(Base):
     __table_args__ = (UniqueConstraint("left_poll_id", "right_poll_id", "relationship"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    left_poll_id: Mapped[int] = mapped_column(ForeignKey("polls.id", ondelete="CASCADE"), index=True)
-    right_poll_id: Mapped[int] = mapped_column(ForeignKey("polls.id", ondelete="CASCADE"), index=True)
+    left_poll_id: Mapped[int] = mapped_column(poll_fk(),  index=True)
+    right_poll_id: Mapped[int] = mapped_column(poll_fk(),  index=True)
     relationship: Mapped[str] = mapped_column(String(40), default="possible_duplicate")
     similarity: Mapped[float] = mapped_column(Float, default=0)
     reasons_json: Mapped[str] = mapped_column(Text, default="[]")

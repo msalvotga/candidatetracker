@@ -39,8 +39,17 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 
 
 def database_url() -> str:
+    """SQLite for this instance, unless this instance sets POLLING_DATABASE_URL.
+
+    DATABASE_URL is the election tracker database and is intentionally ignored.
+    """
     configured = os.environ.get("POLLING_DATABASE_URL", "").strip()
     if configured:
+        if configured.startswith("postgres://"):
+            configured = "postgresql://" + configured[len("postgres://") :]
+        driver = configured.split("://", 1)[0]
+        if driver == "postgresql":
+            configured = "postgresql+psycopg://" + configured[len("postgresql://") :]
         return configured
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     return f"sqlite:///{(DATA_DIR / 'txpoll.sqlite').as_posix()}"

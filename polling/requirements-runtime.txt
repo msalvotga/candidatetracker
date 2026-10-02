@@ -1,0 +1,10 @@
+# Packages the API needs to include a poll and recompute the snapshot.
+# The heavier scientific stack in requirements.txt is for calibration, not for a live update.
+sqlalchemy>=2.0
+pyyaml>=6.0
+python-dotenv>=1.0
+numpy>=2.0
+pandas>=2.2
+httpx>=0.27
+beautifulsoup4>=4.12
+psycopg[binary]>=3.2

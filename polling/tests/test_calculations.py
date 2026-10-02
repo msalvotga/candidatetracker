@@ -335,6 +335,43 @@ class SnapshotTests(unittest.TestCase):
             Path(handle.name).unlink(missing_ok=True)
 
 
+class DatabaseUrlTests(unittest.TestCase):
+    def test_postgres_url_uses_the_psycopg_driver(self):
+        from txpoll.config import database_url
+
+        previous = os.environ.get("POLLING_DATABASE_URL")
+        os.environ["POLLING_DATABASE_URL"] = "postgres://user:secret@localhost:5432/election"
+        try:
+            self.assertEqual(
+                database_url(),
+                "postgresql+psycopg://user:secret@localhost:5432/election",
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("POLLING_DATABASE_URL", None)
+            else:
+                os.environ["POLLING_DATABASE_URL"] = previous
+
+    def test_election_database_url_is_not_the_poll_archive(self):
+        from txpoll.config import database_url
+
+        previous_poll = os.environ.get("POLLING_DATABASE_URL")
+        previous_app = os.environ.get("DATABASE_URL")
+        os.environ.pop("POLLING_DATABASE_URL", None)
+        os.environ["DATABASE_URL"] = "postgres://user:secret@localhost:5432/election"
+        try:
+            self.assertTrue(database_url().startswith("sqlite:///"))
+        finally:
+            if previous_poll is None:
+                os.environ.pop("POLLING_DATABASE_URL", None)
+            else:
+                os.environ["POLLING_DATABASE_URL"] = previous_poll
+            if previous_app is None:
+                os.environ.pop("DATABASE_URL", None)
+            else:
+                os.environ["DATABASE_URL"] = previous_app
+
+
 def _observation(poll_id, sponsor_type, source_code, margin=4.0, midpoint=None, pollster="Example Poll"):
     midpoint = date(2026, 9, 20).toordinal() if midpoint is None else midpoint
     return Observation(

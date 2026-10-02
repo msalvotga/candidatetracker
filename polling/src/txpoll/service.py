@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from txpoll import MODEL_VERSION
@@ -139,6 +139,50 @@ def import_historical(session: Session, *, force: bool = False) -> dict[str, int
     _link_similar(session)
     session.commit()
     return {"inserted": inserted, "updated": updated, "skipped": 0}
+
+
+def _snapshot_matches(session: Session) -> bool:
+    """True when the published snapshot describes the same polls as the database."""
+    if not SNAPSHOT_PATH.exists():
+        return False
+    try:
+        snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    snap_rows = snapshot.get("polls")
+    if not isinstance(snap_rows, list):
+        return False
+    polls = session.scalars(select(Poll).options(selectinload(Poll.review))).all()
+    try:
+        snap_state = sorted(
+            (int(row["id"]), str(row.get("externalKey")), bool(row.get("excluded")), bool(row.get("approved")))
+            for row in snap_rows
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    db_state = sorted(
+        (
+            poll.id,
+            poll.external_key,
+            bool(poll.excluded),
+            bool(poll.review and poll.review.approved_for_model),
+        )
+        for poll in polls
+    )
+    return snap_state == db_state
+
+
+def ensure_database(session: Session, software_version: str) -> str:
+    """Create the archive when this host has no polls, then republish a stale snapshot."""
+    count = session.scalar(select(func.count()).select_from(Poll)) or 0
+    if count == 0:
+        import_historical(session)
+        recompute(session, software_version)
+        return "imported"
+    if not _snapshot_matches(session):
+        recompute(session, software_version)
+        return "refreshed"
+    return "ready"
 
 
 def _insert_poll(session: Session, record: dict, config: dict) -> Poll:
@@ -1800,7 +1844,7 @@ def _include_poll(poll: Poll, reviewer: str) -> None:
     if errors:
         raise ValueError("Cannot include this poll. " + " ".join(errors))
     if poll.review is None:
-        raise KeyError(poll.id)
+        raise ValueError(f"No poll with id {poll.id}. Reload the page and try again.")
     poll.excluded = False
     poll.exclusion_reason = None
     messages = _review_messages(poll)
@@ -1823,7 +1867,7 @@ def _include_poll(poll: Poll, reviewer: str) -> None:
 def set_approval(session: Session, poll_id: int, approved: bool, reviewer: str) -> None:
     poll = session.get(Poll, poll_id)
     if poll is None or poll.review is None:
-        raise KeyError(poll_id)
+        raise ValueError(f"No poll with id {poll_id}. Reload the page and try again.")
     if approved:
         _include_poll(poll, reviewer)
     else:
@@ -1838,7 +1882,7 @@ def set_approval(session: Session, poll_id: int, approved: bool, reviewer: str) 
 def set_exclusion(session: Session, poll_id: int, excluded: bool, reason: str) -> None:
     poll = session.get(Poll, poll_id)
     if poll is None or poll.review is None:
-        raise KeyError(poll_id)
+        raise ValueError(f"No poll with id {poll_id}. Reload the page and try again.")
     if excluded:
         if not (reason or "").strip():
             raise ValueError("Excluding a poll requires a reason.")
@@ -1884,7 +1928,7 @@ def merge_polls(session: Session, keep_id: int, drop_id: int) -> None:
 def unmerge_poll(session: Session, poll_id: int) -> None:
     poll = session.get(Poll, poll_id)
     if poll is None:
-        raise KeyError(poll_id)
+        raise ValueError(f"No poll with id {poll_id}. Reload the page and try again.")
     links = session.scalars(
         select(PollLink).where(or_(PollLink.left_poll_id == poll_id, PollLink.right_poll_id == poll_id))
     ).all()

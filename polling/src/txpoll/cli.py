@@ -28,7 +28,7 @@ def software_version() -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="txpoll")
-    parser.add_argument("command", choices=["init", "recompute", "discover", "export", "serve", "settings", "reset-settings", "approve", "exclude", "include", "manual", "merge", "unmerge"])
+    parser.add_argument("command", choices=["init", "recompute", "discover", "export", "serve", "settings", "reset-settings", "approve", "exclude", "include", "manual", "merge", "unmerge", "ensure"])
     parser.add_argument("--force-import", action="store_true")
     parser.add_argument("--id", type=int)
     parser.add_argument("--keep", type=int)
@@ -46,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from .service import (
             add_manual_poll,
+            ensure_database,
             merge_polls,
             reset_config,
             save_config_patch,
@@ -54,7 +55,9 @@ def main(argv: list[str] | None = None) -> int:
             unmerge_poll,
         )
 
-        if args.command == "init":
+        if args.command == "ensure":
+            print(ensure_database(session, software_version()))
+        elif args.command == "init":
             summary = import_historical(session, force=args.force_import)
             snapshot = recompute(session, software_version())
             print(json.dumps({"import": summary, "label": snapshot["overview"]["label"], "polls": snapshot["overview"]["pollsInModel"]}))
