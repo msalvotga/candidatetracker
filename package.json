@@ -1,7 +1,7 @@
 {
   "name": "electionnighttracker",
   "private": true,
-  "version": "1.152.1608",
+  "version": "1.153.0915",
   "type": "module",
   "scripts": {
     "dev": "vite",

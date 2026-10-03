@@ -24,11 +24,12 @@ export function parseIsoDateFromTravisFilename(entryName) {
 
 /**
  * @param {string} entryName
- * @returns {'EV' | 'AB' | ''}
+ * @returns {'EV' | 'AB' | 'ED' | ''}
  */
 export function travisMethodFromEntryName(entryName) {
   const n = String(entryName ?? "").toLowerCase();
   if (/\bballot\s*by\s*mail\b|\bbbm\b/.test(n)) return "AB";
+  if (/\belection\s*day\b/.test(n)) return "ED";
   if (/\bearly\s*vote\b/.test(n)) return "EV";
   return "";
 }

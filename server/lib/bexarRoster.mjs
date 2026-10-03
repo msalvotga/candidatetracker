@@ -23,7 +23,8 @@ export function bexarRosterDateFromName(name) {
 
 export function bexarRosterKind(name) {
   const text = String(name ?? "");
-  if (/early\s*vot|in[-\s]?person|election\s*day/i.test(text)) return "EV";
+  if (/election\s*day/i.test(text)) return "ED";
+  if (/early\s*vot|in[-\s]?person/i.test(text)) return "EV";
   if (/mail|abbm|absentee|\bbbm\b/i.test(text)) return "AB";
   return null;
 }

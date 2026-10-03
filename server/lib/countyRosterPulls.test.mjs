@@ -5,6 +5,7 @@ import {
   rosterCaughtUp,
   rosterCountyCounts,
   mergeRosterRecords,
+  rosterMethodCode,
   registrationDateFromProfile,
   rosterVotersToCsv,
   sortRosterVoters,
@@ -61,6 +62,35 @@ test("keeps a matched voter and does not look that VUID up again", () => {
   assert.equal(secondDay.county, "TRAVIS");
   assert.equal(secondDay.txHouse, "49");
   assert.equal(secondDay.score2026, 55.1);
+  assert.equal(secondDay.votingMethod, null);
+});
+
+test("keeps a voting method and fills it when the same ballot is pulled again", () => {
+  const first = mergeRosterRecords(
+    [],
+    [{ vuid: "1", activityDate: "2026-10-01", votingMethod: "AB" }],
+    "harris",
+  );
+  assert.equal(first.voters[0].votingMethod, "AB");
+  const same = mergeRosterRecords(
+    first.voters,
+    [{ vuid: "1", activityDate: "2026-10-01", votingMethod: "EV" }],
+    "harris",
+  );
+  assert.equal(same.added, 0);
+  assert.equal(same.voters[0].votingMethod, "AB");
+  const filled = mergeRosterRecords(
+    [{ vuid: "1", voteDate: "2026-10-01", sourceCounty: "montgomery", matched: 0, votingMethod: null }],
+    [{ vuid: "1", activityDate: "2026-10-01", votingMethod: "EV" }],
+    "montgomery",
+  );
+  assert.equal(filled.added, 0);
+  assert.equal(filled.voters[0].votingMethod, "EV");
+  assert.equal(rosterMethodCode("AB"), "abb");
+  assert.equal(rosterMethodCode("EV"), "ev");
+  assert.equal(rosterMethodCode("ED"), "ed");
+  assert.equal(rosterMethodCode("election day"), "ed");
+  assert.equal(rosterMethodCode(""), "");
 });
 
 test("uses the county where the ballot was cast and clears districts when the roll county differs", () => {
@@ -194,6 +224,7 @@ test("exports the voted roster columns, name, address, and other voter-file fiel
       txHouse: "134",
       txSenate: "7",
       usHouse: "38",
+      votingMethod: "AB",
       matched: 1,
       profile: [
         { label: "FirstName", value: "Ada" },
@@ -208,6 +239,7 @@ test("exports the voted roster columns, name, address, and other voter-file fiel
     {
       vuid: '200, "quoted"',
       voteDate: "2026-10-02",
+      votingMethod: "EV",
       matched: 0,
       profile: null,
     },
@@ -215,11 +247,11 @@ test("exports the voted roster columns, name, address, and other voter-file fiel
   const lines = csv.replace(/^\uFEFF/, "").split("\r\n");
   assert.equal(
     lines[0],
-    "Vote date,VUID,Registration date,2026 model,2022 model,County,State House,State Senate,Congress,Matched,Name,Address,Party",
+    "Vote date,Method,VUID,Registration date,2026 model,2022 model,County,State House,State Senate,Congress,Matched,Name,Address,Party",
   );
   assert.equal(
     lines[1],
-    "2026-10-01,100,2020-01-02,46.6,0.512,HARRIS,134,7,38,1,Ada Lovelace,\"100 MAIN ST, Houston, TX 77002\",REP",
+    "2026-10-01,abb,100,2020-01-02,46.6,0.512,HARRIS,134,7,38,1,Ada Lovelace,\"100 MAIN ST, Houston, TX 77002\",REP",
   );
-  assert.equal(lines[2], '2026-10-02,"200, ""quoted""",,,,,,,,0,,,');
+  assert.equal(lines[2], '2026-10-02,ev,"200, ""quoted""",,,,,,,,0,,,');
 });

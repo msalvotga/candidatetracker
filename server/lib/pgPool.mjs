@@ -268,8 +268,16 @@ export function createCompatPool(connectionString) {
   _nativePool = new pg.Pool({
     connectionString,
     ssl: useSsl,
+    onConnect(client) {
+      client.on("error", (err) => {
+        console.error("Postgres client connection error:", err instanceof Error ? err.message : err);
+      });
+    },
   });
   const pool = _nativePool;
+  pool.on("error", (err) => {
+    console.error("Postgres pool connection error:", err instanceof Error ? err.message : err);
+  });
   return {
     get connected() {
       return !!pool;

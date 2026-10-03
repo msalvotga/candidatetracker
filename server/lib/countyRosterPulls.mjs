@@ -220,11 +220,35 @@ function voterKey(vuid, voteDate) {
   return `${vuid}|${voteDate}`;
 }
 
+/** CSV method: abb mail/absentee, ev early in person, ed election day. */
+export function rosterMethodCode(raw) {
+  const text = String(raw ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[_-]+/g, " ");
+  if (!text || text === "OTHER") return "";
+  if (text === "AB" || text === "ABB" || text === "BBM" || text === "MAIL" || text === "ABSENTEE" || text === "BALLOT BY MAIL") return "abb";
+  if (text === "ED" || text === "ELECTION DAY") return "ed";
+  if (text === "EV" || text === "EARLY" || text === "EARLY VOTING" || text === "IN PERSON") return "ev";
+  return "";
+}
+
+function storedVotingMethod(raw) {
+  const code = rosterMethodCode(raw);
+  if (code === "abb") return "AB";
+  if (code === "ev") return "EV";
+  if (code === "ed") return "ED";
+  return "";
+}
+
+const MAIL_ONLY_ROSTER_COUNTIES = new Set(["harris", "ellis", "galveston", "wise"]);
+
 function blankVoter(vuid, voteDate, sourceCounty) {
   return {
     vuid,
     voteDate,
     sourceCounty,
+    votingMethod: null,
     matched: 0,
     county: null,
     txHouse: null,
@@ -397,6 +421,7 @@ export function rosterVotersToCsv(voters) {
   extraLabels.sort((a, b) => a.localeCompare(b, "en"));
   const header = [
     "Vote date",
+    "Method",
     "VUID",
     "Registration date",
     "2026 model",
@@ -416,6 +441,7 @@ export function rosterVotersToCsv(voters) {
     const extras = new Map(fields.map((field) => [String(field.label ?? "").trim(), field.value]));
     const cells = [
       row.voteDate ?? "",
+      rosterMethodCode(row.votingMethod),
       row.vuid ?? "",
       row.registrationDate ?? "",
       csvScore(row.score2026),
@@ -506,8 +532,14 @@ export function mergeRosterRecords(existing, incoming, sourceCounty) {
     const voteDate = String(raw.activityDate ?? raw.voteDate ?? "").trim();
     if (!vuid || !voteDate) continue;
     const key = voterKey(vuid, voteDate);
-    if (byKey.has(key)) continue;
+    const method = storedVotingMethod(raw.votingMethod);
+    if (byKey.has(key)) {
+      const existing = byKey.get(key);
+      if (method && !existing.votingMethod) existing.votingMethod = method;
+      continue;
+    }
     const row = blankVoter(vuid, voteDate, sourceCounty);
+    if (method) row.votingMethod = method;
     const prior = known.get(vuid);
     if (prior) copyMatch(row, prior);
     byKey.set(key, row);
@@ -609,10 +641,28 @@ async function readVoters() {
   for (const row of rows) {
     const before = JSON.stringify(row);
     tieVoteToCounty(row);
+    if (!row.votingMethod && MAIL_ONLY_ROSTER_COUNTIES.has(String(row.sourceCounty ?? "").toLowerCase())) {
+      row.votingMethod = "AB";
+    }
     if (JSON.stringify(row) !== before) changed = true;
   }
   if (changed) await writeVoters(rows);
   return rows;
+}
+
+function countyDatesWithMethod(voters, countyKey) {
+  const key = String(countyKey).toLowerCase();
+  const complete = new Set();
+  const incomplete = new Set();
+  for (const row of voters ?? []) {
+    if (String(row.sourceCounty ?? "").toLowerCase() !== key) continue;
+    const date = String(row.voteDate ?? "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (row.votingMethod) complete.add(date);
+    else incomplete.add(date);
+  }
+  for (const date of incomplete) complete.delete(date);
+  return complete;
 }
 
 async function writeVoters(voters) {
@@ -928,12 +978,7 @@ async function pullBexar() {
     throw new Error("Bexar document list was not available.");
   }
   const files = bexarRosterDocuments(documents);
-  const have = new Set();
-  for (const row of await readVoters()) {
-    if (String(row.sourceCounty ?? "").toLowerCase() !== "bexar") continue;
-    const date = String(row.voteDate ?? "").trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) have.add(date);
-  }
+  const have = countyDatesWithMethod(await readVoters(), "bexar");
   const selected = bexarRosterFilesToPull(files, have);
   if (!selected.length) {
     throw new Error("No dated Bexar roster PDF was in the November 3, 2026 document folder.");
@@ -1081,12 +1126,7 @@ async function pullGalveston() {
     throw new Error(`Galveston roster page was not available (${page.status}). ${GALVESTON_ROSTER_PAGE}`);
   }
   const files = galvestonMailRosterLinks(await page.text());
-  const have = new Set();
-  for (const row of await readVoters()) {
-    if (String(row.sourceCounty ?? "").toLowerCase() !== "galveston") continue;
-    const date = String(row.voteDate ?? "").trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) have.add(date);
-  }
+  const have = countyDatesWithMethod(await readVoters(), "galveston");
   const selected = galvestonRosterFilesToPull(files, have);
   if (!selected.length) {
     throw new Error("No mail ballot roster CSV was under Mail Ballot Rosters on the Galveston elections page.");
@@ -1126,12 +1166,7 @@ async function pullMontgomery() {
     throw new Error(`Montgomery roster page was not available (${page.status}). ${MONTGOMERY_ROSTER_PAGE}`);
   }
   const files = montgomeryRosterLinks(await page.text());
-  const have = new Set();
-  for (const row of await readVoters()) {
-    if (String(row.sourceCounty ?? "").toLowerCase() !== "montgomery") continue;
-    const date = String(row.voteDate ?? "").trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) have.add(date);
-  }
+  const have = countyDatesWithMethod(await readVoters(), "montgomery");
   const selected = montgomeryRosterFilesToPull(files, have);
   if (!selected.length) {
     throw new Error("No dated roster zip was on the Montgomery early voting roster page.");
