@@ -676,8 +676,11 @@ export function App() {
             ) : null}
           </div>
         ) : null}
-        {screen === "dashboard" && !current && !listLoading && !loadError && !electionOptions.length ? (
+        {screen === "dashboard" && !current && !listLoading && !detailLoading && !loadError && !electionOptions.length ? (
           <div className="enr-panel">No elections are available from the current catalog.</div>
+        ) : null}
+        {screen === "dashboard" && !current && !listLoading && !detailLoading && !loadError && electionOptions.length > 0 ? (
+          <div className="enr-panel">Loading results for the selected election…</div>
         ) : null}
 
         {screen === "dashboard" && current ? (
@@ -730,7 +733,10 @@ export function App() {
             {showingFavorites && favoritesLoading ? <div className="enr-panel">Loading favorites…</div> : null}
             {showingFavorites && !favoritesLoading && !tabRaces.length ? (
               <div className="enr-panel">
-                No favorite races yet. Open any race in the other office tabs and click the star to add it here.
+                {current.file.races.length === 0 && current.file.reporting.resultStatus === "NOT YET REPORTING"
+                  ? (current.file.reporting.nextUpdateNote ||
+                    "The Secretary of State has not published a results file for this election yet.")
+                  : "No favorite races yet. Open any race in the other office tabs and click the star to add it here."}
               </div>
             ) : null}
             {view === "race" && showingFavorites && tabRaces.length ? (

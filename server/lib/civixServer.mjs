@@ -5,9 +5,29 @@ const CIVIX_API =
   process.env.CIVIX_API_BASE?.trim() ||
   "https://goelect.txelections.civixapps.com/api-ivis-system/api";
 
-/** @param {string} url @param {string} [requestCookie] */
-async function fetchJson(url, requestCookie) {
-  const res = await fetch(url, { headers: await buildCivixFetchHeaders(requestCookie) });
+const CIVIX_FETCH_MS = 12_000;
+
+/** @param {AbortSignal} [signal] */
+function civixFetchSignal(signal) {
+  const timeout = AbortSignal.timeout(CIVIX_FETCH_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+/**
+ * Civix answers unknown or not-yet-published elections with `{"Version":""}` and no Home or race sections.
+ * @param {Record<string, unknown> | null | undefined} election
+ */
+export function civixElectionUnpublished(election) {
+  if (!election || typeof election !== "object") return true;
+  return !(election.Home || election.Federal || election.StateWide || election.Districted || election.StateWideQ);
+}
+
+/** @param {string} url @param {string} [requestCookie] @param {AbortSignal} [signal] */
+async function fetchJson(url, requestCookie, signal) {
+  const res = await fetch(url, {
+    headers: await buildCivixFetchHeaders(requestCookie),
+    signal: civixFetchSignal(signal),
+  });
   if (!res.ok) {
     const hint =
       res.status === 403
@@ -23,9 +43,12 @@ async function fetchJson(url, requestCookie) {
  * detect that and fail softly so callers can fall back to the default countyInfo endpoint.
  * @returns {{ ok: true, data: unknown } | { ok: false, error: string }}
  */
-/** @param {string} url @param {string} [requestCookie] */
-async function tryFetchCountyJson(url, requestCookie) {
-  const res = await fetch(url, { headers: await buildCivixFetchHeaders(requestCookie) });
+/** @param {string} url @param {string} [requestCookie] @param {AbortSignal} [signal] */
+async function tryFetchCountyJson(url, requestCookie, signal) {
+  const res = await fetch(url, {
+    headers: await buildCivixFetchHeaders(requestCookie),
+    signal: civixFetchSignal(signal),
+  });
   if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
   const ct = (res.headers.get("content-type") || "").toLowerCase();
   if (ct.includes("pdf")) return { ok: false, error: "content-type is PDF" };
@@ -78,29 +101,37 @@ export async function fetchCivixElectionBundleWithOverrides(civixElectionId, ove
   const sosCountyInfoUrlConfigured = override || "";
   const requestCookie = overrides?.requestCookie;
 
-  const electionP = fetchJson(electionUrl, requestCookie);
+  const election = await fetchJson(electionUrl, requestCookie);
+  if (civixElectionUnpublished(election)) {
+    return {
+      election,
+      county: {},
+      sosCountyInfoUrlConfigured,
+      sosCountyInfoUrlUsed: "",
+    };
+  }
+
   /** @type {{ used: string }} */
   const countyFetch = { used: defaultCountyUrl };
-  const countyP = (async () => {
-    if (!override) {
-      countyFetch.used = defaultCountyUrl;
-      return fetchJson(defaultCountyUrl, requestCookie);
-    }
+  let county;
+  if (!override) {
+    county = await fetchJson(defaultCountyUrl, requestCookie);
+  } else {
     const attempt = await tryFetchCountyJson(override, requestCookie);
     if (attempt.ok) {
       countyFetch.used = override;
-      return attempt.data;
+      county = attempt.data;
+    } else {
+      console.warn("countyInfoUrl override is not valid Civix JSON; using default county bundle", {
+        civixElectionId,
+        override,
+        detail: attempt.error,
+      });
+      countyFetch.used = defaultCountyUrl;
+      county = await fetchJson(defaultCountyUrl, requestCookie);
     }
-    console.warn("countyInfoUrl override is not valid Civix JSON; using default county bundle", {
-      civixElectionId,
-      override,
-      detail: attempt.error,
-    });
-    countyFetch.used = defaultCountyUrl;
-    return fetchJson(defaultCountyUrl, requestCookie);
-  })();
+  }
 
-  const [election, county] = await Promise.all([electionP, countyP]);
   return {
     election,
     county,

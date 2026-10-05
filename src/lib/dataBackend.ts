@@ -87,9 +87,22 @@ export function civixListToOptions(items: CivixElectionListItem[]): ElectionOpti
 }
 
 export async function loadElectionFromBackend(catalogId: string, catalogLabel: string): Promise<LoadedElection> {
-  const r = await apiFetch("/api/election-data?" + new URLSearchParams({ catalogId }), {
-    cache: "no-store",
-  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30_000);
+  let r: Response;
+  try {
+    r = await apiFetch("/api/election-data?" + new URLSearchParams({ catalogId }), {
+      cache: "no-store",
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") {
+      throw new Error("The results feed took too long. It will try again.");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!r.ok) throw new Error(`HTTP ${r.status} loading ${catalogId}`);
   const body = (await r.json()) as
     | { provider: "manual"; electionFile: ElectionFile }

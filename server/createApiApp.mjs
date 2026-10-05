@@ -2413,10 +2413,46 @@ export function createApiApp() {
     }
   });
 
+  const civixHttpCache = new Map();
+
   async function civixElectionHttpPayload(num) {
+    const key = String(num);
+    const now = Date.now();
+    const cached = civixHttpCache.get(key);
+    if (cached?.payload && now - cached.at < 20_000) return cached.payload;
+    if (cached?.pending) return cached.pending;
+    const pending = buildCivixElectionHttpPayload(num)
+      .then((payload) => {
+        civixHttpCache.set(key, { at: Date.now(), payload });
+        return payload;
+      })
+      .finally(() => {
+        const cur = civixHttpCache.get(key);
+        if (cur?.pending === pending) {
+          if (cur.payload) delete cur.pending;
+          else civixHttpCache.delete(key);
+        }
+      });
+    civixHttpCache.set(key, { pending });
+    return pending;
+  }
+
+  async function buildCivixElectionHttpPayload(num) {
     const cfg = await getElectionIngestConfig(num);
     const countyInfoUrl = cfg.sosCountyInfoUrl;
     const bundle = await loadCivixBundleWithCacheFallback(num, countyInfoUrl);
+    if (!bundle.election?.Home && !collectCivixSosRaces(bundle.election).length) {
+      return {
+        provider: "civix",
+        civixElectionId: num,
+        sosCountyInfoUrlConfigured: bundle.sosCountyInfoUrlConfigured,
+        sosCountyInfoUrlUsed: bundle.sosCountyInfoUrlUsed,
+        election: bundle.election,
+        county: bundle.county ?? {},
+        appRefreshedAt: null,
+        ...(bundle.civixFromCache ? { civixFromCache: true, civixCacheNote: bundle.civixCacheNote } : {}),
+      };
+    }
     const { election, county, sosCountyInfoUrlConfigured, sosCountyInfoUrlUsed, civixFromCache, civixCacheNote } =
       bundle;
     const mergedSd4 = await mergeSd4CountyOverridesIntoCivix(num, election, county);

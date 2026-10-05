@@ -165,7 +165,29 @@ export function mapCivixPayloadToElectionFile(
   countyDoc: Record<string, unknown>,
 ): ElectionFile {
   const home = decodeElectionSection<CivixHome>(electionPayload, "Home");
-  if (!home) throw new Error("Civix election payload missing Home section");
+  if (!home) {
+    return {
+      schemaVersion: 1,
+      source: {
+        id: "tx-sos-civix-enr",
+        label: "Texas Secretary of State (Civix ENR)",
+        type: "sos",
+      },
+      election: {
+        id: String(civixElectionId),
+        label: catalogLabel,
+        navTitle: catalogLabel.replace(/\s*\(\d{4}\)\s*$/, "").toUpperCase(),
+      },
+      reporting: {
+        counties: { reported: 0, total: 0 },
+        pollingLocations: { reported: 0, total: 0 },
+        lastUpdated: new Date().toISOString(),
+        resultStatus: "NOT YET REPORTING",
+        nextUpdateNote: "The Secretary of State has not published a results file for this election yet.",
+      },
+      races: [],
+    };
+  }
 
   const countyRoot = decodeCountyIndex(countyDoc);
 
