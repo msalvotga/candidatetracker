@@ -125,9 +125,17 @@ const ROSTER_PULL_GATE = "__enrRosterPullGate";
 
 function rosterGate() {
   if (!globalThis[ROSTER_PULL_GATE]) {
-    globalThis[ROSTER_PULL_GATE] = { active: null, queue: [], lock: false };
+    globalThis[ROSTER_PULL_GATE] = { active: null, queue: [], lock: false, automatic: false };
   }
   return globalThis[ROSTER_PULL_GATE];
+}
+
+/** Drop a schedule lineup when automatic pulls are off. A manual Pull all keeps its queue. */
+export function dropAutomaticRosterQueue(gate, scheduleEnabled) {
+  if (!gate?.automatic || scheduleEnabled) return false;
+  gate.queue = [];
+  gate.automatic = false;
+  return true;
 }
 
 function emptyCountyStatus(key) {
@@ -1400,6 +1408,7 @@ export async function updateRosterSchedule(patch) {
   }
   await writeRosterDocument("schedule", next);
   await writeJsonFile(SCHEDULE_PATH, next);
+  dropAutomaticRosterQueue(rosterGate(), next.enabled);
   return next;
 }
 
@@ -1444,12 +1453,19 @@ export async function readCountyRosterBoard() {
 }
 
 async function continueRosterQueue() {
-  const next = rosterGate().queue.shift();
-  if (!next) return;
+  const gate = rosterGate();
+  if (gate.automatic && dropAutomaticRosterQueue(gate, (await readRosterSchedule()).enabled)) return;
+  const next = gate.queue.shift();
+  if (!next) {
+    gate.automatic = false;
+    return;
+  }
   try {
     await startCountyRosterPull(next);
   } catch (error) {
-    rosterGate().queue = [];
+    const failed = rosterGate();
+    failed.queue = [];
+    failed.automatic = false;
     console.error("County roster queue", error);
   }
 }
@@ -1567,12 +1583,15 @@ export async function runDueRosterPulls(now = new Date()) {
   store.updatedAt = checkedAt;
   await writeStore(store);
   if (rosterGate().active || rosterGate().lock || rosterGate().queue.length) return { started: false, reason: "busy" };
-  rosterGate().queue = due.slice(1);
+  const gate = rosterGate();
+  gate.automatic = true;
+  gate.queue = due.slice(1);
   try {
     await startCountyRosterPull(due[0]);
     return { started: true, counties: due };
   } catch (error) {
-    rosterGate().queue = [];
+    gate.queue = [];
+    gate.automatic = false;
     if (error?.statusCode === 409) return { started: false, reason: "busy" };
     throw error;
   }
@@ -1586,6 +1605,7 @@ export function startRosterPullSchedule() {
   gate.active = null;
   gate.queue = [];
   gate.lock = false;
+  gate.automatic = false;
   const existing = globalThis[SCHEDULE_GLOBAL];
   if (existing?.timer) clearInterval(existing.timer);
   if (existing?.boot) clearTimeout(existing.boot);

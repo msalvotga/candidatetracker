@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   countiesDueForRosterPull,
+  dropAutomaticRosterQueue,
   rosterCaughtUp,
   rosterCountyCounts,
   mergeRosterRecords,
@@ -210,6 +211,16 @@ test("auto-pulls at 9, 10, 11, and noon Central, Monday through Saturday, until 
     ["harris", "travis"],
   );
   assert.deepEqual(countiesDueForRosterPull({}, { ...HOURLY, enabled: false }, nine, voters), []);
+});
+
+test("turning automatic pulls off drops the lineup and leaves a manual pull-all alone", () => {
+  const automatic = { automatic: true, queue: ["harris", "travis"] };
+  assert.equal(dropAutomaticRosterQueue(automatic, false), true);
+  assert.deepEqual(automatic.queue, []);
+  assert.equal(automatic.automatic, false);
+  const manual = { automatic: false, queue: ["harris", "travis"] };
+  assert.equal(dropAutomaticRosterQueue(manual, false), false);
+  assert.deepEqual(manual.queue, ["harris", "travis"]);
 });
 
 test("exports the voted roster columns, name, address, and other voter-file fields", () => {
