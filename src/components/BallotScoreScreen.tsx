@@ -185,37 +185,53 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
+    let timer = 0;
+    async function readBody(response: Response) {
+      const text = await response.text();
+      if (!text || text.trimStart().startsWith("<")) {
+        if (response.status === 429 || response.status === 503) {
+          throw new Error("The live server is busy. Ballot scores will try again shortly.");
+        }
+        throw new Error(`Ballot scores could not load (${response.status || "error"}).`);
+      }
+      const body = JSON.parse(text) as { error?: string; score?: { column?: string } };
+      if (!response.ok) throw new Error(body?.error || `Request failed (${response.status})`);
+      return body;
+    }
     async function load() {
+      if (cancelled || inFlight) return;
+      inFlight = true;
       try {
         const [summaryResponse, evResponse] = await Promise.all([
           apiFetch("/api/ballot-score", { cache: "no-store" }),
           apiFetch("/api/ballot-score/ev", { cache: "no-store" }),
         ]);
-        const summaryBody = await summaryResponse.json();
-        const evBody = (await evResponse.json()) as EvPayload;
-        if (!cancelled) setEv(evBody);
-        if (!summaryResponse.ok) throw new Error(summaryBody?.error || `Request failed (${summaryResponse.status})`);
+        const summaryBody = await readBody(summaryResponse);
+        const evBody = (await readBody(evResponse)) as EvPayload;
+        if (cancelled) return;
+        setError(null);
+        setEv(evBody);
         if (summaryBody?.score?.column !== "MODEL_GOV_BALLOT_SCORE") {
-          if (!cancelled) setRebuilding(true);
+          setRebuilding(true);
           return;
         }
-        if (!cancelled) {
-          setRebuilding(false);
-          setSummary(summaryBody as BallotScoreSummary);
-        }
+        setRebuilding(false);
+        setSummary(summaryBody as BallotScoreSummary);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load ballot scores");
       } finally {
-        if (!cancelled) setLoading(false);
+        inFlight = false;
+        if (!cancelled) {
+          setLoading(false);
+          timer = window.setTimeout(() => void load(), 20000);
+        }
       }
     }
     void load();
-    const timer = window.setInterval(() => {
-      void load();
-    }, 4000);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
   }, []);
 

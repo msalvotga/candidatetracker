@@ -1362,12 +1362,27 @@ export function createApiApp() {
     }
   });
 
+  let liveEvCache = null;
+  let liveEvPending = null;
+  async function liveEvPayload() {
+    const now = Date.now();
+    if (liveEvCache && now - liveEvCache.at < 20_000) return liveEvCache.payload;
+    if (liveEvPending) return liveEvPending;
+    liveEvPending = (async () => {
+      const payload = await readEvPayload();
+      if (payload.model) applyLiveRosterToModel(payload.model, await readRosterVoterRows());
+      liveEvCache = { at: Date.now(), payload };
+      return payload;
+    })().finally(() => {
+      liveEvPending = null;
+    });
+    return liveEvPending;
+  }
+
   app.get("/api/ballot-score/ev", async (_req, res) => {
     try {
       res.setHeader("Cache-Control", "no-store");
-      const payload = await readEvPayload();
-      if (payload.model) applyLiveRosterToModel(payload.model, await readRosterVoterRows());
-      res.json(payload);
+      res.json(await liveEvPayload());
     } catch (e) {
       res.status(500).json({ error: String(e?.message || e) });
     }

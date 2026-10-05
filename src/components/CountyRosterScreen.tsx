@@ -294,16 +294,23 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    void refresh().catch((e) => {
-      if (!cancelled) setError(e instanceof Error ? e.message : "Could not load county rosters");
-    });
-    void refreshVoted(offset, voterSort, voterDir).catch((e) => {
-      if (!cancelled) setError(e instanceof Error ? e.message : "Could not load voted voters");
-    });
+    let inFlight = false;
+    async function load() {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        await refresh();
+        await refreshVoted(offset, voterSort, voterDir);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Could not load county rosters");
+      } finally {
+        inFlight = false;
+      }
+    }
+    void load();
     const timer = window.setInterval(() => {
-      void refresh().catch(() => undefined);
-      void refreshVoted(offset, voterSort, voterDir).catch(() => undefined);
-    }, 3000);
+      void load();
+    }, 15000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
