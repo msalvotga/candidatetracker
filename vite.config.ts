@@ -41,7 +41,16 @@ function electionApiDevPlugin() {
 export default defineConfig(({ mode }) => {
   const proxyApiToServer = mode === "proxy";
   return {
-    plugins: [react(), ...(proxyApiToServer ? [] : [electionApiDevPlugin()])],
+    plugins: [
+      react(),
+      {
+        name: "strip-module-crossorigin",
+        transformIndexHtml(html: string) {
+          return html.replace(/ crossorigin/g, "");
+        },
+      },
+      ...(proxyApiToServer ? [] : [electionApiDevPlugin()]),
+    ],
     server: {
       proxy: {
         ...(proxyApiToServer

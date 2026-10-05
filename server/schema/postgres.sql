@@ -560,6 +560,16 @@ CREATE TABLE IF NOT EXISTS county_roster_documents (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')
 );
 
+CREATE TABLE IF NOT EXISTS county_roster_raw_files (
+  county_key TEXT NOT NULL,
+  pulled_stamp TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  byte_size INTEGER NOT NULL,
+  body BYTEA NOT NULL,
+  saved_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
+  PRIMARY KEY (county_key, pulled_stamp, file_name)
+);
+
 INSERT INTO ev_roster_configs (evr_election_id, party, election_name, election_date, notes) VALUES
   (58315, 'REP', '2026 REPUBLICAN PRIMARY RUNOFF ELECTION', '05/26/2026', 'Civix EVR'),
   (58314, 'DEM', '2026 DEMOCRATIC PRIMARY RUNOFF ELECTION', '05/26/2026', 'Civix EVR')

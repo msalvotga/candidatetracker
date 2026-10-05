@@ -18,6 +18,7 @@ import {
 } from "./galvestonRoster.mjs";
 import { parseTravisRosterZip } from "./travisEvRosterParse.mjs";
 import { readRosterDocument, writeRosterDocument } from "./countyRosterDocuments.mjs";
+import { openRosterRawArchive, rosterRawFileName } from "./rosterRawArchive.mjs";
 import { openLookupCsvStream } from "./ballotLookupStore.mjs";
 import { ELLIS_ROSTER_PAGE, ellisMailRosterLink, parseEllisRosterZip } from "./ellisRoster.mjs";
 import {
@@ -863,13 +864,20 @@ export async function listRosterVoters({ offset = 0, limit = 100, sort = "voteDa
   };
 }
 
+async function keepRosterDownload(archive, fileName, response) {
+  const bytes = Buffer.from(await response.arrayBuffer());
+  await archive.save(rosterRawFileName(fileName), bytes);
+  return bytes;
+}
+
 async function pullTravis() {
   const sourceUrl = TRAVIS_G26_ROSTER_ZIP_URL;
+  const archive = openRosterRawArchive("travis");
   const response = await fetch(sourceUrl, { headers: { "user-agent": "electionnighttracker" } });
   if (!response.ok) {
     throw new Error(`Travis roster file was not available (${response.status}). ${sourceUrl}`);
   }
-  const zip = await JSZip.loadAsync(Buffer.from(await response.arrayBuffer()));
+  const zip = await JSZip.loadAsync(await keepRosterDownload(archive, sourceUrl, response));
   const fileCount = Object.keys(zip.files).filter((name) => !zip.files[name].dir && /\.xlsx$/i.test(name)).length;
   const rows = await parseTravisRosterZip(zip, {
     dateScope: "CUMULATIVE",
@@ -904,11 +912,12 @@ async function pullHarris() {
   if (!link) {
     throw new Error("The November 3, 2026 Unofficial BBM Roster link was not on the Harris roster page.");
   }
+  const archive = openRosterRawArchive("harris");
   const response = await fetch(link.href, { headers: { "user-agent": "electionnighttracker" } });
   if (!response.ok) {
     throw new Error(`Harris roster file was not available (${response.status}). ${link.href}`);
   }
-  const zip = await JSZip.loadAsync(Buffer.from(await response.arrayBuffer()));
+  const zip = await JSZip.loadAsync(await keepRosterDownload(archive, link.href, response));
   const csvNames = Object.keys(zip.files).filter((name) => !zip.files[name].dir && /\.csv$/i.test(name));
   if (!csvNames.length) throw new Error("Harris roster ZIP did not contain a CSV file.");
   const parsed = { rows: [], skippedMissingVuid: 0, skippedMissingDate: 0, missingVuidDays: new Map() };
@@ -983,6 +992,7 @@ async function pullBexar() {
   if (!selected.length) {
     throw new Error("No dated Bexar roster PDF was in the November 3, 2026 document folder.");
   }
+  const archive = openRosterRawArchive("bexar");
   const rows = [];
   let skippedMissingDate = 0;
   for (const link of selected) {
@@ -992,7 +1002,7 @@ async function pullBexar() {
     if (!file.ok) {
       throw new Error(`Bexar roster file was not available (${file.status}). ${link.href}`);
     }
-    const parsed = await parseBexarAbbmPdf(Buffer.from(await file.arrayBuffer()), {
+    const parsed = await parseBexarAbbmPdf(await keepRosterDownload(archive, link.fileName || link.href, file), {
       votingMethod: link.votingMethod,
       fallbackDate: link.voteDate,
     });
@@ -1019,6 +1029,7 @@ async function pullPotter() {
   if (!links.length) {
     throw new Error("The Mail Ballot Roster PDF was not on the Potter County voting rosters page.");
   }
+  const archive = openRosterRawArchive("potter");
   const rows = [];
   let skippedMissingVuid = 0;
   for (const link of links) {
@@ -1028,7 +1039,7 @@ async function pullPotter() {
     if (!file.ok) {
       throw new Error(`Potter roster file was not available (${file.status}). ${link.href}`);
     }
-    const parsed = await parsePotterRosterPdf(Buffer.from(await file.arrayBuffer()), {
+    const parsed = await parsePotterRosterPdf(await keepRosterDownload(archive, link.fileName || link.href, file), {
       votingMethod: link.votingMethod,
     });
     rows.push(...parsed.rows);
@@ -1055,6 +1066,7 @@ async function pullTarrant() {
   if (!mail) {
     throw new Error("The Ballot by Mail zip was not on the Tarrant County November 3, 2026 results page.");
   }
+  const archive = openRosterRawArchive("tarrant");
   const rows = [];
   let skippedMissingVuid = 0;
   const missingByDate = new Map();
@@ -1066,7 +1078,7 @@ async function pullTarrant() {
     if (!file.ok) {
       throw new Error(`Tarrant roster file was not available (${file.status}). ${link.href}`);
     }
-    const parsed = await parseTarrantRosterZip(Buffer.from(await file.arrayBuffer()), {
+    const parsed = await parseTarrantRosterZip(await keepRosterDownload(archive, link.fileName || link.href, file), {
       votingMethod: link.votingMethod,
     });
     if (!parsed.posted) continue;
@@ -1102,13 +1114,14 @@ async function pullWise() {
   if (!link) {
     throw new Error("The early-voting-by-mail roster PDF was not on the Wise County Elections page.");
   }
+  const archive = openRosterRawArchive("wise");
   const file = await fetch(link.href, {
     headers: { "user-agent": "electionnighttracker", referer: WISE_ROSTER_PAGE },
   });
   if (!file.ok) {
     throw new Error(`Wise roster file was not available (${file.status}). ${link.href}`);
   }
-  const parsed = await parseWiseRosterPdf(Buffer.from(await file.arrayBuffer()));
+  const parsed = await parseWiseRosterPdf(await keepRosterDownload(archive, link.fileName || link.href, file));
   const saved = await saveRosterRows(parsed.rows, "wise");
   return {
     sourceUrl: link.href,
@@ -1131,6 +1144,7 @@ async function pullGalveston() {
   if (!selected.length) {
     throw new Error("No mail ballot roster CSV was under Mail Ballot Rosters on the Galveston elections page.");
   }
+  const archive = openRosterRawArchive("galveston");
   const rows = [];
   let skippedMissingVuid = 0;
   const missingByDate = new Map();
@@ -1139,7 +1153,9 @@ async function pullGalveston() {
     if (file.status !== 200) {
       throw new Error(`Galveston roster file was not available (${file.status}). ${link.href}`);
     }
-    const parsed = parseGalvestonMailCsv(await file.text());
+    const parsed = parseGalvestonMailCsv(
+      (await keepRosterDownload(archive, link.fileName || link.href, file)).toString("utf8"),
+    );
     rows.push(...parsed.rows);
     skippedMissingVuid += parsed.skippedMissingVuid;
     for (const day of parsed.missingVuidDays) {
@@ -1171,6 +1187,7 @@ async function pullMontgomery() {
   if (!selected.length) {
     throw new Error("No dated roster zip was on the Montgomery early voting roster page.");
   }
+  const archive = openRosterRawArchive("montgomery");
   const rows = [];
   let skippedMissingVuid = 0;
   const missingByDate = new Map();
@@ -1179,7 +1196,10 @@ async function pullMontgomery() {
     if (file.status !== 200) {
       throw new Error(`Montgomery roster file was not available (${file.status}). ${link.href}`);
     }
-    const parsed = await parseMontgomeryRosterZip(Buffer.from(await file.arrayBuffer()), link.fileName);
+    const parsed = await parseMontgomeryRosterZip(
+      await keepRosterDownload(archive, link.fileName || link.href, file),
+      link.fileName,
+    );
     rows.push(...parsed.rows);
     skippedMissingVuid += parsed.skippedMissingVuid;
     for (const day of parsed.missingVuidDays) {
@@ -1209,19 +1229,21 @@ async function pullEllis() {
   if (!link) {
     throw new Error("The Returned Ballots by Mail Roster Report was not on the Ellis Upcoming Elections page.");
   }
+  const archive = openRosterRawArchive("ellis");
   const file = await fetch(link.href, {
     headers: { "user-agent": "electionnighttracker", referer: ELLIS_ROSTER_PAGE },
   });
   if (!file.ok) {
     throw new Error(`Ellis roster file was not available (${file.status}). ${link.href}`);
   }
+  const ellisBytes = await keepRosterDownload(archive, link.fileName || link.href, file);
   const known = new Set();
   for (const row of await readVoters()) {
     if (String(row.sourceCounty ?? "").toLowerCase() !== "ellis") continue;
     const vuid = String(row.vuid ?? "").trim();
     if (vuid) known.add(vuid);
   }
-  const parsed = await parseEllisRosterZip(Buffer.from(await file.arrayBuffer()), known);
+  const parsed = await parseEllisRosterZip(ellisBytes, known);
   const saved = await saveRosterRows(parsed.rows, "ellis");
   return {
     sourceUrl: link.href,

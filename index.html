@@ -6,7 +6,20 @@
     <title>Texas Election Night Tracker</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div style="font-family: system-ui, sans-serif; padding: 24px; color: #111">
+        <h1 style="color: #0b2b52; font-size: 20px; margin: 0 0 8px">Texas Election Night Tracker</h1>
+        <p style="margin: 0">Loading the tracker…</p>
+      </div>
+    </div>
+    <script>
+      window.addEventListener("error", function (event) {
+        var root = document.getElementById("root");
+        if (!root || root.querySelector(".enr-app, .poll-page")) return;
+        var message = (event && event.message) || "The app script did not start.";
+        root.textContent = "Texas Election Night Tracker. " + message;
+      });
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
