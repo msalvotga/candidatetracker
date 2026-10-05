@@ -221,25 +221,21 @@ function voterKey(vuid, voteDate) {
   return `${vuid}|${voteDate}`;
 }
 
-/** CSV method: abb mail/absentee, ev early in person, ed election day. */
+/** CSV method: AB mail/absentee, EV early voting, ED election day. */
 export function rosterMethodCode(raw) {
   const text = String(raw ?? "")
     .trim()
     .toUpperCase()
     .replace(/[_-]+/g, " ");
   if (!text || text === "OTHER") return "";
-  if (text === "AB" || text === "ABB" || text === "BBM" || text === "MAIL" || text === "ABSENTEE" || text === "BALLOT BY MAIL") return "abb";
-  if (text === "ED" || text === "ELECTION DAY") return "ed";
-  if (text === "EV" || text === "EARLY" || text === "EARLY VOTING" || text === "IN PERSON") return "ev";
+  if (text === "AB" || text === "ABB" || text === "BBM" || text === "MAIL" || text === "ABSENTEE" || text === "BALLOT BY MAIL") return "AB";
+  if (text === "ED" || text === "ELECTION DAY") return "ED";
+  if (text === "EV" || text === "EARLY" || text === "EARLY VOTING" || text === "IN PERSON") return "EV";
   return "";
 }
 
 function storedVotingMethod(raw) {
-  const code = rosterMethodCode(raw);
-  if (code === "abb") return "AB";
-  if (code === "ev") return "EV";
-  if (code === "ed") return "ED";
-  return "";
+  return rosterMethodCode(raw);
 }
 
 const MAIL_ONLY_ROSTER_COUNTIES = new Set(["harris", "ellis", "galveston", "wise"]);

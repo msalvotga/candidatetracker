@@ -86,10 +86,10 @@ test("keeps a voting method and fills it when the same ballot is pulled again", 
   );
   assert.equal(filled.added, 0);
   assert.equal(filled.voters[0].votingMethod, "EV");
-  assert.equal(rosterMethodCode("AB"), "abb");
-  assert.equal(rosterMethodCode("EV"), "ev");
-  assert.equal(rosterMethodCode("ED"), "ed");
-  assert.equal(rosterMethodCode("election day"), "ed");
+  assert.equal(rosterMethodCode("AB"), "AB");
+  assert.equal(rosterMethodCode("EV"), "EV");
+  assert.equal(rosterMethodCode("ED"), "ED");
+  assert.equal(rosterMethodCode("election day"), "ED");
   assert.equal(rosterMethodCode(""), "");
 });
 
@@ -251,7 +251,7 @@ test("exports the voted roster columns, name, address, and other voter-file fiel
   );
   assert.equal(
     lines[1],
-    "2026-10-01,abb,100,2020-01-02,46.6,0.512,HARRIS,134,7,38,1,Ada Lovelace,\"100 MAIN ST, Houston, TX 77002\",REP",
+    "2026-10-01,AB,100,2020-01-02,46.6,0.512,HARRIS,134,7,38,1,Ada Lovelace,\"100 MAIN ST, Houston, TX 77002\",REP",
   );
-  assert.equal(lines[2], '2026-10-02,ev,"200, ""quoted""",,,,,,,,0,,,');
+  assert.equal(lines[2], '2026-10-02,EV,"200, ""quoted""",,,,,,,,0,,,');
 });
