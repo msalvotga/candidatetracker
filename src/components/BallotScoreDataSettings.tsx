@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { apiFetch, apiUrl } from "../lib/apiBase";
+import { apiFetch, apiQuietMs, apiUrl } from "../lib/apiBase";
 import { SettingsCollapse } from "./SettingsCollapse";
 
 type DatasetKind = "lookup" | "static2022" | "roster2026";
@@ -97,8 +97,9 @@ export function BallotScoreDataSettings() {
       if (!cancelled) setMessage("Could not load ballot score data status.");
     });
     const timer = window.setInterval(() => {
+      if (apiQuietMs() > 0) return;
       void refresh().catch(() => undefined);
-    }, 2000);
+    }, 15000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -335,7 +336,10 @@ function BallotScoreDownload() {
       }
     }
     void loadStatus();
-    const timer = window.setInterval(() => void loadStatus(), 1000);
+    const timer = window.setInterval(() => {
+      if (apiQuietMs() > 0) return;
+      void loadStatus();
+    }, 5000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);

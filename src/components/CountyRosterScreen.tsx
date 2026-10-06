@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch, apiUrl } from "../lib/apiBase";
+import { apiFetch, apiQuietMs, apiUrl } from "../lib/apiBase";
 import { electionHasRosterScores } from "../lib/rosterScoreElection";
 import { ElectionDatasetNotice } from "./ElectionDatasetNotice";
 import { TEXAS_COUNTIES } from "../lib/texasCounties";
@@ -323,7 +323,7 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
         void load().finally(() => {
           if (!cancelled) arm();
         });
-      }, matchingNow.current ? 2000 : 15000);
+      }, apiQuietMs() > 0 ? Math.max(60_000, apiQuietMs()) : matchingNow.current ? 2000 : 15000);
     }
     void load().finally(() => {
       if (!cancelled) arm();

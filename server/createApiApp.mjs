@@ -1364,15 +1364,28 @@ export function createApiApp() {
 
   let liveEvCache = null;
   let liveEvPending = null;
+  let liveEvFailedAt = 0;
+  const LIVE_EV_CACHE_MS = 3 * 60 * 1000;
+  const LIVE_EV_COOLDOWN_MS = 60 * 1000;
   async function liveEvPayload() {
     const now = Date.now();
-    if (liveEvCache && now - liveEvCache.at < 20_000) return liveEvCache.payload;
+    if (liveEvCache && now - liveEvCache.at < LIVE_EV_CACHE_MS) return liveEvCache.payload;
+    if (now - liveEvFailedAt < LIVE_EV_COOLDOWN_MS) {
+      const error = new Error("Ballot scores are busy. Try again in a minute.");
+      error.statusCode = 503;
+      throw error;
+    }
     if (liveEvPending) return liveEvPending;
     liveEvPending = (async () => {
-      const payload = await readEvPayload();
-      if (payload.model) applyLiveRosterToModel(payload.model, await readRosterVoterRows());
-      liveEvCache = { at: Date.now(), payload };
-      return payload;
+      try {
+        const payload = await readEvPayload();
+        if (payload.model) applyLiveRosterToModel(payload.model, await readRosterVoterRows());
+        liveEvCache = { at: Date.now(), payload };
+        return payload;
+      } catch (error) {
+        liveEvFailedAt = Date.now();
+        throw error;
+      }
     })().finally(() => {
       liveEvPending = null;
     });
@@ -1381,10 +1394,10 @@ export function createApiApp() {
 
   app.get("/api/ballot-score/ev", async (_req, res) => {
     try {
-      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Cache-Control", "private, max-age=60");
       res.json(await liveEvPayload());
     } catch (e) {
-      res.status(500).json({ error: String(e?.message || e) });
+      res.status(e.statusCode || 500).json({ error: String(e?.message || e) });
     }
   });
 

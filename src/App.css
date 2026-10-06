@@ -2842,6 +2842,22 @@ code {
   flex-wrap: wrap;
 }
 
+.enr-ballot__titleTabs {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.enr-ballot__chart {
+  min-height: 380px;
+  padding: 4px 8px 0;
+}
+
+.enr-card > .enr-ballot__hint {
+  padding: 10px 16px 14px;
+}
+
 .enr-ballot__tabs {
   display: flex;
   gap: 6px;

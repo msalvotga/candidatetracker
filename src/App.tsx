@@ -22,6 +22,7 @@ import { RaceSummary } from "./components/RaceSummary";
 import { CountyBreakdown } from "./components/CountyBreakdown";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { AppChrome, type AppScreen } from "./components/AppChrome";
+import { apiQuietMs } from "./lib/apiBase";
 import { APP_VERSION } from "./lib/appVersion";
 import { EV_ROSTER_ENABLED } from "./lib/featureFlags";
 import { EvRosterScreen } from "./components/EvRosterScreen";
@@ -373,6 +374,7 @@ export function App() {
     }
     let cancelled = false;
     const poll = () => {
+      if (apiQuietMs() > 0) return;
       void fetchIngestStatus(trackedCivixElectionId ?? undefined)
         .then((s) => {
           if (!cancelled) setIngestStatus(s);
@@ -382,7 +384,7 @@ export function App() {
         });
     };
     poll();
-    const id = window.setInterval(poll, 5000);
+    const id = window.setInterval(poll, 30_000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
@@ -396,6 +398,7 @@ export function App() {
     }
     let cancelled = false;
     const loadSettings = () => {
+      if (apiQuietMs() > 0) return;
       void fetchAppSettings()
         .then((s) => {
           if (!cancelled) setDisplayTimeZone(s.displayTimeZone || "America/Chicago");
@@ -405,7 +408,7 @@ export function App() {
         });
     };
     loadSettings();
-    const id = window.setInterval(loadSettings, 10000);
+    const id = window.setInterval(loadSettings, 5 * 60_000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
@@ -482,7 +485,7 @@ export function App() {
     let cancelled = false;
     let inFlight = false;
     const refreshLive = () => {
-      if (inFlight || detailLoading || ingestStatus?.running) return;
+      if (inFlight || detailLoading || ingestStatus?.running || apiQuietMs() > 0) return;
       inFlight = true;
       void loadElectionFromBackend(option.catalogId, option.catalogLabel)
         .then((bundle) => {
@@ -495,7 +498,7 @@ export function App() {
           inFlight = false;
         });
     };
-    const id = window.setInterval(refreshLive, 5000);
+    const id = window.setInterval(refreshLive, 20_000);
     return () => {
       cancelled = true;
       window.clearInterval(id);

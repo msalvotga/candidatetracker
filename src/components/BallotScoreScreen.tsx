@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { apiFetch } from "../lib/apiBase";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { apiFetch, apiQuietMs } from "../lib/apiBase";
 import { electionHasRosterScores } from "../lib/rosterScoreElection";
 import { ElectionDatasetNotice } from "./ElectionDatasetNotice";
 import { BallotScoreHeatmap, type BallotMapCell } from "./BallotScoreHeatmap";
@@ -115,6 +115,100 @@ function bucketStat(bucket: EvBucket | null, field: "score2022" | "score2026") {
   return statFromScore(bucket?.[field]);
 }
 
+type ModelDayPoint = {
+  label: string;
+  title: string;
+  y2022: number | null;
+  y2022n: number;
+  y2026: number | null;
+  y2026n: number;
+};
+
+function ModelDayChart({ points, selectedLabel }: { points: ModelDayPoint[]; selectedLabel: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const hasPoint = points.some((point) => point.y2022 != null || point.y2026 != null);
+  useEffect(() => {
+    const host = ref.current;
+    if (!host || !hasPoint) return;
+    let cancelled = false;
+    let plotly: { purge: (el: HTMLElement) => void } | null = null;
+    (async () => {
+      const Plotly = (await import("plotly.js-basic-dist")).default as {
+        newPlot: (el: HTMLElement, data: unknown[], layout?: object, config?: object) => Promise<void>;
+        purge: (el: HTMLElement) => void;
+      };
+      if (cancelled || !host) return;
+      plotly = Plotly;
+      const labels = points.map((point) => point.label);
+      const hover = (avg: number | null, count: number) => (avg == null ? "—" : `${avg.toFixed(1)} · ${count.toLocaleString("en-US")} voters`);
+      const values = points.flatMap((point) => [point.y2022, point.y2026]).filter((value): value is number => value != null);
+      const low = Math.min(...values);
+      const high = Math.max(...values);
+      const pad = Math.max(1, (high - low) * 0.12);
+      await Plotly.newPlot(
+        host,
+        [
+          {
+            type: "scatter",
+            mode: "lines+markers",
+            name: "2022 voters, 2026 model",
+            x: labels,
+            y: points.map((point) => point.y2022),
+            customdata: points.map((point) => hover(point.y2022, point.y2022n)),
+            line: { color: "#1d4f91", width: 2.5 },
+            marker: { color: "#1d4f91", size: 7 },
+            connectgaps: false,
+            hovertemplate: "%{x}<br>%{customdata}<extra>2022 voters</extra>",
+          },
+          {
+            type: "scatter",
+            mode: "lines+markers",
+            name: "2026 voters, 2026 model",
+            x: labels,
+            y: points.map((point) => point.y2026),
+            customdata: points.map((point) => hover(point.y2026, point.y2026n)),
+            line: { color: "#9f1d2e", width: 2.5 },
+            marker: { color: "#9f1d2e", size: 7 },
+            connectgaps: false,
+            hovertemplate: "%{x}<br>%{customdata}<extra>2026 voters</extra>",
+          },
+        ],
+        {
+          margin: { l: 58, r: 16, t: 36, b: 48 },
+          height: 380,
+          paper_bgcolor: "#fff",
+          plot_bgcolor: "#fff",
+          hovermode: "x unified",
+          legend: { orientation: "h", y: 1.12 },
+          xaxis: { title: "Voting day", type: "category", tickangle: -30 },
+          yaxis: { title: { text: "2026 model" }, zeroline: false, range: [low - pad, high + pad] },
+          shapes: [
+            {
+              type: "line",
+              xref: "x",
+              yref: "paper",
+              x0: selectedLabel,
+              x1: selectedLabel,
+              y0: 0,
+              y1: 1,
+              line: { color: "#c5ced6", width: 1, dash: "dot" },
+            },
+          ],
+        },
+        { responsive: true, displaylogo: false },
+      );
+    })();
+    return () => {
+      cancelled = true;
+      if (plotly && host) plotly.purge(host);
+    };
+  }, [points, selectedLabel, hasPoint]);
+  if (!hasPoint) {
+    return <p className="enr-ballot__hint">No 2026 model scores are available for these voting days yet.</p>;
+  }
+  return <div className="enr-ballot__chart" ref={ref} />;
+}
+
 function viewFromSources(
   summaryRow: GeoRow | undefined,
   evRow: EvGeo | undefined,
@@ -180,6 +274,7 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
   const [sortKey, setSortKey] = useState<SortKey>("label");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [evDay, setEvDay] = useState("1");
+  const [evPanel, setEvPanel] = useState<"summary" | "graph">("summary");
   const [votingDay, setVotingDay] = useState("all");
   const [board, setBoard] = useState<Board>("table");
 
@@ -188,11 +283,11 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
     let inFlight = false;
     let timer = 0;
     async function readBody(response: Response) {
+      if (response.status === 429 || response.status === 502 || response.status === 503) {
+        throw new Error("The live server is busy. Ballot scores will try again shortly.");
+      }
       const text = await response.text();
       if (!text || text.trimStart().startsWith("<")) {
-        if (response.status === 429 || response.status === 503) {
-          throw new Error("The live server is busy. Ballot scores will try again shortly.");
-        }
         throw new Error(`Ballot scores could not load (${response.status || "error"}).`);
       }
       const body = JSON.parse(text) as { error?: string; score?: { column?: string } };
@@ -224,7 +319,8 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
         inFlight = false;
         if (!cancelled) {
           setLoading(false);
-          timer = window.setTimeout(() => void load(), 20000);
+          const busy = apiQuietMs() > 0;
+          timer = window.setTimeout(() => void load(), busy ? Math.max(90_000, apiQuietMs()) : 60_000);
         }
       }
     }
@@ -310,6 +406,23 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
   const evCum2026on2022 = bucketStat(cumulativeBucket(evState, evDay, "y2026"), "score2022");
   const evDaily2022 = bucketStat(dailyBucket(evState, evDay, "y2022"), "score2022");
   const evCum2022 = bucketStat(cumulativeBucket(evState, evDay, "y2022"), "score2022");
+  const modelDayPoints = useMemo<ModelDayPoint[]>(
+    () =>
+      days.map((day) => {
+        const id = String(day.id);
+        const y2022 = bucketStat(cumulativeBucket(evState, id, "y2022"), "score2026");
+        const y2026 = bucketStat(cumulativeBucket(evState, id, "y2026"), "score2026");
+        return {
+          label: day.label,
+          title: votingDayTitle(day),
+          y2022: y2022.avg,
+          y2022n: y2022.n,
+          y2026: y2026.avg,
+          y2026n: y2026.n,
+        };
+      }),
+    [days, evState],
+  );
 
   if (electionId && !electionHasRosterScores(electionId)) {
     return <ElectionDatasetNotice dataset="Ballot scores" />;
@@ -341,7 +454,29 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
 
             <section className="enr-card">
               <div className="enr-card__head enr-ballot__head">
-                <h2 className="enr-card__title">Early voting by day</h2>
+                <div className="enr-ballot__titleTabs">
+                  <h2 className="enr-card__title">Early voting by day</h2>
+                  <div className="enr-ballot__tabs" role="tablist" aria-label="Early voting by day">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={evPanel === "summary"}
+                      className={evPanel === "summary" ? "enr-ballot__tab is-active" : "enr-ballot__tab"}
+                      onClick={() => setEvPanel("summary")}
+                    >
+                      Summary
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={evPanel === "graph"}
+                      className={evPanel === "graph" ? "enr-ballot__tab is-active" : "enr-ballot__tab"}
+                      onClick={() => setEvPanel("graph")}
+                    >
+                      Graph
+                    </button>
+                  </div>
+                </div>
                 <label className="enr-selectLabel">
                   Early voting day
                   <select className="enr-select" value={evDay} onChange={(event) => setEvDay(event.target.value)}>
@@ -353,6 +488,9 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
                   </select>
                 </label>
               </div>
+              {evPanel === "graph" ? (
+                <ModelDayChart points={modelDayPoints} selectedLabel={evDef.label} />
+              ) : (
               <div className="enr-tablewrap">
                 <table className="enr-table enr-table--compact enr-ballot__table">
                   <thead>
@@ -398,9 +536,12 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
                   </tbody>
                 </table>
               </div>
+              )}
               <p className="enr-ballot__hint">
-                {evDef.label} lines up {formatDayDate(evDef.date2022)} with {formatDayDate(evDef.date2026, "long")}. Day 1
-                includes all mail-in ballots up to and including that day. Election Day includes mail-in ballots received
+                {evPanel === "graph"
+                  ? "Each point is the cumulative 2026 model through that voting day. The dotted line marks the day selected above."
+                  : `${evDef.label} lines up ${formatDayDate(evDef.date2022)} with ${formatDayDate(evDef.date2026, "long")}.`}{" "}
+                Day 1 includes all mail-in ballots up to and including that day. Election Day includes mail-in ballots received
                 on Oct 31, Nov 1, and Nov 2 as well as Election Day.
               </p>
             </section>
