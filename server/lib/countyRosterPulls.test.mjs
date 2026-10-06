@@ -3,9 +3,14 @@ import test from "node:test";
 import {
   countiesDueForRosterPull,
   dropAutomaticRosterQueue,
+  latestRosterVoteDate,
   rosterCaughtUp,
   rosterCountyCounts,
+  applyRosterLookupBatch,
+  applyRosterLookupHits,
+  chooseRosterDocument,
   mergeRosterRecords,
+  unmatchedRosterVuids,
   rosterMethodCode,
   registrationDateFromProfile,
   rosterVotersToCsv,
@@ -14,6 +19,71 @@ import {
   tieVoteToCounty,
   voterProfileFromLookup,
 } from "./countyRosterPulls.mjs";
+
+test("a failed database write keeps the newer local roster", () => {
+  const file = [{ vuid: "1", voteDate: "2026-10-05" }, { vuid: "2", voteDate: "2026-10-02" }];
+  const database = [{ vuid: "1", voteDate: "2026-10-01" }];
+  assert.equal(chooseRosterDocument(true, database, file, Array.isArray), file);
+  assert.equal(chooseRosterDocument(false, database, file, Array.isArray), database);
+  assert.deepEqual(chooseRosterDocument(false, undefined, file, Array.isArray), file);
+});
+
+test("voter-file matches apply without dropping roster rows", () => {
+  const voters = [
+    { vuid: "20", voteDate: "2026-10-05", matched: 0, sourceCounty: "brazos" },
+    { vuid: "21", voteDate: "2026-10-05", matched: 1, sourceCounty: "brazos", county: "BRAZOS" },
+    { vuid: "", voteDate: "2026-10-05", matched: 0, sourceCounty: "brazos" },
+  ];
+  assert.deepEqual([...unmatchedRosterVuids(voters)], ["20"]);
+  const applied = applyRosterLookupHits(voters, new Map([
+    ["20", { county: "BRAZOS", txHouse: "14", txSenate: "5", usHouse: "10", score2022: 0.2, score2026: 0.8, registrationDate: "2020-01-02", profile: [] }],
+  ]));
+  assert.equal(applied, 1);
+  assert.equal(voters[0].matched, 1);
+  assert.equal(voters[0].score2026, 0.8);
+  assert.equal(voters[1].matched, 1);
+  assert.equal(voters[2].matched, 0);
+  assert.equal(voters.length, 3);
+});
+
+test("a finished lookup batch drops hits and misses from the voters still to match", () => {
+  const voters = [
+    { vuid: "20", voteDate: "2026-10-05", matched: 0, sourceCounty: "brazos" },
+    { vuid: "20", voteDate: "2026-10-06", matched: 0, sourceCounty: "brazos" },
+    { vuid: "30", voteDate: "2026-10-05", matched: 0, sourceCounty: "brazos" },
+    { vuid: "40", voteDate: "2026-10-05", matched: 0, sourceCounty: "brazos" },
+    { vuid: "21", voteDate: "2026-10-05", matched: 1, lookupChecked: 1, sourceCounty: "brazos" },
+  ];
+  const result = applyRosterLookupBatch(voters, ["20", "30"], new Map([
+    ["20", { county: "BRAZOS", txHouse: "14", txSenate: "5", usHouse: "10", score2022: 0.2, score2026: 0.8 }],
+  ]));
+  assert.equal(result.applied, 2);
+  assert.equal(result.checked, 1);
+  assert.equal(voters[0].matched, 1);
+  assert.equal(voters[1].matched, 1);
+  assert.equal(voters[2].lookupChecked, 1);
+  assert.equal(voters[2].matched, 0);
+  assert.equal(voters[3].lookupChecked, undefined);
+  assert.deepEqual([...unmatchedRosterVuids(voters)], ["40"]);
+});
+
+test("a voter already missing from the file is not looked up again", () => {
+  const existing = [
+    { vuid: "30", voteDate: "2026-10-01", sourceCounty: "randall", matched: 0, lookupChecked: 1 },
+  ];
+  const merged = mergeRosterRecords(
+    existing,
+    [
+      { vuid: "30", activityDate: "2026-10-02", votingMethod: "AB" },
+      { vuid: "40", activityDate: "2026-10-02", votingMethod: "AB" },
+    ],
+    "randall",
+  );
+  const nextDay = merged.voters.find((row) => row.vuid === "30" && row.voteDate === "2026-10-02");
+  assert.equal(nextDay.lookupChecked, 1);
+  assert.equal(nextDay.matched, 0);
+  assert.deepEqual(merged.unmatchedVuids, ["40"]);
+});
 
 test("summarizes roster rows by voter, day, and vote type", () => {
   const summary = summarizeRosterRows([
@@ -180,6 +250,20 @@ test("counts stored voters for the county that pulled them", () => {
   assert.equal(counts.harris.rows, 1);
   assert.equal(counts.harris.missingVuid, 1);
   assert.equal(counts.harris.days[0].missingVuid, 1);
+});
+
+test("a ballot dated after today is not counted until that day", () => {
+  const now = new Date("2026-10-05T18:00:00.000Z");
+  const voters = [
+    { sourceCounty: "bastrop", vuid: "1", voteDate: "2026-10-05" },
+    { sourceCounty: "bastrop", vuid: "1", voteDate: "2026-11-12" },
+    { sourceCounty: "bastrop", vuid: "2", voteDate: "2026-10-06" },
+  ];
+  const counts = rosterCountyCounts(voters, now);
+  assert.equal(counts.bastrop.rows, 1);
+  assert.equal(counts.bastrop.uniqueVuids, 1);
+  assert.deepEqual(counts.bastrop.days.map((day) => day.date), ["2026-10-05"]);
+  assert.equal(latestRosterVoteDate(voters, "bastrop", now), "2026-10-05");
 });
 
 test("a vote date of yesterday, or the day before today's pull, is current", () => {

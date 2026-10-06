@@ -17,7 +17,7 @@ function decodeHtml(text) {
     .trim();
 }
 
-/** Cell C2 is shown as M/D/YY. That published date is the vote date for voters new to this file. */
+/** M/D/YY or an ISO date. */
 export function ellisDateFromText(text) {
   const raw = String(text ?? "").trim();
   const iso = parseIsoDate(raw);
@@ -32,18 +32,16 @@ export function ellisDateFromText(text) {
   return `${year}-${match[1].padStart(2, "0")}-${match[2].padStart(2, "0")}`;
 }
 
-export function ellisCellDate(cell) {
-  const shown = ellisDateFromText(cell?.w) || ellisDateFromText(cell?.v);
-  if (shown) return shown;
-  if (cell?.v instanceof Date && !Number.isNaN(cell.v.getTime())) {
-    return new Intl.DateTimeFormat("en-CA", {
-      timeZone: "America/Chicago",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(cell.v);
-  }
-  return null;
+/** Vote date is the MMDDYY stamp at the end of the Excel file name, such as _100526.xlsx. */
+export function ellisVoteDateFromFileName(name) {
+  const match = String(name ?? "").match(/_(\d{2})(\d{2})(\d{2})(?=\.[A-Za-z0-9]+$|$)/);
+  if (!match) return null;
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const year = 2000 + Number(match[3]);
+  const probe = new Date(Date.UTC(year, month - 1, day));
+  if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) return null;
+  return `${year}-${match[1]}-${match[2]}`;
 }
 
 /** The Returned Ballots by Mail Roster Report. The document address changes when the file is replaced. */
@@ -58,7 +56,7 @@ export function ellisMailRosterLink(html) {
 
 /**
  * Cumulative mail roster. VUID is the voter id. There is no date on each row.
- * Voters already stored for Ellis are left alone. New VUIDs get the date in C2.
+ * Voters already stored for Ellis are left alone. New VUIDs get the date from the Excel file name.
  */
 export function ellisRosterRows(matrix, voteDate, knownVuids) {
   const known = new Set(knownVuids ?? []);
@@ -97,13 +95,14 @@ export function ellisRosterRows(matrix, voteDate, knownVuids) {
   return { rows, voteDate: date, skippedMissingVuid, missingVuidDays };
 }
 
-export function parseEllisRosterWorkbook(buffer) {
+export function parseEllisRosterWorkbook(buffer, fileName, knownVuids = []) {
+  const voteDate = ellisVoteDateFromFileName(fileName);
+  if (!voteDate) throw new Error("Ellis roster file name did not include an MMDDYY date.");
   const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  if (!sheet) return ellisRosterRows([], null, []);
-  const voteDate = ellisCellDate(sheet.C2);
+  if (!sheet) return ellisRosterRows([], voteDate, knownVuids);
   const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
-  return { ...ellisRosterRows(matrix, voteDate, []), voteDate };
+  return ellisRosterRows(matrix, voteDate, knownVuids);
 }
 
 export async function parseEllisRosterZip(buffer, knownVuids) {
@@ -111,11 +110,11 @@ export async function parseEllisRosterZip(buffer, knownVuids) {
   const zip = await JSZip.loadAsync(buffer);
   const name = Object.keys(zip.files).find((entry) => !zip.files[entry].dir && /\.xlsx$/i.test(entry));
   if (!name) throw new Error("Ellis roster ZIP did not contain an Excel file.");
+  const voteDate = ellisVoteDateFromFileName(name);
+  if (!voteDate) throw new Error("Ellis roster file name did not include an MMDDYY date.");
   const workbook = XLSX.read(await zip.files[name].async("nodebuffer"), { type: "buffer", cellDates: true });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   if (!sheet) throw new Error("Ellis roster workbook did not contain a sheet.");
-  const voteDate = ellisCellDate(sheet.C2);
-  if (!voteDate) throw new Error("Ellis roster cell C2 did not contain a published date.");
   const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
   return ellisRosterRows(matrix, voteDate, knownVuids);
 }

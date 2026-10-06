@@ -9,6 +9,17 @@ import { harrisBbmRosterLink, harrisRosterFrame, HARRIS_ROSTER_PAGE, parseHarris
 import { parsePotterRosterPdf, potterRosterLinks, POTTER_ROSTER_PAGE } from "./potterRoster.mjs";
 import { parseTarrantRosterZip, tarrantRosterLinks, TARRANT_ROSTER_PAGE } from "./tarrantRoster.mjs";
 import { parseWiseRosterPdf, wiseMailRosterLink, WISE_ROSTER_PAGE } from "./wiseRoster.mjs";
+import { kendallReturnedRosterLink, parseKendallRosterPdf, KENDALL_ROSTER_PAGE } from "./kendallRoster.mjs";
+import { BOWIE_ROSTER_PAGE, bowieMailRosterLinks, bowieRosterFilesToPull, parseBowieRosterPdf } from "./bowieRoster.mjs";
+import { BRAZOS_ROSTER_PAGE, brazosRosterFilesToPull, brazosRosterLinks, parseBrazosRosterPdf } from "./brazosRoster.mjs";
+import { COMAL_ROSTER_PAGE, comalMailRosterLinks, comalRosterFilesToPull, parseComalRosterPdf } from "./comalRoster.mjs";
+import { BASTROP_FETCH_HEADERS, BASTROP_ROSTER_PAGE, bastropRosterLinks, parseBastropRosterCsv } from "./bastropRoster.mjs";
+import {
+  HIDALGO_ROSTER_PAGE,
+  hidalgoDownloadName,
+  hidalgoMailRosterLink,
+  parseHidalgoRosterFile,
+} from "./hidalgoRoster.mjs";
 import {
   GALVESTON_FETCH_HEADERS,
   GALVESTON_ROSTER_PAGE,
@@ -21,6 +32,12 @@ import { readRosterDocument, writeRosterDocument } from "./countyRosterDocuments
 import { openRosterRawArchive, rosterRawFileName } from "./rosterRawArchive.mjs";
 import { openLookupCsvStream } from "./ballotLookupStore.mjs";
 import { ELLIS_ROSTER_PAGE, ellisMailRosterLink, parseEllisRosterZip } from "./ellisRoster.mjs";
+import {
+  fetchWilliamsonRoster,
+  parseWilliamsonRosterXlsx,
+  WILLIAMSON_ROSTER_PAGE,
+} from "./williamsonRoster.mjs";
+import { parseRandallRosterPdf, randallMailRosterLink, RANDALL_ROSTER_PAGE } from "./randallRoster.mjs";
 import {
   MONTGOMERY_ROSTER_PAGE,
   montgomeryFetch,
@@ -110,14 +127,86 @@ export const COUNTY_ROSTER_PROFILES = {
       "Each pull reads the early voting roster page for the November 3, 2026 joint election. Early voting and mail are in the same daily zip. The CSV has a VUID, and the vote date is in the file name. A person is listed once per race, so each VUID is kept once per day. A pull reads the newest day, plus any earlier day that does not already have voters.",
     sourcePage: MONTGOMERY_ROSTER_PAGE,
   },
+  kendall: {
+    key: "kendall",
+    label: "Kendall County",
+    trained: true,
+    fileKinds: "Returned ballots PDF",
+    notes:
+      "Each pull reads the current election page and takes the Returned Ballots Roster for the November 3rd General. The link says as of a date, and that date changes. The PDF is mail ballots. VUID is the voter id and Date Ballot Received is the vote date.",
+    sourcePage: KENDALL_ROSTER_PAGE,
+  },
+  bowie: {
+    key: "bowie",
+    label: "Bowie County",
+    trained: true,
+    fileKinds: "Daily mail PDFs",
+    notes:
+      "Each pull reads the Elections page and takes the BBM Received PDFs under the November 3, 2026 General Election tab. The link is labeled with the day, such as BBM Received 9.22.2026, and new days are added there. The PDF has a VUID and Date Rec'd, which is the vote date. A pull reads the newest day, plus any earlier day that does not already have voters.",
+    sourcePage: BOWIE_ROSTER_PAGE,
+  },
+  brazos: {
+    key: "brazos",
+    label: "Brazos County",
+    trained: true,
+    fileKinds: "Daily roster PDFs",
+    notes:
+      "Each pull reads the roster page and takes the PDFs under 2026 General/Special Election. Those are the November 2026 general election rosters. A file has a VUID and no vote date on the row. The date is the day in the file name, or the first line of the PDF when that line states the day. Mail files are AB and in-person files are EV. A pull reads the newest day, plus any earlier day that does not already have voters.",
+    sourcePage: BRAZOS_ROSTER_PAGE,
+  },
+  comal: {
+    key: "comal",
+    label: "Comal County",
+    trained: true,
+    fileKinds: "Daily mail PDFs",
+    notes:
+      "Each pull reads the archived data page and takes the General Election BBM Retd PDFs. The link is labeled with the day, such as 10-02-2026, General Election BBM Retd, and new days are added there. The PDF has a VUID and a Ballot Returned Date, which is the vote date. A pull reads the newest day, plus any earlier day that does not already have voters.",
+    sourcePage: COMAL_ROSTER_PAGE,
+  },
+  bastrop: {
+    key: "bastrop",
+    label: "Bastrop County",
+    trained: true,
+    fileKinds: "Mail and in-person CSVs",
+    notes:
+      "Each pull reads the upcoming elections page and takes the Mail Ballots CSV under Daily Voter Lists. The file address changes when the county replaces it. The CSV has a VUID and a Ballot Status Date, which is the vote date. In-person voter links in that same list are read the same way when the county posts them. Mail is AB and in-person is EV.",
+    sourcePage: BASTROP_ROSTER_PAGE,
+  },
+  hidalgo: {
+    key: "hidalgo",
+    label: "Hidalgo County",
+    trained: true,
+    fileKinds: "Mail in ballots",
+    notes:
+      "Each pull reads the unofficial early voting page and takes the Mail in Ballots file for the November 3, 2026 election. The file is cumulative and has a VUID column with no vote date. The date is the YYYYMMDD stamp after the underscore in the downloaded file name. A VUID already stored for Hidalgo keeps its vote date. A VUID that is new gets the date from the file just downloaded.",
+    sourcePage: HIDALGO_ROSTER_PAGE,
+  },
   ellis: {
     key: "ellis",
     label: "Ellis County",
     trained: true,
     fileKinds: "Cumulative mail ZIP",
     notes:
-      "Each pull reads the Upcoming Elections page and takes the Returned Ballots by Mail Roster Report. The link changes when the file is replaced. The zip holds one cumulative Excel file. Rows have a VUID and no vote date. The first time a VUID appears, it is stored with the date in cell C2. A VUID already stored for Ellis is left as it is.",
+      "Each pull reads the Upcoming Elections page and takes the Returned Ballots by Mail Roster Report. The link changes when the file is replaced. The zip holds one cumulative Excel file. Rows have a VUID and no vote date. The first time a VUID appears, it is stored with the MMDDYY date at the end of that Excel file name. A VUID already stored for Ellis is left as it is.",
     sourcePage: ELLIS_ROSTER_PAGE,
+  },
+  williamson: {
+    key: "williamson",
+    label: "Williamson County",
+    trained: true,
+    fileKinds: "Turnout workbook",
+    notes:
+      "Each pull reads the elections page and takes the Daily Voting Roster for the November 3, 2026 election. The workbook has a VUID and a Ballot Date, which is the vote date. AV is mail and EV is in-person. The same voter on two days is kept once for each day.",
+    sourcePage: WILLIAMSON_ROSTER_PAGE,
+  },
+  randall: {
+    key: "randall",
+    label: "Randall County",
+    trained: true,
+    fileKinds: "Mail ballot PDF",
+    notes:
+      "Each pull reads the election administration page and takes the Mail Ballot Roster. The document address changes when the county replaces the file. The PDF has a VUID at the start of the name and a Ballot Received Date, which is the vote date. Mail is AB.",
+    sourcePage: RANDALL_ROSTER_PAGE,
   },
 };
 
@@ -170,28 +259,111 @@ async function readJsonFile(filePath) {
   }
 }
 
+function localAheadPath(filePath) {
+  return `${filePath}.local-ahead`;
+}
+
+async function isLocalAhead(filePath) {
+  try {
+    await access(localAheadPath(filePath));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function markLocalAhead(filePath) {
+  await writeFile(localAheadPath(filePath), "");
+}
+
+async function clearLocalAhead(filePath) {
+  await rm(localAheadPath(filePath), { force: true });
+}
+
+/** Keep the local file when a database write failed and the database still has the older copy. */
+export function chooseRosterDocument(localAhead, databaseValue, fileValue, isUsable) {
+  if (localAhead && isUsable(fileValue)) return fileValue;
+  if (isUsable(databaseValue)) return databaseValue;
+  if (isUsable(fileValue)) return fileValue;
+  return undefined;
+}
+
+async function readRosterSnapshot(filePath, docKey, isUsable) {
+  const ahead = await isLocalAhead(filePath);
+  const saved = ahead ? undefined : await readRosterDocument(docKey);
+  const file = ahead || !isUsable(saved) ? await readJsonFile(filePath) : undefined;
+  let chosen = chooseRosterDocument(ahead, saved, file, isUsable);
+  if (ahead && !isUsable(chosen)) {
+    const databaseValue = await readRosterDocument(docKey);
+    chosen = chooseRosterDocument(false, databaseValue, file, isUsable);
+    if (!isUsable(databaseValue) && isUsable(chosen)) await writeRosterDocument(docKey, chosen);
+    return chosen;
+  }
+  if (ahead && isUsable(chosen) && (await writeRosterDocument(docKey, chosen))) await clearLocalAhead(filePath);
+  if (!ahead && !isUsable(saved) && isUsable(chosen)) await writeRosterDocument(docKey, chosen);
+  return chosen;
+}
+
+async function writeRosterSnapshot(filePath, docKey, payload) {
+  await writeJsonFile(filePath, payload);
+  await markLocalAhead(filePath);
+  if (await writeRosterDocument(docKey, payload)) await clearLocalAhead(filePath);
+}
+
+const jsonWrites = new Map();
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function writeJsonFileOnce(filePath, body) {
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+  try {
+    await writeFile(tmp, body);
+    await copyFile(tmp, filePath);
+  } finally {
+    await rm(tmp, { force: true }).catch(() => {});
+  }
+}
+
 async function writeJsonFile(filePath, value) {
   await ensureDir();
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(value));
-  await copyFile(tmp, filePath);
-  await rm(tmp, { force: true });
+  const body = JSON.stringify(value);
+  const previous = jsonWrites.get(filePath) ?? Promise.resolve();
+  const run = previous.catch(() => {}).then(async () => {
+    let lastError;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        await writeJsonFileOnce(filePath, body);
+        return;
+      } catch (error) {
+        lastError = error;
+        const code = error?.code;
+        if (code !== "EBUSY" && code !== "EPERM" && code !== "EACCES") throw error;
+        await sleep(50 * (attempt + 1));
+      }
+    }
+    throw lastError;
+  });
+  const tracked = run.finally(() => {
+    if (jsonWrites.get(filePath) === tracked) jsonWrites.delete(filePath);
+  });
+  jsonWrites.set(filePath, tracked);
+  return run;
+}
+
+function isRosterStore(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 async function readStore() {
-  const saved = await readRosterDocument("status");
-  if (saved && typeof saved === "object" && !Array.isArray(saved)) return saved;
-  const file = await readJsonFile(STATUS_PATH);
-  if (file && typeof file === "object") {
-    await writeRosterDocument("status", file);
-    return file;
-  }
+  const saved = await readRosterSnapshot(STATUS_PATH, "status", isRosterStore);
+  if (isRosterStore(saved)) return saved;
   return { updatedAt: null, counties: {} };
 }
 
 async function writeStore(store) {
-  await writeRosterDocument("status", store);
-  await writeJsonFile(STATUS_PATH, store);
+  await writeRosterSnapshot(STATUS_PATH, "status", store);
 }
 
 export function summarizeRosterRows(rows) {
@@ -246,7 +418,7 @@ function storedVotingMethod(raw) {
   return rosterMethodCode(raw);
 }
 
-const MAIL_ONLY_ROSTER_COUNTIES = new Set(["harris", "ellis", "galveston", "wise"]);
+const MAIL_ONLY_ROSTER_COUNTIES = new Set(["harris", "ellis", "galveston", "wise", "kendall", "hidalgo", "bowie", "comal"]);
 
 function blankVoter(vuid, voteDate, sourceCounty) {
   return {
@@ -466,7 +638,7 @@ export function rosterVotersToCsv(voters) {
 }
 
 export async function rosterVotersCsv({ sort = "voteDate", dir = "asc" } = {}) {
-  const voters = sortRosterVoters(await readVoters(), sort === "registrationDate" ? "registrationDate" : "voteDate", dir);
+  const voters = sortRosterVoters(countableRosterVoters(await readVoters()), sort === "registrationDate" ? "registrationDate" : "voteDate", dir);
   return rosterVotersToCsv(voters);
 }
 
@@ -514,6 +686,7 @@ export function tieVoteToCounty(row) {
 
 function copyMatch(target, source) {
   target.matched = 1;
+  target.lookupChecked = 0;
   target.registeredCounty = source.registeredCounty ?? source.county ?? null;
   target.txHouse = source.txHouse ?? null;
   target.txSenate = source.txSenate ?? null;
@@ -525,11 +698,65 @@ function copyMatch(target, source) {
   tieVoteToCounty(target);
 }
 
+function awaitingLookup(row) {
+  if (row?.matched === 1 || row?.lookupChecked === 1) return false;
+  return Boolean(vuidId(row?.vuid));
+}
+
+export function unmatchedRosterVuids(voters) {
+  const need = new Set();
+  for (const row of voters ?? []) {
+    if (!awaitingLookup(row)) continue;
+    need.add(vuidId(row.vuid));
+  }
+  return need;
+}
+
+/** Copy voter-file hits onto rows that are still unmatched. Other rows stay as they are. */
+export function applyRosterLookupHits(voters, hits) {
+  let applied = 0;
+  for (const row of voters ?? []) {
+    if (row.matched === 1) continue;
+    const hit = hits?.get(vuidId(row.vuid));
+    if (!hit) continue;
+    copyMatch(row, hit);
+    applied += 1;
+  }
+  return applied;
+}
+
+const ROSTER_MATCH_BATCH = 200;
+
+/**
+ * Finish a batch of VUIDs. A hit is copied onto every row for that VUID.
+ * A VUID with no hit is marked looked up so it leaves the matching count.
+ */
+export function applyRosterLookupBatch(voters, batchIds, hits) {
+  const batch = new Set([...batchIds].map(vuidId));
+  let applied = 0;
+  let checked = 0;
+  for (const row of voters ?? []) {
+    const id = vuidId(row.vuid);
+    if (!id || !batch.has(id) || row.matched === 1) continue;
+    const hit = hits?.get(id);
+    if (hit) {
+      copyMatch(row, hit);
+      applied += 1;
+    } else if (row.lookupChecked !== 1) {
+      row.lookupChecked = 1;
+      checked += 1;
+    }
+  }
+  return { applied, checked };
+}
+
 export function mergeRosterRecords(existing, incoming, sourceCounty) {
   const byKey = new Map(existing.map((row) => [voterKey(row.vuid, row.voteDate), row]));
   const known = new Map();
+  const checkedMiss = new Set();
   for (const row of existing) {
     if (row.matched === 1) known.set(row.vuid, row);
+    else if (row.lookupChecked === 1) checkedMiss.add(row.vuid);
   }
   let added = 0;
   for (const raw of incoming) {
@@ -547,11 +774,12 @@ export function mergeRosterRecords(existing, incoming, sourceCounty) {
     if (method) row.votingMethod = method;
     const prior = known.get(vuid);
     if (prior) copyMatch(row, prior);
+    else if (checkedMiss.has(vuid)) row.lookupChecked = 1;
     byKey.set(key, row);
     added += 1;
   }
   const voters = [...byKey.values()];
-  const unmatchedVuids = [...new Set(voters.filter((row) => row.matched !== 1).map((row) => row.vuid))];
+  const unmatchedVuids = [...unmatchedRosterVuids(voters)];
   return { voters, added, unmatchedVuids };
 }
 
@@ -584,31 +812,39 @@ function vuidId(raw) {
   return /^\d+$/.test(text) ? String(Number(text)) : text;
 }
 
-async function matchLookupVuids(need) {
+async function matchLookupVuids(need, onHit) {
   const hits = new Map();
-  if (!need.size) return hits;
+  if (!need.size) return { hits, complete: true };
   let input;
   try {
     input = await openLookupCsvStream();
   } catch {
-    return hits;
+    return { hits, complete: false };
   }
   const wanted = new Set([...need].map(vuidId));
+  let complete = false;
   await new Promise((resolve, reject) => {
     const parser = input.pipe(
       parse({ columns: true, bom: true, relax_quotes: true, relax_column_count: true }),
     );
     let settled = false;
+    let tail = Promise.resolve();
     const finish = () => {
       if (settled) return;
       settled = true;
-      resolve();
+      tail.then(
+        () => {
+          complete = true;
+          resolve();
+        },
+        (error) => reject(error),
+      );
     };
     parser.on("data", (row) => {
       const vuid = vuidId(lookupField(row, "VUID"));
       if (!vuid || !wanted.has(vuid) || hits.has(vuid)) return;
       const profile = voterProfileFromLookup(row);
-      hits.set(vuid, {
+      const hit = {
         county: String(lookupField(row, "CountyName") ?? "").trim() || null,
         usHouse: normDistrict(lookupField(row, "USHouse")),
         txSenate: normDistrict(lookupField(row, "TXSenate")),
@@ -617,7 +853,24 @@ async function matchLookupVuids(need) {
         score2026: parseModelScore(lookupField(row, "Score2026")),
         registrationDate: registrationDateFromProfile(profile),
         profile,
-      });
+      };
+      hits.set(vuid, hit);
+      const pending = onHit?.(vuid, hit);
+      if (pending && typeof pending.then === "function") {
+        parser.pause();
+        tail = tail.then(() => pending).then(
+          () => {
+            if (!parser.destroyed) parser.resume();
+          },
+          (error) => {
+            if (!settled) {
+              settled = true;
+              reject(error);
+            }
+            parser.destroy();
+          },
+        );
+      }
       if (hits.size === wanted.size) parser.destroy();
     });
     parser.on("end", finish);
@@ -630,18 +883,17 @@ async function matchLookupVuids(need) {
       }
     });
   });
-  return hits;
+  return { hits, complete };
 }
 
 export async function readRosterVoterRows() {
-  return readVoters();
+  return countableRosterVoters(await readVoters());
 }
 
 async function readVoters() {
-  const saved = await readRosterDocument("voters");
-  const rows = Array.isArray(saved) ? saved : await readJsonFile(VOTERS_PATH);
-  if (!Array.isArray(rows)) return [];
-  if (!Array.isArray(saved)) await writeRosterDocument("voters", rows);
+  const saved = await readRosterSnapshot(VOTERS_PATH, "voters", Array.isArray);
+  if (!Array.isArray(saved)) return [];
+  const rows = saved;
   let changed = false;
   for (const row of rows) {
     const before = JSON.stringify(row);
@@ -671,42 +923,166 @@ function countyDatesWithMethod(voters, countyKey) {
 }
 
 async function writeVoters(voters) {
-  await writeRosterDocument("voters", voters);
-  await writeJsonFile(VOTERS_PATH, voters);
+  await writeRosterSnapshot(VOTERS_PATH, "voters", voters);
+}
+
+const ROSTER_MATCH_GATE = "__enrRosterMatchGate";
+
+function rosterMatchGate() {
+  if (!globalThis[ROSTER_MATCH_GATE]) {
+    globalThis[ROSTER_MATCH_GATE] = {
+      running: false,
+      pending: 0,
+      found: 0,
+      scheduled: false,
+      loop: null,
+      voterWrite: Promise.resolve(),
+    };
+  }
+  return globalThis[ROSTER_MATCH_GATE];
+}
+
+function withVoterStore(work) {
+  const gate = rosterMatchGate();
+  const run = gate.voterWrite.catch(() => {}).then(work);
+  gate.voterWrite = run;
+  return run;
+}
+
+/** Null when no voter-file match is waiting or running. */
+export function rosterMatchStatus() {
+  const gate = rosterMatchGate();
+  if (!gate.running) return null;
+  return { pending: gate.pending, found: gate.found };
+}
+
+function scheduleRosterVoterMatch() {
+  const gate = rosterMatchGate();
+  gate.scheduled = true;
+  if (gate.loop) return;
+  gate.loop = runRosterVoterMatch()
+    .catch((error) => console.error("Roster voter match", error))
+    .finally(() => {
+      const current = rosterMatchGate();
+      current.loop = null;
+      if (current.scheduled) scheduleRosterVoterMatch();
+    });
+}
+
+function chunkList(items, size) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
+}
+
+async function persistRosterLookup(batchIds, hits) {
+  return withVoterStore(async () => {
+    const current = await readVoters();
+    const result = applyRosterLookupBatch(current, batchIds, hits);
+    if (result.applied || result.checked) await writeVoters(current);
+    return result;
+  });
+}
+
+async function runRosterVoterMatch() {
+  const gate = rosterMatchGate();
+  try {
+    while (gate.scheduled) {
+      gate.scheduled = false;
+      const need = [...unmatchedRosterVuids(await readVoters())];
+      if (!need.length) {
+        gate.pending = 0;
+        continue;
+      }
+      gate.running = true;
+      gate.pending = need.length;
+      const started = Date.now();
+      console.log(`Matching ${need.length} roster VUIDs against the voter file`);
+      const hits = new Map();
+      let sinceFlush = [];
+      let resolved = 0;
+      const publishPending = () => {
+        gate.pending = Math.max(0, need.length - resolved);
+        console.log(`Roster match: ${gate.pending} voters still to match`);
+      };
+      let scan;
+      try {
+        scan = await matchLookupVuids(new Set(need), (vuid, hit) => {
+          hits.set(vuid, hit);
+          sinceFlush.push(vuid);
+          resolved += 1;
+          gate.pending = Math.max(0, need.length - resolved);
+          if (sinceFlush.length < ROSTER_MATCH_BATCH) return undefined;
+          const batch = sinceFlush;
+          sinceFlush = [];
+          return persistRosterLookup(batch, hits).then((result) => {
+            gate.found += result.applied;
+            publishPending();
+          });
+        });
+      } catch (error) {
+        console.error("Roster voter match", error);
+        gate.scheduled = true;
+        await sleep(5000);
+        break;
+      }
+      if (!scan.complete) {
+        console.error("Roster voter match could not read the voter file");
+        gate.scheduled = true;
+        await sleep(5000);
+        break;
+      }
+      console.log(`Voter file match finished in ${Date.now() - started}ms (${hits.size} found)`);
+      try {
+        if (sinceFlush.length) {
+          const result = await persistRosterLookup(sinceFlush, hits);
+          gate.found += result.applied;
+          sinceFlush = [];
+          publishPending();
+        }
+        const missed = need.filter((id) => !hits.has(id));
+        for (const batch of chunkList(missed, ROSTER_MATCH_BATCH)) {
+          resolved += batch.length;
+          publishPending();
+          const result = await persistRosterLookup(batch, hits);
+          gate.found += result.applied;
+        }
+      } catch (error) {
+        console.error("Roster voter match", error);
+        gate.scheduled = true;
+        await sleep(5000);
+        break;
+      }
+    }
+  } finally {
+    gate.running = false;
+    if (!gate.scheduled) gate.pending = 0;
+  }
 }
 
 async function saveRosterRows(incoming, sourceCounty) {
-  const existing = await readVoters();
-  const merged = mergeRosterRecords(existing, incoming, sourceCounty);
-  const started = Date.now();
-  if (merged.unmatchedVuids.length) {
-    console.log(`Matching ${merged.unmatchedVuids.length} roster VUIDs against the voter file`);
-  } else {
-    console.log("Roster VUIDs are already matched; skipping the voter file");
-  }
-  const hits = await matchLookupVuids(new Set(merged.unmatchedVuids));
-  if (merged.unmatchedVuids.length) {
-    console.log(`Voter file match finished in ${Date.now() - started}ms (${hits.size} found)`);
-  }
-  for (const row of merged.voters) {
-    if (row.matched === 1) continue;
-    const hit = hits.get(vuidId(row.vuid));
-    if (!hit) continue;
-    copyMatch(row, hit);
-  }
-  await writeVoters(merged.voters);
-  const matched = merged.voters.filter((row) => row.matched === 1).length;
-  return {
-    matched,
-    unmatched: merged.voters.length - matched,
-    added: merged.added,
-    lookupChecked: merged.unmatchedVuids.length,
-  };
+  const saved = await withVoterStore(async () => {
+    const existing = await readVoters();
+    const merged = mergeRosterRecords(existing, incoming, sourceCounty);
+    await writeVoters(merged.voters);
+    const matched = merged.voters.filter((row) => row.matched === 1).length;
+    return {
+      matched,
+      unmatched: merged.voters.length - matched,
+      added: merged.added,
+      lookupChecked: merged.unmatchedVuids.length,
+    };
+  });
+  if (saved.lookupChecked) scheduleRosterVoterMatch();
+  return saved;
 }
 
-export function rosterCountyCounts(voters) {
+export function rosterCountyCounts(voters, now = new Date()) {
+  const today = zonedClock(now, "America/Chicago").isoDate;
   const by = new Map();
   for (const row of voters ?? []) {
+    const voteDate = String(row.voteDate ?? "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(voteDate) && voteDate > today) continue;
     const key = String(row.sourceCounty ?? "").trim().toLowerCase();
     if (!key) continue;
     let bucket = by.get(key);
@@ -748,7 +1124,7 @@ function rosterTotals(voters) {
     total: voters.length,
     uniqueVuids: vuids.size,
     matched,
-    unmatched: voters.length - matched,
+    unmatched: voters.filter((row) => awaitingLookup(row)).length,
   };
 }
 
@@ -814,7 +1190,8 @@ async function writeProfileStamp(stamp) {
 
 async function enrichMatchedRosterProfiles() {
   const gate = rosterGate();
-  if (gate.active || gate.lock || gate.queue.length) return;
+  const match = rosterMatchGate();
+  if (gate.active || gate.lock || gate.queue.length || match.running || match.scheduled || match.loop) return;
   const filePath = datasetPath("lookup");
   let lookup;
   try {
@@ -831,15 +1208,18 @@ async function enrichMatchedRosterProfiles() {
   const voters = await readVoters();
   const need = new Set(voters.filter((row) => row.matched === 1).map((row) => vuidId(row.vuid)));
   const hits = await matchLookupVuids(need);
-  if (rosterGate().active || rosterGate().lock) return;
-  for (const row of voters) {
-    if (row.matched !== 1) continue;
-    const hit = hits.get(vuidId(row.vuid));
-    if (!hit) continue;
-    row.registrationDate = hit.registrationDate;
-    row.profile = hit.profile;
-  }
-  await writeVoters(voters);
+  if (rosterGate().active || rosterGate().lock || rosterMatchGate().running || rosterMatchGate().scheduled) return;
+  await withVoterStore(async () => {
+    const current = await readVoters();
+    for (const row of current) {
+      if (row.matched !== 1) continue;
+      const hit = hits.get(vuidId(row.vuid));
+      if (!hit) continue;
+      row.registrationDate = hit.registrationDate;
+      row.profile = hit.profile;
+    }
+    await writeVoters(current);
+  });
   await writeProfileStamp(lookup.stamp);
 }
 
@@ -854,7 +1234,7 @@ function scheduleRosterProfileEnrich() {
 }
 
 export async function listRosterVoters({ offset = 0, limit = 100, sort = "voteDate", dir = "asc" } = {}) {
-  const voters = sortRosterVoters(await readVoters(), sort === "registrationDate" ? "registrationDate" : "voteDate", dir);
+  const voters = sortRosterVoters(countableRosterVoters(await readVoters()), sort === "registrationDate" ? "registrationDate" : "voteDate", dir);
   const start = Math.max(0, Number(offset) || 0);
   const pageSize = Math.min(100, Math.max(1, Number(limit) || 100));
   scheduleRosterProfileEnrich();
@@ -1137,6 +1517,34 @@ async function pullWise() {
   };
 }
 
+async function pullKendall() {
+  const page = await fetch(KENDALL_ROSTER_PAGE, { headers: { "user-agent": "electionnighttracker" } });
+  if (!page.ok) {
+    throw new Error(`Kendall roster page was not available (${page.status}). ${KENDALL_ROSTER_PAGE}`);
+  }
+  const link = kendallReturnedRosterLink(await page.text());
+  if (!link) {
+    throw new Error("The November 3rd General returned ballots roster was not on the Kendall current election page.");
+  }
+  const archive = openRosterRawArchive("kendall");
+  const file = await fetch(link.href, {
+    headers: { "user-agent": "electionnighttracker", referer: KENDALL_ROSTER_PAGE },
+  });
+  if (!file.ok) {
+    throw new Error(`Kendall roster file was not available (${file.status}). ${link.href}`);
+  }
+  const parsed = await parseKendallRosterPdf(await keepRosterDownload(archive, link.href, file));
+  const saved = await saveRosterRows(parsed.rows, "kendall");
+  return {
+    sourceUrl: link.href,
+    fileCount: 1,
+    skippedMissingVuid: parsed.skippedMissingVuid,
+    skippedMissingVuidDays: parsed.missingVuidDays,
+    ...summarizeRosterRows(parsed.rows),
+    ...saved,
+  };
+}
+
 async function pullGalveston() {
   const page = await fetch(GALVESTON_ROSTER_PAGE, { headers: GALVESTON_FETCH_HEADERS });
   if (page.status !== 200) {
@@ -1224,6 +1632,42 @@ async function pullMontgomery() {
   };
 }
 
+async function pullHidalgo() {
+  const page = await fetch(HIDALGO_ROSTER_PAGE, { headers: { "user-agent": "electionnighttracker" } });
+  if (!page.ok) {
+    throw new Error(`Hidalgo roster page was not available (${page.status}). ${HIDALGO_ROSTER_PAGE}`);
+  }
+  const link = hidalgoMailRosterLink(await page.text());
+  if (!link) {
+    throw new Error("The Mail in Ballots file was not on the Hidalgo early voting rosters page.");
+  }
+  const archive = openRosterRawArchive("hidalgo");
+  const file = await fetch(link.href, {
+    headers: { "user-agent": "electionnighttracker", referer: HIDALGO_ROSTER_PAGE },
+  });
+  if (!file.ok) {
+    throw new Error(`Hidalgo roster file was not available (${file.status}). ${link.href}`);
+  }
+  const fileName = hidalgoDownloadName(file.headers.get("content-disposition"), link.href);
+  const hidalgoBytes = await keepRosterDownload(archive, fileName || link.href, file);
+  const known = new Set();
+  for (const row of await readVoters()) {
+    if (String(row.sourceCounty ?? "").toLowerCase() !== "hidalgo") continue;
+    const vuid = String(row.vuid ?? "").trim();
+    if (vuid) known.add(vuid);
+  }
+  const parsed = parseHidalgoRosterFile(hidalgoBytes, fileName, known);
+  const saved = await saveRosterRows(parsed.rows, "hidalgo");
+  return {
+    sourceUrl: link.href,
+    fileCount: 1,
+    skippedMissingVuid: parsed.skippedMissingVuid,
+    skippedMissingVuidDays: parsed.missingVuidDays,
+    ...summarizeRosterRows(parsed.rows),
+    ...saved,
+  };
+}
+
 async function pullEllis() {
   const page = await fetch(ELLIS_ROSTER_PAGE, { headers: { "user-agent": "electionnighttracker" } });
   if (!page.ok) {
@@ -1259,6 +1703,238 @@ async function pullEllis() {
   };
 }
 
+async function pullBowie() {
+  const page = await fetch(BOWIE_ROSTER_PAGE, { headers: { "user-agent": "electionnighttracker" } });
+  if (!page.ok) {
+    throw new Error(`Bowie roster page was not available (${page.status}). ${BOWIE_ROSTER_PAGE}`);
+  }
+  const files = bowieMailRosterLinks(await page.text());
+  const have = countyDatesWithMethod(await readVoters(), "bowie");
+  const selected = bowieRosterFilesToPull(files, have);
+  if (!selected.length) {
+    throw new Error("No BBM Received PDF was under the November 3, 2026 General Election on the Bowie elections page.");
+  }
+  const archive = openRosterRawArchive("bowie");
+  const rows = [];
+  let skippedMissingVuid = 0;
+  const missingByDate = new Map();
+  for (const link of selected) {
+    const file = await fetch(link.href, {
+      headers: { "user-agent": "electionnighttracker", referer: BOWIE_ROSTER_PAGE },
+    });
+    if (!file.ok) {
+      throw new Error(`Bowie roster file was not available (${file.status}). ${link.href}`);
+    }
+    const parsed = await parseBowieRosterPdf(await keepRosterDownload(archive, link.text || link.href, file), {
+      fallbackDate: link.voteDate,
+    });
+    rows.push(...parsed.rows);
+    skippedMissingVuid += parsed.skippedMissingVuid;
+    for (const day of parsed.missingVuidDays) {
+      missingByDate.set(day.date, (missingByDate.get(day.date) ?? 0) + day.missingVuid);
+    }
+  }
+  const saved = await saveRosterRows(rows, "bowie");
+  const latest = selected[selected.length - 1];
+  return {
+    sourceUrl: latest.href,
+    fileCount: selected.length,
+    skippedMissingVuid,
+    skippedMissingVuidDays: [...missingByDate.entries()]
+      .map(([date, missingVuid]) => ({ date, missingVuid }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    ...summarizeRosterRows(rows),
+    ...saved,
+  };
+}
+
+async function pullBrazos() {
+  const page = await fetch(BRAZOS_ROSTER_PAGE, { headers: { "user-agent": "electionnighttracker" } });
+  if (!page.ok) {
+    throw new Error(`Brazos roster page was not available (${page.status}). ${BRAZOS_ROSTER_PAGE}`);
+  }
+  const files = brazosRosterLinks(await page.text());
+  const have = new Set();
+  for (const row of await readVoters()) {
+    if (String(row.sourceCounty ?? "").toLowerCase() !== "brazos") continue;
+    const date = String(row.voteDate ?? "").trim();
+    const method = String(row.votingMethod ?? "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date) && method) have.add(`${date}|${method}`);
+  }
+  const selected = brazosRosterFilesToPull(files, have);
+  if (!selected.length) {
+    throw new Error("No November 2026 roster PDF was under 2026 General/Special Election on the Brazos roster page.");
+  }
+  const archive = openRosterRawArchive("brazos");
+  const rows = [];
+  let skippedMissingVuid = 0;
+  const missingByDate = new Map();
+  for (const link of selected) {
+    const file = await fetch(link.href, {
+      headers: { "user-agent": "electionnighttracker", referer: BRAZOS_ROSTER_PAGE },
+    });
+    if (!file.ok) {
+      throw new Error(`Brazos roster file was not available (${file.status}). ${link.href}`);
+    }
+    const parsed = await parseBrazosRosterPdf(await keepRosterDownload(archive, link.href, file), {
+      fallbackDate: link.voteDate,
+      votingMethod: link.votingMethod,
+    });
+    rows.push(...parsed.rows);
+    skippedMissingVuid += parsed.skippedMissingVuid;
+    for (const day of parsed.missingVuidDays) {
+      missingByDate.set(day.date, (missingByDate.get(day.date) ?? 0) + day.missingVuid);
+    }
+  }
+  const saved = await saveRosterRows(rows, "brazos");
+  const latest = selected[selected.length - 1];
+  return {
+    sourceUrl: latest.href,
+    fileCount: selected.length,
+    skippedMissingVuid,
+    skippedMissingVuidDays: [...missingByDate.entries()]
+      .map(([date, missingVuid]) => ({ date, missingVuid }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    ...summarizeRosterRows(rows),
+    ...saved,
+  };
+}
+
+async function pullComal() {
+  const page = await fetch(COMAL_ROSTER_PAGE, { headers: { "user-agent": "electionnighttracker" } });
+  if (!page.ok) {
+    throw new Error(`Comal roster page was not available (${page.status}). ${COMAL_ROSTER_PAGE}`);
+  }
+  const files = comalMailRosterLinks(await page.text());
+  const have = countyDatesWithMethod(await readVoters(), "comal");
+  const selected = comalRosterFilesToPull(files, have);
+  if (!selected.length) {
+    throw new Error("No General Election BBM Retd PDF was on the Comal archived data page.");
+  }
+  const archive = openRosterRawArchive("comal");
+  const rows = [];
+  let skippedMissingVuid = 0;
+  const missingByDate = new Map();
+  for (const link of selected) {
+    const file = await fetch(link.href, {
+      headers: { "user-agent": "electionnighttracker", referer: COMAL_ROSTER_PAGE },
+    });
+    if (!file.ok) {
+      throw new Error(`Comal roster file was not available (${file.status}). ${link.href}`);
+    }
+    const parsed = await parseComalRosterPdf(await keepRosterDownload(archive, link.text || link.href, file), {
+      fallbackDate: link.voteDate,
+    });
+    rows.push(...parsed.rows);
+    skippedMissingVuid += parsed.skippedMissingVuid;
+    for (const day of parsed.missingVuidDays) {
+      missingByDate.set(day.date, (missingByDate.get(day.date) ?? 0) + day.missingVuid);
+    }
+  }
+  const saved = await saveRosterRows(rows, "comal");
+  const latest = selected[selected.length - 1];
+  return {
+    sourceUrl: latest.href,
+    fileCount: selected.length,
+    skippedMissingVuid,
+    skippedMissingVuidDays: [...missingByDate.entries()]
+      .map(([date, missingVuid]) => ({ date, missingVuid }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    ...summarizeRosterRows(rows),
+    ...saved,
+  };
+}
+
+async function pullBastrop() {
+  const page = await fetch(BASTROP_ROSTER_PAGE, { headers: BASTROP_FETCH_HEADERS });
+  if (!page.ok) {
+    throw new Error(`Bastrop roster page was not available (${page.status}). ${BASTROP_ROSTER_PAGE}`);
+  }
+  const html = await page.text();
+  if (/challenge-container|awsWaf/i.test(html) && !/Mail Ballots/i.test(html)) {
+    throw new Error(`Bastrop roster page asked for a browser check. ${BASTROP_ROSTER_PAGE}`);
+  }
+  const files = bastropRosterLinks(html);
+  if (!files.length) {
+    throw new Error("The Mail Ballots CSV was not under Daily Voter Lists on the Bastrop upcoming elections page.");
+  }
+  const archive = openRosterRawArchive("bastrop");
+  const rows = [];
+  let skippedMissingVuid = 0;
+  const missingByDate = new Map();
+  for (const link of files) {
+    const file = await fetch(link.href, { headers: { ...BASTROP_FETCH_HEADERS, referer: BASTROP_ROSTER_PAGE } });
+    if (!file.ok) {
+      throw new Error(`Bastrop roster file was not available (${file.status}). ${link.href}`);
+    }
+    const parsed = parseBastropRosterCsv(
+      (await keepRosterDownload(archive, link.href, file)).toString("utf8"),
+      link.votingMethod,
+    );
+    rows.push(...parsed.rows);
+    skippedMissingVuid += parsed.skippedMissingVuid;
+    for (const day of parsed.missingVuidDays) {
+      missingByDate.set(day.date, (missingByDate.get(day.date) ?? 0) + day.missingVuid);
+    }
+  }
+  const saved = await saveRosterRows(rows, "bastrop");
+  const mail = files.find((link) => link.votingMethod === "AB") ?? files[files.length - 1];
+  return {
+    sourceUrl: mail.href,
+    fileCount: files.length,
+    skippedMissingVuid,
+    skippedMissingVuidDays: [...missingByDate.entries()]
+      .map(([date, missingVuid]) => ({ date, missingVuid }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    ...summarizeRosterRows(rows),
+    ...saved,
+  };
+}
+
+async function pullRandall() {
+  const page = await fetch(RANDALL_ROSTER_PAGE, { headers: { "user-agent": "electionnighttracker" } });
+  if (!page.ok) {
+    throw new Error(`Randall roster page was not available (${page.status}). ${RANDALL_ROSTER_PAGE}`);
+  }
+  const link = randallMailRosterLink(await page.text());
+  if (!link) {
+    throw new Error("The Mail Ballot Roster was not on the Randall election administration page.");
+  }
+  const file = await fetch(link.href, {
+    headers: { "user-agent": "electionnighttracker", referer: RANDALL_ROSTER_PAGE },
+  });
+  if (!file.ok) {
+    throw new Error(`Randall roster file was not available (${file.status}). ${link.href}`);
+  }
+  const archive = openRosterRawArchive("randall");
+  const parsed = await parseRandallRosterPdf(await keepRosterDownload(archive, link.href, file));
+  const saved = await saveRosterRows(parsed.rows, "randall");
+  return {
+    sourceUrl: link.href,
+    fileCount: 1,
+    skippedMissingVuid: parsed.skippedMissingVuid,
+    skippedMissingVuidDays: parsed.missingVuidDays,
+    ...summarizeRosterRows(parsed.rows),
+    ...saved,
+  };
+}
+
+async function pullWilliamson() {
+  const { link, bytes } = await fetchWilliamsonRoster();
+  const archive = openRosterRawArchive("williamson");
+  await archive.save(link.href, bytes);
+  const parsed = parseWilliamsonRosterXlsx(bytes);
+  const saved = await saveRosterRows(parsed.rows, "williamson");
+  return {
+    sourceUrl: link.href,
+    fileCount: 1,
+    skippedMissingVuid: parsed.skippedMissingVuid,
+    skippedMissingVuidDays: parsed.missingVuidDays,
+    ...summarizeRosterRows(parsed.rows),
+    ...saved,
+  };
+}
+
 const PULLS = {
   travis: pullTravis,
   harris: pullHarris,
@@ -1266,9 +1942,17 @@ const PULLS = {
   potter: pullPotter,
   tarrant: pullTarrant,
   wise: pullWise,
+  kendall: pullKendall,
+  hidalgo: pullHidalgo,
+  bowie: pullBowie,
+  brazos: pullBrazos,
+  comal: pullComal,
+  bastrop: pullBastrop,
   galveston: pullGalveston,
   montgomery: pullMontgomery,
   ellis: pullEllis,
+  williamson: pullWilliamson,
+  randall: pullRandall,
 };
 
 const SCHEDULE_PATH = path.join(DATA_DIR, "schedule.json");
@@ -1328,6 +2012,18 @@ export function zonedHour(date, timeZone = "America/Chicago") {
   return zonedClock(date, timeZone).hour;
 }
 
+/** A dated ballot counts on its vote day and after. A later date waits until that day. */
+export function rosterDateHasArrived(voteDate, today) {
+  const date = String(voteDate ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return true;
+  return date <= today;
+}
+
+export function countableRosterVoters(voters, now = new Date()) {
+  const today = zonedClock(now, "America/Chicago").isoDate;
+  return (voters ?? []).filter((row) => rosterDateHasArrived(row.voteDate ?? row.activityDate, today));
+}
+
 export function previousIsoDate(isoDate) {
   const [year, month, day] = String(isoDate).split("-").map(Number);
   const utc = new Date(Date.UTC(year, month - 1, day));
@@ -1350,13 +2046,14 @@ export function countyHasVoteDate(voters, countyKey, isoDate) {
   );
 }
 
-export function latestRosterVoteDate(voters, countyKey) {
+export function latestRosterVoteDate(voters, countyKey, now = new Date()) {
   const key = String(countyKey ?? "").toLowerCase();
+  const today = zonedClock(now, "America/Chicago").isoDate;
   let latest = "";
   for (const row of voters ?? []) {
     if (String(row.sourceCounty ?? "").toLowerCase() !== key) continue;
     const date = String(row.voteDate ?? "").trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(date) && date > latest) latest = date;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date) && date <= today && date > latest) latest = date;
   }
   return latest || null;
 }
@@ -1379,7 +2076,7 @@ export function countiesDueForRosterPull(counties, schedule, now = new Date(), v
   const clock = zonedClock(now, rules.timeZone);
   if (clock.weekday === "Sun" || !AUTO_PULL_HOURS.has(clock.hour)) return [];
   return trainedRosterKeys().filter((key) => {
-    if (rosterCaughtUp(latestRosterVoteDate(voters, key), counties?.[key]?.pulledAt, now, rules.timeZone)) return false;
+    if (rosterCaughtUp(latestRosterVoteDate(voters, key, now), counties?.[key]?.pulledAt, now, rules.timeZone)) return false;
     const county = counties?.[key];
     if (samePullSlot(county?.autoCheckedAt, now, rules.timeZone)) return false;
     if (samePullSlot(county?.pulledAt, now, rules.timeZone)) return false;
@@ -1446,6 +2143,7 @@ export async function readCountyRosterBoard() {
     counties,
     schedule: await readRosterSchedule(),
     pulling: pullingProfile ? { key: pullingProfile.key, label: pullingProfile.label.replace(/ County$/, "") } : null,
+    matching: rosterMatchStatus(),
     pullQueue: gate.queue
       .map((key) => COUNTY_ROSTER_PROFILES[key]?.label.replace(/ County$/, ""))
       .filter(Boolean),
@@ -1454,7 +2152,13 @@ export async function readCountyRosterBoard() {
 
 async function continueRosterQueue() {
   const gate = rosterGate();
-  if (gate.automatic && dropAutomaticRosterQueue(gate, (await readRosterSchedule()).enabled)) return;
+  let scheduleEnabled = false;
+  try {
+    scheduleEnabled = (await readRosterSchedule()).enabled;
+  } catch (error) {
+    console.error("County roster queue", error);
+  }
+  if (gate.automatic && dropAutomaticRosterQueue(gate, scheduleEnabled)) return;
   const next = gate.queue.shift();
   if (!next) {
     gate.automatic = false;
@@ -1522,21 +2226,26 @@ export async function startCountyRosterPull(countyKey) {
         };
         await writeStore(next);
       } catch (error) {
-        const next = await readStore();
-        next.updatedAt = new Date().toISOString();
-        const previous = next.counties[key] ?? emptyCountyStatus(key);
-        next.counties[key] = {
-          ...previous,
-          status: "error",
-          error: error instanceof Error ? error.message : String(error),
-          autoCheckedAt: previous.autoCheckedAt ?? null,
-        };
-        await writeStore(next);
+        console.error("County roster pull", error);
+        try {
+          const next = await readStore();
+          next.updatedAt = new Date().toISOString();
+          const previous = next.counties[key] ?? emptyCountyStatus(key);
+          next.counties[key] = {
+            ...previous,
+            status: "error",
+            error: error instanceof Error ? error.message : String(error),
+            autoCheckedAt: previous.autoCheckedAt ?? null,
+          };
+          await writeStore(next);
+        } catch (writeError) {
+          console.error("County roster pull status", writeError);
+        }
       } finally {
         rosterGate().active = null;
-        void continueRosterQueue();
+        void continueRosterQueue().catch((queueError) => console.error("County roster queue", queueError));
       }
-    })();
+    })().catch((error) => console.error("County roster pull", error));
 
     return readCountyRosterBoard();
   } finally {
@@ -1623,4 +2332,5 @@ export function startRosterPullSchedule() {
   }, 4 * 60 * 1000);
   scheduleTimer = boot;
   globalThis[SCHEDULE_GLOBAL] = { timer: null, boot };
+  scheduleRosterVoterMatch();
 }

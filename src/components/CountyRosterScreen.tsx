@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiUrl } from "../lib/apiBase";
 import { electionHasRosterScores } from "../lib/rosterScoreElection";
 import { ElectionDatasetNotice } from "./ElectionDatasetNotice";
@@ -41,6 +41,7 @@ type Board = {
   schedule?: RosterSchedule;
   pulling?: { key: string; label: string } | null;
   pullQueue?: string[];
+  matching?: { pending: number; found: number } | null;
 };
 
 
@@ -57,6 +58,7 @@ type VotedRow = {
   score2022: number | null;
   score2026: number | null;
   registrationDate?: string | null;
+  lookupChecked?: number;
   profile?: ProfileField[] | null;
 };
 
@@ -198,9 +200,10 @@ function centralToday(now = new Date()) {
 }
 
 function latestVoteDate(days: RosterDay[] | undefined) {
+  const today = centralToday();
   let latest = "";
   for (const day of days ?? []) {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(day.date) && day.date > latest) latest = day.date;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day.date) && day.date <= today && day.date > latest) latest = day.date;
   }
   return latest || null;
 }
@@ -229,11 +232,14 @@ function formatVoteDate(iso: string) {
 }
 
 function voteDayRows(pull: CountyPull | undefined) {
+  const today = centralToday();
   const by = new Map<string, { date: string; voters: number; missingVuid: number }>();
   for (const day of pull?.days ?? []) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day.date) && day.date > today) continue;
     by.set(day.date, { date: day.date, voters: day.voters ?? 0, missingVuid: day.missingVuid ?? 0 });
   }
   for (const day of pull?.skippedMissingVuidDays ?? []) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day.date) && day.date > today) continue;
     const existing = by.get(day.date) ?? { date: day.date, voters: 0, missingVuid: 0 };
     existing.missingVuid += day.missingVuid;
     by.set(day.date, existing);
@@ -292,28 +298,39 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
     return body;
   }
 
+  const matchingNow = useRef(false);
+
   useEffect(() => {
     let cancelled = false;
     let inFlight = false;
+    let timer = 0;
     async function load() {
       if (inFlight) return;
       inFlight = true;
       try {
-        await refresh();
+        const body = await refresh();
+        matchingNow.current = Boolean(body.matching);
         await refreshVoted(offset, voterSort, voterDir);
+        if (!cancelled) setError(null);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Could not load county rosters");
       } finally {
         inFlight = false;
       }
     }
-    void load();
-    const timer = window.setInterval(() => {
-      void load();
-    }, 15000);
+    function arm() {
+      timer = window.setTimeout(() => {
+        void load().finally(() => {
+          if (!cancelled) arm();
+        });
+      }, matchingNow.current ? 2000 : 15000);
+    }
+    void load().finally(() => {
+      if (!cancelled) arm();
+    });
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
   }, [offset, voterSort, voterDir]);
 
@@ -398,6 +415,11 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
 
   const pullingName = board?.pulling?.label ?? null;
   const pullQueue = board?.pullQueue ?? [];
+  const matchingLabel = board?.matching
+    ? board.matching.pending > 0
+      ? `Matching ${formatNum(board.matching.pending)} voters to ballot scores`
+      : "Matching voters to ballot scores"
+    : null;
   const detailFields = detail?.profile ?? [];
   const detailName = displayName(detailFields);
   const detailAddress = displayAddress(detailFields);
@@ -482,10 +504,12 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
           </a>
         </div>
         {error ? <p className="enr-ballot__status enr-ballot__status--error">{error}</p> : null}
-        {pullingName ? (
+        {pullingName || matchingLabel ? (
           <p className="enr-roster-pulling" role="status">
-            Pulling {pullingName}
-            {pullQueue.length ? ` · next ${pullQueue.join(", ")}` : ""}
+            {pullingName ? `Pulling ${pullingName}` : ""}
+            {pullingName && pullQueue.length ? ` · next ${pullQueue.join(", ")}` : ""}
+            {pullingName && matchingLabel ? " · " : ""}
+            {matchingLabel ?? ""}
           </p>
         ) : null}
 
@@ -610,7 +634,11 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
                     {detail.registrationDate ? ` · registered ${detail.registrationDate}` : ""}
                   </p>
                   {detail.matched !== 1 ? (
-                    <p>This voter is not on the current voter file.</p>
+                    detail.lookupChecked === 1 ? (
+                      <p>This voter is not on the current voter file.</p>
+                    ) : (
+                      <p>This voter is still waiting to be matched to the voter file.</p>
+                    )
                   ) : detailFields.length ? (
                     <dl className="enr-voter-dialog__facts">
                       {detailName ? (
@@ -703,7 +731,15 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
                     const current = voteDateIsCurrent(latest, pullState?.pulledAt ?? null);
                     return (
                       <tr key={county.key}>
-                        <td>{county.label.replace(/ County$/, "")}</td>
+                        <td>
+                          {pullState?.sourcePage ? (
+                            <a className="enr-roster-source" href={pullState.sourcePage} target="_blank" rel="noopener noreferrer">
+                              {county.label.replace(/ County$/, "")}
+                            </a>
+                          ) : (
+                            county.label.replace(/ County$/, "")
+                          )}
+                        </td>
                         <td>{!board ? "…" : trained ? "Trained" : "Not trained"}</td>
                         <td className="num">{trained ? formatNum(pullState?.uniqueVuids ?? 0) : "—"}</td>
                         <td>
@@ -761,24 +797,26 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
                     : "No vote dates are stored for this county yet."}
               </p>
               {dayRows.length ? (
-                <table className="enr-table enr-table--compact enr-roster-days">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th className="num">Voters</th>
-                      <th className="num">No VUID</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {dayRows.map((day) => (
-                      <tr key={day.date}>
-                        <td>{formatVoteDate(day.date)}</td>
-                        <td className="num">{formatNum(day.voters)}</td>
-                        <td className="num">{day.missingVuid ? formatNum(day.missingVuid) : "—"}</td>
+                <div className="enr-roster-days-scroll">
+                  <table className="enr-table enr-table--compact enr-roster-days">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th className="num">Voters</th>
+                        <th className="num">No VUID</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {dayRows.map((day) => (
+                        <tr key={day.date}>
+                          <td>{formatVoteDate(day.date)}</td>
+                          <td className="num">{formatNum(day.voters)}</td>
+                          <td className="num">{day.missingVuid ? formatNum(day.missingVuid) : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               ) : (
                 <p>No vote days are stored yet.</p>
               )}

@@ -2177,10 +2177,29 @@ code {
   color: #9b2335;
 }
 
+.enr-roster-source {
+  color: var(--tx-navy);
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.enr-roster-days-scroll {
+  max-height: 320px;
+  margin-top: 12px;
+  overflow: auto;
+}
+
 .enr-roster-days {
   width: 100%;
   min-width: 0;
-  margin-top: 12px;
+  margin-top: 0;
+}
+
+.enr-roster-days-scroll .enr-roster-days thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fff;
 }
 
 .enr-roster-info {
