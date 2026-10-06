@@ -27,3 +27,35 @@ export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
     return response;
   });
 }
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Read a JSON API body. An empty 502/503 from a Render restart is retried before the page shows an error. */
+export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await apiFetch(path, init);
+    const text = await response.text();
+    let body: { error?: string } | null = null;
+    if (text.trim()) {
+      try {
+        body = JSON.parse(text) as { error?: string };
+      } catch {
+        body = null;
+      }
+    }
+    if (response.ok && body && typeof body === "object") return body as T;
+    const restarting = response.status === 502 || response.status === 503;
+    const message =
+      (body && typeof body.error === "string" && body.error) ||
+      (restarting
+        ? "The live API is restarting. The page will try again."
+        : `The server returned ${response.status || "an empty response"}.`);
+    lastError = new Error(message);
+    if (!restarting || attempt === 2) throw lastError;
+    await wait(attempt === 0 ? 5000 : 15000);
+  }
+  throw lastError ?? new Error("The live API did not answer.");
+}

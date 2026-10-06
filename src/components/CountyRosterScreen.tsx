@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch, apiQuietMs, apiUrl } from "../lib/apiBase";
+import { apiJson, apiQuietMs, apiUrl } from "../lib/apiBase";
 import { electionHasRosterScores } from "../lib/rosterScoreElection";
 import { ElectionDatasetNotice } from "./ElectionDatasetNotice";
 import { TEXAS_COUNTIES } from "../lib/texasCounties";
@@ -280,20 +280,16 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
   async function refresh() {
-    const response = await apiFetch("/api/county-rosters", { cache: "no-store" });
-    const body = (await response.json()) as Board & { error?: string };
-    if (!response.ok) throw new Error(body.error || "Could not load county rosters");
+    const body = await apiJson<Board>("/api/county-rosters", { cache: "no-store" });
     setBoard(body);
     return body;
   }
 
   async function refreshVoted(nextOffset = offset, sort = voterSort, direction = voterDir) {
-    const response = await apiFetch(
+    const body = await apiJson<VotedPage>(
       `/api/county-rosters/voters?offset=${nextOffset}&limit=${PAGE_SIZE}&sort=${sort}&dir=${direction}`,
       { cache: "no-store" },
     );
-    const body = (await response.json()) as VotedPage & { error?: string };
-    if (!response.ok) throw new Error(body.error || "Could not load voted voters");
     setVoted(body);
     return body;
   }
@@ -428,9 +424,7 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
     setBusyKey(countyKey);
     setError(null);
     try {
-      const response = await apiFetch(`/api/county-rosters/${countyKey}/pull`, { method: "POST" });
-      const body = (await response.json()) as Board & { error?: string };
-      if (!response.ok) throw new Error(body.error || "Pull failed");
+      const body = await apiJson<Board>(`/api/county-rosters/${countyKey}/pull`, { method: "POST" });
       setBoard(body);
       setOffset(0);
       await refreshVoted(0);
@@ -445,9 +439,7 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
     setBusyKey("all");
     setError(null);
     try {
-      const response = await apiFetch("/api/county-rosters/pull-all", { method: "POST" });
-      const body = (await response.json()) as Board & { error?: string };
-      if (!response.ok) throw new Error(body.error || "Pull failed");
+      const body = await apiJson<Board>("/api/county-rosters/pull-all", { method: "POST" });
       setBoard(body);
       setOffset(0);
       await refreshVoted(0);

@@ -106,6 +106,13 @@ export function registerPollingRoutes(app) {
 
   app.get("/api/polling/state", async (_req, res) => {
     try {
+      if (fs.existsSync(snapshotPath)) {
+        void ensurePolling().catch((error) => {
+          console.error("Polling archive did not initialize:", error?.message || error);
+        });
+        sendSnapshot(res);
+        return;
+      }
       await ensurePolling();
       if (!fs.existsSync(snapshotPath)) await runTxpoll(["init"]);
       sendSnapshot(res);

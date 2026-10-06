@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch } from "../../lib/apiBase";
+import { apiJson } from "../../lib/apiBase";
 import "./polling.css";
 
 type PollRow = {
@@ -367,10 +367,7 @@ export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
 
   async function load() {
     setError(null);
-    const response = await apiFetch("/api/polling/state");
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "The polling archive did not load.");
-    setState(body);
+    setState(await apiJson<Snapshot>("/api/polling/state"));
   }
 
   useEffect(() => {
@@ -386,9 +383,7 @@ export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
     setBusyLabel("Pulling new polls and updating the estimate…");
     setError(null);
     try {
-      const response = await apiFetch("/api/polling/pull", { method: "POST" });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "The poll update failed.");
+      const body = await apiJson<Snapshot & { pull?: PullNote }>("/api/polling/pull", { method: "POST" });
       if (body.overview) setState(body);
       setPullNote(body.pull ?? null);
       setTab("Overview");
@@ -404,13 +399,11 @@ export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
     setBusyLabel("Recalculating…");
     setError(null);
     try {
-      const response = await apiFetch(path, {
+      const body = await apiJson<Snapshot>(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: payload === undefined ? undefined : JSON.stringify(payload),
       });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error || "Request failed");
       if (body.overview) setState(body);
       else await load();
     } catch (err) {
