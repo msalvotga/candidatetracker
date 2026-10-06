@@ -28,6 +28,7 @@ type PollRow = {
   status: string;
   approved: boolean;
   inModel: boolean;
+  needsAttention?: boolean;
   excluded: boolean;
   modelStatus: string;
   modelStatusLabel: string;
@@ -158,6 +159,7 @@ type Snapshot = {
     pollsInModel: number;
     pollstersInModel: number;
     pollsStored: number;
+    attentionCount?: number;
     lvCount: number;
     rvCount: number;
     lvWeightShare: number;
@@ -373,6 +375,10 @@ export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
 
   useEffect(() => {
     load().catch((err: Error) => setError(err.message));
+    const timer = setInterval(() => {
+      load().catch(() => {});
+    }, 60_000);
+    return () => clearInterval(timer);
   }, []);
 
   async function pullPolls() {
@@ -438,6 +444,7 @@ export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
           <div className="poll-kicker">Polling laboratory · {state.meta.asOf}</div>
           <div className="poll-actions">
             <button type="button" className="poll-btn primary" disabled={busy} onClick={() => void pullPolls()}>Pull new polls</button>
+            <span className="poll-muted">Also runs on the hour, 7 a.m. to 4 p.m. Central.</span>
             {onLeave ? <button type="button" className="linkish" onClick={onLeave}>Election night tracker</button> : null}
           </div>
         </div>
@@ -446,9 +453,15 @@ export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
         {error ? <div className="poll-error">{error}</div> : null}
         {pullNote ? <PullResult note={pullNote} polls={state.polls} busy={busy} onPost={post} /> : null}
         <div className="poll-tabs">
-          {TABS.map((item) => (
-            <button key={item} type="button" className={tab === item ? "is-active" : ""} onClick={() => setTab(item)}>{item}</button>
-          ))}
+          {TABS.map((item) => {
+            const waiting = item === "Polls" ? state.polls.filter((poll) => poll.needsAttention).length : 0;
+            return (
+              <button key={item} type="button" className={tab === item ? "is-active" : ""} onClick={() => setTab(item)}>
+                {item}
+                {waiting > 0 ? <span className="poll-badge" title={`${waiting} new poll${waiting === 1 ? "" : "s"} to include or exclude`}>{waiting}</span> : null}
+              </button>
+            );
+          })}
         </div>
         {busy ? <p className="poll-muted">{busyLabel}</p> : null}
 
@@ -985,7 +998,7 @@ function PollTable(props: {
           </thead>
           <tbody>
             {props.rows.map((poll) => (
-              <tr key={poll.id} className={poll.id === props.selectedId ? "is-selected" : ""}>
+              <tr key={poll.id} className={[poll.id === props.selectedId ? "is-selected" : "", poll.needsAttention ? "is-new" : ""].filter(Boolean).join(" ")}>
                 <td><button type="button" className="linkish" onClick={() => props.onSelect(poll.id)}>{poll.pollster}</button></td>
                 <td>{poll.sponsor || "—"}</td>
                 <td>{poll.fieldLabel || "—"}</td>

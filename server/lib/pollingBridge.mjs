@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { startPollingSchedule } from "./pollingSchedule.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -86,10 +87,22 @@ function sendSnapshot(res) {
   res.send(fs.readFileSync(snapshotPath));
 }
 
+let scheduleStarted = false;
+
+async function runScheduledPull() {
+  await ensurePolling();
+  const output = await runTxpoll(["pull"]);
+  return JSON.parse(output);
+}
+
 export function registerPollingRoutes(app) {
   void ensurePolling().catch((error) => {
     console.error("Polling archive did not initialize:", error?.message || error);
   });
+  if (!scheduleStarted) {
+    scheduleStarted = true;
+    startPollingSchedule(runScheduledPull);
+  }
 
   app.get("/api/polling/state", async (_req, res) => {
     try {
