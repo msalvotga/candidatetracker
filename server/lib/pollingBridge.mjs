@@ -175,6 +175,19 @@ export function registerPollingRoutes(app) {
     }
   });
 
+  app.post("/api/polling/pull", async (_req, res) => {
+    try {
+      await ensurePolling();
+      const output = await runTxpoll(["pull"]);
+      const snapshot = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
+      snapshot.pull = JSON.parse(output);
+      res.setHeader("Cache-Control", "no-store");
+      res.json(snapshot);
+    } catch (error) {
+      res.status(500).json({ error: String(error?.message || error) });
+    }
+  });
+
   app.post("/api/polling/discover", async (_req, res) => {
     try {
       await ensurePolling();

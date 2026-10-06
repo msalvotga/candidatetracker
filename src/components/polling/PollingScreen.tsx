@@ -146,6 +146,15 @@ type Snapshot = {
     averageMeasurementSe?: number | null;
     median?: number | null;
     sd?: number | null;
+    simulation?: {
+      runs: number;
+      abbottLeads: number;
+      hinojosaLeads: number;
+      ties: number;
+      abbottShare: number;
+      hinojosaShare: number;
+      note: string;
+    } | null;
     pollsInModel: number;
     pollstersInModel: number;
     pollsStored: number;
@@ -290,6 +299,7 @@ type Snapshot = {
     houseEffect: number | null;
     houseSe: number | null;
   }[];
+  sources?: SourceCatalog;
   quality: { label: string; note: string; meanCompleteness: number | null; issues: Record<string, number>; checks: { code: string; count: number; note: string }[] };
   settings: {
     recency: { half_life_days: number; adaptive: { enabled: boolean } };
@@ -305,12 +315,39 @@ type Snapshot = {
   };
 };
 
-const TABS = ["Overview", "Polls", "Comparison", "Model lab", "Model audit", "Subgroups", "Pollsters", "Settings", "Review"] as const;
+type SourceCatalog = {
+  note: string;
+  pollsterNote: string;
+  discovery: {
+    id: string;
+    name: string;
+    url: string;
+    kind: string;
+    tier: number | null;
+    role: string;
+    notes: string;
+    last: { ok: boolean; rows: number; error: string | null } | null;
+  }[];
+  pollsters: { name: string; domains: string[] }[];
+};
+
+const TABS = ["Overview", "Polls", "Sources", "Comparison", "Model lab", "Model audit", "Subgroups", "Pollsters", "Settings", "Review"] as const;
 
 function pct(value: number | null | undefined, digits = 0) {
   if (value == null || Number.isNaN(value)) return "—";
   return `${value.toFixed(digits)}`;
 }
+
+type PullNote = {
+  added: { id: number; pollster: string; fieldStart: string | null; fieldEnd: string | null; abbott: number; hinojosa: number; margin: number; sampleType: string | null; sampleSize: number | null }[];
+  alreadyStored: number;
+  parsed: number;
+  errors: string[];
+  source: string;
+  asOf: string;
+  label: string;
+  note: string;
+};
 
 export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
   const [state, setState] = useState<Snapshot | null>(null);
@@ -318,6 +355,8 @@ export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
   const [tab, setTab] = useState<(typeof TABS)[number]>("Overview");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [busyLabel, setBusyLabel] = useState("Recalculating…");
+  const [pullNote, setPullNote] = useState<PullNote | null>(null);
   const [sampleFilter, setSampleFilter] = useState("all");
   const [pollsterFilter, setPollsterFilter] = useState("all");
   const [ballotFilter, setBallotFilter] = useState("all");
@@ -336,8 +375,27 @@ export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
     load().catch((err: Error) => setError(err.message));
   }, []);
 
+  async function pullPolls() {
+    setBusy(true);
+    setBusyLabel("Pulling new polls and updating the estimate…");
+    setError(null);
+    try {
+      const response = await apiFetch("/api/polling/pull", { method: "POST" });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "The poll update failed.");
+      if (body.overview) setState(body);
+      setPullNote(body.pull ?? null);
+      setTab("Overview");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function post(path: string, payload?: unknown) {
     setBusy(true);
+    setBusyLabel("Recalculating…");
     setError(null);
     try {
       const response = await apiFetch(path, {
@@ -378,17 +436,21 @@ export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
       <div className="poll-wrap">
         <div className="poll-top">
           <div className="poll-kicker">Polling laboratory · {state.meta.asOf}</div>
-          {onLeave ? <button type="button" className="linkish" onClick={onLeave}>Election night tracker</button> : null}
+          <div className="poll-actions">
+            <button type="button" className="poll-btn primary" disabled={busy} onClick={() => void pullPolls()}>Pull new polls</button>
+            {onLeave ? <button type="button" className="linkish" onClick={onLeave}>Election night tracker</button> : null}
+          </div>
         </div>
         <h1>Texas Governor Poll Trend</h1>
         <p className="poll-disclaimer">{state.meta.disclaimer} A positive number is a lead for {state.meta.candidateA}. The RealClearPolitics average is never an input.</p>
         {error ? <div className="poll-error">{error}</div> : null}
+        {pullNote ? <PullResult note={pullNote} polls={state.polls} busy={busy} onPost={post} /> : null}
         <div className="poll-tabs">
           {TABS.map((item) => (
             <button key={item} type="button" className={tab === item ? "is-active" : ""} onClick={() => setTab(item)}>{item}</button>
           ))}
         </div>
-        {busy ? <p className="poll-muted">Recalculating…</p> : null}
+        {busy ? <p className="poll-muted">{busyLabel}</p> : null}
 
         {tab === "Overview" ? <Overview state={state} onSelect={setSelectedId} onOpenOut={() => { setStatusFilter("out"); setTab("Polls"); }} /> : null}
         {tab === "Polls" ? (
@@ -413,12 +475,81 @@ export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
         {tab === "Model lab" ? <ModelLab state={state} /> : null}
         {tab === "Model audit" ? <ModelAudit state={state} /> : null}
         {tab === "Subgroups" ? <Subgroups state={state} dimension={dimension} onDimension={setDimension} /> : null}
+        {tab === "Sources" ? <Sources state={state} /> : null}
         {tab === "Pollsters" ? <Pollsters state={state} /> : null}
         {tab === "Settings" ? <Settings state={state} onSave={(patch) => post("/api/polling/settings", patch)} onReset={() => post("/api/polling/settings/reset")} /> : null}
         {tab === "Review" ? <Review state={state} onPost={post} /> : null}
         {selected ? <Detail poll={selected} onClose={() => setSelectedId(null)} onPost={post} /> : null}
       </div>
     </div>
+  );
+}
+
+function PullResult({ note, polls, busy, onPost }: { note: PullNote; polls: PollRow[]; busy: boolean; onPost: (path: string, payload?: unknown) => Promise<void> }) {
+  const waiting = note.added.filter((item) => {
+    const poll = polls.find((row) => row.id === item.id);
+    return !poll?.inModel;
+  });
+  return (
+    <section className="poll-card">
+      <h2>Poll update</h2>
+      <p>{note.note} Current estimate: {note.label}. As of {note.asOf}.</p>
+      <p className="poll-muted">{note.source}. {note.parsed} rows read, {note.alreadyStored} already in the archive, {note.added.length} new.</p>
+      {note.errors.length ? <p className="poll-warn">{note.errors.join(" ")}</p> : null}
+      {waiting.length ? (
+        <ul>
+          {waiting.map((item) => (
+            <li key={item.id}>
+              {item.pollster}, {item.fieldStart ?? "?"} – {item.fieldEnd ?? "?"}, {item.sampleType ?? "sample type missing"} n={item.sampleSize ?? "—"}. Abbott {item.abbott}, Hinojosa {item.hinojosa} ({item.margin >= 0 ? `Abbott +${item.margin}` : `Hinojosa +${Math.abs(item.margin)}`}).{" "}
+              <button type="button" className="poll-btn primary" disabled={busy} onClick={() => void onPost(`/api/polling/polls/${item.id}/exclusion`, { excluded: false })}>Include in estimate</button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function Sources({ state }: { state: Snapshot & { sources?: SourceCatalog } }) {
+  const catalog = state.sources;
+  if (!catalog) return <p>Source list is not in this snapshot yet. Pull new polls to refresh it.</p>;
+  return (
+    <>
+      <section className="poll-card">
+        <h2>Where polls are pulled from</h2>
+        <p>{catalog.note}</p>
+      </section>
+      <div className="poll-table-wrap">
+        <table className="poll-table">
+          <thead>
+            <tr><th>Source</th><th>Kind</th><th>What Pull does</th><th>Last check</th></tr>
+          </thead>
+          <tbody>
+            {catalog.discovery.map((source) => (
+              <tr key={source.id}>
+                <td><a href={source.url}>{source.name}</a></td>
+                <td>{source.kind}{source.tier ? `, tier ${source.tier}` : ""}</td>
+                <td style={{ whiteSpace: "normal", minWidth: 280 }}>{source.role}{source.notes ? ` ${source.notes}` : ""}</td>
+                <td>
+                  {source.last ? (
+                    source.last.ok ? `${source.last.rows} poll rows` : source.last.error
+                  ) : "Not checked yet"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <section className="poll-card">
+        <h2>Organizations on the watch list</h2>
+        <p className="poll-muted">{catalog.pollsterNote}</p>
+        <ul>
+          {catalog.pollsters.map((pollster) => (
+            <li key={pollster.name}>{pollster.name} <span className="poll-muted">{pollster.domains.join(", ")}</span></li>
+          ))}
+        </ul>
+      </section>
+    </>
   );
 }
 
@@ -432,9 +563,18 @@ function Overview({ state, onSelect, onOpenOut }: { state: Snapshot; onSelect: (
           <div className="poll-margin" style={{ color: (state.overview.margin ?? 0) >= 0 ? state.meta.colors.candidate_a_color : state.meta.colors.candidate_b_color }}>
             {state.overview.label}
           </div>
+          {state.overview.simulation ? (
+            <div className="poll-odds">
+              <div className="poll-odds-figure" style={{ color: state.meta.colors.candidate_a_color }}>
+                {(state.overview.simulation.abbottShare * 100).toFixed(1)}%
+              </div>
+              <p>Governor Abbott leads in {state.overview.simulation.abbottLeads.toLocaleString()} of {state.overview.simulation.runs.toLocaleString()} draws. Gina Hinojosa leads {(state.overview.simulation.hinojosaShare * 100).toFixed(1)}%.</p>
+            </div>
+          ) : null}
           <p>50% interval: {state.overview.interval50Label ?? "—"}</p>
           <p>80% interval: {state.overview.interval80Label ?? "—"}</p>
           <p>95% interval: {state.overview.interval95Label ?? "—"}</p>
+          {state.overview.simulation ? <p className="poll-muted">{state.overview.simulation.note}</p> : null}
           {state.overview.emerging ? <p className="poll-warn">{state.overview.emerging}</p> : null}
           <p className="poll-muted">{state.overview.trendHoldNote} Newest fieldwork midpoint: {state.overview.lastFieldMidpoint ?? "—"}.</p>
           <div className="poll-meta">

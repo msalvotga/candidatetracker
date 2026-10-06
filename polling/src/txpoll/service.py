@@ -41,6 +41,8 @@ from .historical import MODEL_STATUS, historical_polls
 from .primary import fit_primary
 from .ingest.discover import fetch_watch_pages
 from .ingest.search import SearchNotConfigured, planned_queries, search
+from .ingest.rcp import parse_rcp_polls
+from .ingest.tpp import TRACKER_URL, parse_tpp_polls, poll_family, same_survey
 from .models import (
     DiscoveryItem,
     Methodology,
@@ -60,6 +62,7 @@ from .subgroups import mapping_index, normalize_subgroup
 from .validate import has_errors, source_priority, validate_poll
 
 SNAPSHOT_PATH = DATA_DIR / "public_snapshot.json"
+STATUS_PATH = DATA_DIR / "source_status.json"
 PRIOR_SNAPSHOT_PATH = DATA_DIR / "archive" / "txpoll-1_2026-10-02.json"
 WEIGHT_FORMULA = (
     "final_weight = precision_weight × recency_weight × sample_type_weight "
@@ -782,6 +785,7 @@ def build_snapshot(polls, observations, config, as_of: date, software_version: s
             "label": leader_text(estimate, config),
             "median": None if not primary else primary["uncertainty"]["median"],
             "sd": None if not primary else primary["sd"],
+            "simulation": None if not primary else primary.get("simulation"),
             "low50": low50,
             "high50": high50,
             "low80": low80,
@@ -832,6 +836,7 @@ def build_snapshot(polls, observations, config, as_of: date, software_version: s
         "subgroups": subgroup_block,
         "pollsters": _pollster_rows(weighted, effects, outlier_by_id),
         "review": [row for row in poll_rows if row["status"] != "approved" or row["warnings"]],
+        "sources": _source_catalog(),
         "quality": quality,
         "settings": config,
         "movement": [] if not primary else primary["changes"],
@@ -847,6 +852,49 @@ def build_snapshot(polls, observations, config, as_of: date, software_version: s
             }
             for link in []
         ],
+    }
+
+
+def _source_catalog() -> dict[str, Any]:
+    configured = load_yaml("sources.yaml")
+    status: dict[str, Any] = {}
+    if STATUS_PATH.exists():
+        try:
+            status = json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            status = {}
+    roles = {
+        "tpp_governor_table": "Aggregator. Pull reads this poll table and holds new rows for review. It is not an original release.",
+        "rcp_poll_table": "Aggregator. Pull reads individual polls and holds new rows for review. The RealClearPolling average on this page is never stored and never enters the model.",
+        "none": "Listed here, but Pull does not read poll rows from this page.",
+    }
+    discovery = []
+    for source in configured.get("discovery") or []:
+        parser = source.get("parser") or "none"
+        discovery.append(
+            {
+                "id": source.get("id"),
+                "name": source.get("name"),
+                "url": source.get("url"),
+                "kind": source.get("kind") or "other",
+                "tier": source.get("tier"),
+                "readsPollRows": parser in {"tpp_governor_table", "rcp_poll_table"},
+                "role": roles.get(parser, roles["none"]),
+                "notes": source.get("notes") or "",
+                "last": status.get(source.get("id") or ""),
+            }
+        )
+    return {
+        "note": (
+            "Pull downloads the pages below. A page marked as reading poll rows can add a poll to the archive. "
+            "That poll stays out of the estimate until you include it. The RealClearPolling average is not a source of numbers."
+        ),
+        "discovery": discovery,
+        "pollsters": [
+            {"name": row.get("name"), "domains": row.get("domains") or []}
+            for row in configured.get("pollsters") or []
+        ],
+        "pollsterNote": "These are organizations to search when a search API key is set. Pull does not download them on its own.",
     }
 
 
@@ -2003,6 +2051,187 @@ def add_manual_poll(session: Session, payload: dict, config: dict | None = None)
             )
     session.commit()
     return {"pollId": poll.id, "possibleDuplicates": conflicts}
+
+
+def pull_new_polls(session: Session, software_version: str) -> dict[str, Any]:
+    """Archive new tracker rows, then recompute the estimate as of today.
+
+    A new row is not approved. The tracker is an index, not an original release.
+    """
+    started = RunLog(kind="pull", ok=False, message="started")
+    session.add(started)
+    session.commit()
+    added = []
+    already = 0
+    parsed = 0
+    errors = []
+    try:
+        pages = fetch_watch_pages()
+    except Exception as exc:
+        pages = []
+        errors.append(str(exc))
+    readable = [page for page in pages if (page.get("source") or {}).get("parser") in {"tpp_governor_table", "rcp_poll_table"}]
+    if not readable and not errors:
+        errors.append("No poll table is configured.")
+    config = effective_config(session)
+    series_start = parse_date((config.get("race") or {}).get("series_start"))
+    existing = [_match_view(poll) for poll in load_polls(session)]
+    status: dict[str, Any] = {}
+    skipped_early = 0
+    for page in readable:
+        source = page.get("source") or {}
+        source_id = source.get("id") or page.get("url")
+        if not page.get("ok") or not page.get("path"):
+            message = page.get("error") or f"Could not download {page.get('url')}"
+            errors.append(f"{source.get('name') or source_id}: {message}")
+            status[source_id] = {"ok": False, "rows": 0, "error": message, "checkedAt": datetime.now(timezone.utc).isoformat()}
+            continue
+        html = Path(page["path"]).read_text(encoding="utf-8", errors="replace")
+        parser = source.get("parser")
+        rows = parse_tpp_polls(html) if parser == "tpp_governor_table" else parse_rcp_polls(html)
+        parsed += len(rows)
+        status[source_id] = {"ok": True, "rows": len(rows), "error": None, "checkedAt": datetime.now(timezone.utc).isoformat()}
+        publisher = "RealClearPolling" if parser == "rcp_poll_table" else "Texas Politics Project"
+        page_url = page.get("url") or TRACKER_URL
+        for row in rows:
+            end = parse_date(row.get("field_end"))
+            if series_start and end and end < series_start:
+                skipped_early += 1
+                continue
+            if any(same_survey(item, row) for item in existing):
+                already += 1
+                continue
+            if row.get("abbott") is None or row.get("hinojosa") is None:
+                errors.append(f"Skipped {row.get('pollster')}: Abbott or Hinojosa was not a number.")
+                continue
+            record = _tracker_record(row, page_url, publisher)
+            poll = _insert_poll(session, record, config)
+            session.commit()
+            view = _match_view(poll)
+            existing.append(view)
+            margin = float(row["abbott"]) - float(row["hinojosa"])
+            added.append(
+                {
+                    "id": poll.id,
+                    "pollster": poll.pollster,
+                    "fieldStart": row.get("field_start"),
+                    "fieldEnd": row.get("field_end"),
+                    "abbott": row.get("abbott"),
+                    "hinojosa": row.get("hinojosa"),
+                    "margin": margin,
+                    "sampleType": row.get("sample_type"),
+                    "sampleSize": row.get("sample_size"),
+                    "publisher": publisher,
+                }
+            )
+    STATUS_PATH.write_text(json.dumps(status), encoding="utf-8")
+    snapshot = recompute(session, software_version)
+    started.ok = not errors or bool(added) or already > 0
+    started.finished_at = utcnow()
+    started.message = f"Added {len(added)}. Already stored {already}. Parsed {parsed}."[:4000]
+    session.commit()
+    return {
+        "added": added,
+        "alreadyStored": already,
+        "parsed": parsed,
+        "errors": errors,
+        "source": "Texas Politics Project tracker and RealClearPolling",
+        "asOf": snapshot["meta"]["asOf"],
+        "label": snapshot["overview"]["label"],
+        "beforeSeries": skipped_early,
+        "note": (
+            "New rows stay out of the estimate until you include them. "
+            "An aggregator is an index, not the original release. The RealClearPolling average is not a poll and is not used."
+            if added
+            else "No new polls. The estimate was recalculated as of today. The RealClearPolling average was not used."
+        ),
+    }
+
+
+def _match_view(poll: Poll) -> dict:
+    return {
+        "family": poll_family(poll.pollster) or poll_family(poll.pollster_canonical),
+        "field_start": poll.field_start.isoformat() if poll.field_start else None,
+        "field_end": poll.field_end.isoformat() if poll.field_end else None,
+        "sample_size": poll.sample_size,
+        "abbott": _share(poll, "Greg Abbott"),
+        "hinojosa": _share(poll, "Gina Hinojosa"),
+    }
+
+
+def _tracker_record(row: dict, url: str, publisher: str = "Texas Politics Project") -> dict:
+    results = [
+        {"candidate": "Greg Abbott", "party": "Republican", "percentage": row["abbott"], "result_type": "candidate", "result_frame": "headline"},
+        {"candidate": "Gina Hinojosa", "party": "Democrat", "percentage": row["hinojosa"], "result_type": "candidate", "result_frame": "headline"},
+    ]
+    for extra in row.get("extras") or []:
+        results.append(
+            {
+                "candidate": extra["candidate"],
+                "party": extra.get("party"),
+                "percentage": extra["percentage"],
+                "result_type": extra["result_type"],
+                "result_frame": "headline",
+            }
+        )
+    end = row.get("field_end") or "undated"
+    family = row.get("family") or "poll"
+    prefix = "rcp" if "realclear" in publisher.lower() else "tpp"
+    warning = (
+        f"Pulled from {publisher}. The original release was not archived, so this poll is not in the estimate until it is included. "
+        "The RealClearPolling average is not stored."
+        if prefix == "rcp"
+        else f"Pulled from {publisher}. The original release was not archived, so this poll is not in the estimate until it is included."
+    )
+    if row.get("other_text"):
+        warning += f" Remainder cell: {row['other_text']}."
+    sources = [
+        {
+            "tier": 3,
+            "source_type": "aggregator",
+            "url": url,
+            "publisher": publisher,
+            "is_primary": False,
+            "notes": "Discovery index. Not an original release. The page average, if any, was not stored.",
+        }
+    ]
+    document = row.get("document_url")
+    if document and document.rstrip("/") != url.rstrip("/"):
+        sources.append(
+            {
+                "tier": 4,
+                "source_type": "linked_document",
+                "url": document,
+                "publisher": row.get("pollster"),
+                "is_primary": False,
+                "notes": "Link listed on the aggregator. The file was not downloaded on this pull.",
+            }
+        )
+    return {
+        "external_key": f"{prefix}-{family}-{end}",
+        "pollster": row.get("canonical") or row["pollster"],
+        "pollster_canonical": row.get("canonical") or row["pollster"],
+        "sponsor_type": "unknown",
+        "release_date": None,
+        "field_start": row.get("field_start"),
+        "field_end": row.get("field_end"),
+        "sample_size": row.get("sample_size"),
+        "sample_size_provenance": publisher,
+        "sample_type": row.get("sample_type") or "Other",
+        "reported_moe": row.get("reported_moe"),
+        "moe_kind": "reported_on_tracker",
+        "confidence_level": 0.95,
+        "ballot_configuration": row.get("ballot") or "unresolved",
+        "state": "TX",
+        "race": "Governor",
+        "cycle": 2026,
+        "approved_for_model": False,
+        "auto_confidence": 0.35,
+        "results": results,
+        "sources": sources,
+        "extraction_warnings": [warning],
+        "notes": warning,
+    }
 
 
 def run_discovery(session: Session) -> dict[str, Any]:

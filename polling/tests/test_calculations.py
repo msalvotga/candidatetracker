@@ -404,5 +404,67 @@ def _observation(poll_id, sponsor_type, source_code, margin=4.0, midpoint=None, 
     )
 
 
+class MarginSimulationTests(unittest.TestCase):
+    def test_a_positive_margin_leads_more_often_for_abbott(self):
+        from txpoll.primary import simulate_margin
+
+        first = simulate_margin(2.0, 1.2)
+        second = simulate_margin(2.0, 1.2)
+        self.assertEqual(first["runs"], 100_000)
+        self.assertGreater(first["abbottShare"], 0.9)
+        self.assertEqual(first["abbottLeads"], second["abbottLeads"])
+        self.assertEqual(first["abbottLeads"] + first["hinojosaLeads"] + first["ties"], 100_000)
+
+
+class RcpParseTests(unittest.TestCase):
+    def test_reads_individual_polls_and_drops_the_average(self):
+        from txpoll.ingest.rcp import parse_rcp_polls
+
+        html = """
+        <table>
+          <tr><th>pollster</th><th>date</th><th>sample</th><th>moe</th><th>Abbott (R)</th><th>Hinojosa (D)</th><th>spread</th></tr>
+          <tr><td>RCP Average</td><td>9/8 - 10/5</td><td>—</td><td>—</td><td>48.1</td><td>46.4</td><td>Abbott +1.7</td></tr>
+          <tr><td><a href="https://example.com/yougov.pdf">YouGov</a></td><td>9/28 - 10/5</td><td>3622 LV</td><td>3.0</td><td>47</td><td>48</td><td>Hinojosa +1</td></tr>
+          <tr><td>Emerson</td><td>1/10 - 1/12</td><td>1165 LV</td><td>2.8</td><td>50</td><td>42</td><td>Abbott +8</td></tr>
+        </table>
+        """
+        rows = parse_rcp_polls(html)
+        self.assertEqual([row["pollster"] for row in rows], ["YouGov", "Emerson"])
+        yougov = rows[0]
+        self.assertEqual(yougov["field_start"], "2026-09-28")
+        self.assertEqual(yougov["field_end"], "2026-10-05")
+        self.assertEqual(yougov["sample_size"], 3622)
+        self.assertEqual(yougov["sample_type"], "LV")
+        self.assertEqual(yougov["abbott"], 47)
+        self.assertEqual(yougov["hinojosa"], 48)
+        self.assertEqual(yougov["document_url"], "https://example.com/yougov.pdf")
+        self.assertNotIn(48.1, [row["abbott"] for row in rows])
+
+
+class TrackerParseTests(unittest.TestCase):
+    def test_parses_a_new_siena_row_without_splitting_a_combined_remainder(self):
+        from txpoll.ingest.tpp import parse_tpp_polls, same_survey
+
+        html = """
+        <table><tr><th>Poll</th><th>Field Dates</th><th>Sample Size</th><th>Sample Type</th><th>MOE</th><th>Abbott</th><th>Hinojosa</th><th>Other</th><th>Spread</th></tr>
+        <tr><td>New York Times/Siena</td><td>9/21 - 9/30</td><td>615</td><td>LV</td><td>+/- 4%</td><td>46</td><td>49</td><td>Another .5%; 5% DK</td><td>Hinojosa +3</td></tr>
+        <tr><td>FOX News</td><td>9/24 - 9/28</td><td>881</td><td>LV</td><td>+/-3%</td><td>52</td><td>47</td><td>n/a</td><td>Abbott +5</td></tr>
+        <tr><td>NBC News/Mason-Dixon</td><td>9/9 -9/10</td><td>625</td><td>LV</td><td>+/- 4.0%</td><td>48</td><td>41</td><td>Other/undecided 11</td><td>Abbott +7</td></tr>
+        </table>
+        """
+        rows = parse_tpp_polls(html)
+        siena = rows[0]
+        self.assertEqual(siena["field_start"], "2026-09-21")
+        self.assertEqual(siena["field_end"], "2026-09-30")
+        self.assertEqual(siena["sample_size"], 615)
+        self.assertEqual(siena["abbott"], 46)
+        self.assertEqual(siena["hinojosa"], 49)
+        self.assertEqual(siena["ballot"], "two_candidate_undecided_permitted")
+        self.assertEqual([item["percentage"] for item in siena["extras"]], [0.5, 5.0])
+        self.assertTrue(same_survey({"family": "fox", "field_start": "2026-09-24", "field_end": "2026-09-28", "sample_size": 881, "abbott": 52, "hinojosa": 47}, rows[1]))
+        self.assertFalse(same_survey({"family": "siena", "field_start": "2026-06-19", "field_end": "2026-06-27", "sample_size": 656, "abbott": 51, "hinojosa": 44}, siena))
+        self.assertTrue(same_survey({"family": "mason", "field_start": None, "field_end": None, "sample_size": 625, "abbott": 48, "hinojosa": 41}, rows[2]))
+
+
 if __name__ == "__main__":
     unittest.main()

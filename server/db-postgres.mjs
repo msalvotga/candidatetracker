@@ -206,16 +206,24 @@ export async function ensureDb() {
   if (_init) return _init;
 
   _init = (async () => {
-    _pool = createCompatPool(getDatabaseUrl());
-    await runSchemaSql(_pool);
-    await _pool.query(EV_ROSTER_SUMMARY_CACHE_DDL_POSTGRES);
-    await syncIngestVendorMetadataMssql(_pool);
-    await migrateLegacyJsonIfNeeded(_pool);
-    const restoredFeeds = await restoreElectionFeedsFromBackup();
-    if (restoredFeeds > 0) {
-      console.warn(`Restored ${restoredFeeds} county feed row(s) from election-feed-configs.json`);
+    try {
+      _pool = createCompatPool(getDatabaseUrl());
+      await runSchemaSql(_pool);
+      await _pool.query(EV_ROSTER_SUMMARY_CACHE_DDL_POSTGRES);
+      await syncIngestVendorMetadataMssql(_pool);
+      await migrateLegacyJsonIfNeeded(_pool);
+      const restoredFeeds = await restoreElectionFeedsFromBackup();
+      if (restoredFeeds > 0) {
+        console.warn(`Restored ${restoredFeeds} county feed row(s) from election-feed-configs.json`);
+      }
+      return _pool;
+    } catch (error) {
+      _init = null;
+      const failed = _pool;
+      _pool = null;
+      await failed?.end?.().catch(() => {});
+      throw error;
     }
-    return _pool;
   })();
 
   return _init;

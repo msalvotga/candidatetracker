@@ -2332,5 +2332,4 @@ export function startRosterPullSchedule() {
   }, 4 * 60 * 1000);
   scheduleTimer = boot;
   globalThis[SCHEDULE_GLOBAL] = { timer: null, boot };
-  scheduleRosterVoterMatch();
 }

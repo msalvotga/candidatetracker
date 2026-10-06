@@ -17,8 +17,8 @@ discovery:
     tier: 3
     kind: aggregator
     url: https://www.realclearpolling.com/polls/governor/general/2026/texas/abbott-vs-hinojosa
-    parser: none
-    notes: Comparison only. The RCP average is never an input to this model.
+    parser: rcp_poll_table
+    notes: Individual polls are an index only. The RCP average is never a model input.
   - id: rcp-latest-governors
     name: RealClearPolling latest governor polls
     tier: 3

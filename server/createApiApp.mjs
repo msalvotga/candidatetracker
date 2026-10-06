@@ -669,6 +669,10 @@ export function createApiApp() {
   );
   app.use(express.json({ limit: "80mb" }));
 
+  app.get(["/", "/health"], (_req, res) => {
+    res.status(200).json({ ok: true, service: "electionnighttracker-api" });
+  });
+
   /** Texas Civix ENR — browser uses /api-ivis-system on same host (Vite or static rewrite → here). */
   app.use("/api-ivis-system", (req, res) => {
     void civixProxyHandler(req, res);

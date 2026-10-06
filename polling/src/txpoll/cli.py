@@ -28,7 +28,7 @@ def software_version() -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="txpoll")
-    parser.add_argument("command", choices=["init", "recompute", "discover", "export", "serve", "settings", "reset-settings", "approve", "exclude", "include", "manual", "merge", "unmerge", "ensure"])
+    parser.add_argument("command", choices=["init", "recompute", "discover", "pull", "export", "serve", "settings", "reset-settings", "approve", "exclude", "include", "manual", "merge", "unmerge", "ensure"])
     parser.add_argument("--force-import", action="store_true")
     parser.add_argument("--id", type=int)
     parser.add_argument("--keep", type=int)
@@ -48,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
             add_manual_poll,
             ensure_database,
             merge_polls,
+            pull_new_polls,
             reset_config,
             save_config_patch,
             set_approval,
@@ -66,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
             print(snapshot["overview"]["label"])
         elif args.command == "discover":
             print(json.dumps(run_discovery(session), indent=2))
+        elif args.command == "pull":
+            print(json.dumps(pull_new_polls(session, software_version())))
         elif args.command == "export":
             folder = Path(__file__).resolve().parents[2] / "data" / "exports"
             print(json.dumps(export_tables(session, folder), indent=2))

@@ -11,23 +11,41 @@ from ..config import load_yaml
 from .preserve import sha256_bytes, write_raw
 
 
+def _download(url: str) -> tuple[bytes, int]:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+    }
+    try:
+        response = httpx.get(url, headers=headers, timeout=30, follow_redirects=True)
+        response.raise_for_status()
+        return response.content, response.status_code
+    except Exception as first:
+        try:
+            from curl_cffi import requests as browser_requests
+
+            response = browser_requests.get(url, impersonate="chrome", timeout=40, headers={"Accept": "text/html"})
+            if response.status_code >= 400:
+                raise RuntimeError(f"HTTP {response.status_code}")
+            return response.content, response.status_code
+        except Exception:
+            raise first
+
+
 def fetch_watch_pages() -> list[dict]:
     sources = load_yaml("sources.yaml")
     found = []
-    headers = {"User-Agent": "TexasGovernorPollTrend/0.1 (local research archive)"}
     for source in sources.get("discovery") or []:
         url = source.get("url")
         if not url:
             continue
         item = {"source": source, "ok": False, "url": url}
         try:
-            response = httpx.get(url, headers=headers, timeout=30, follow_redirects=True)
-            response.raise_for_status()
-            payload = response.content
+            payload, status_code = _download(url)
             path, digest = write_raw("page.html", payload, datetime.now(timezone.utc))
-            item.update(ok=True, hash=digest, path=str(path), status_code=response.status_code)
+            item.update(ok=True, hash=digest, path=str(path), status_code=status_code)
             if source.get("parser") == "tpp_governor_table":
-                item["rows"] = parse_tpp_table(response.text)
+                item["rows"] = parse_tpp_table(payload.decode("utf-8", errors="replace"))
                 if not item["rows"]:
                     item["note"] = "Page downloaded but the poll table was not found. Queued for manual review. OCR is not used."
         except Exception as exc:  # network and parse failures stay in the queue

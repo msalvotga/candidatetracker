@@ -169,6 +169,33 @@ def _direction_probability(change: float, sd: float | None) -> tuple[float | Non
     return prob_pos, 1.0 - prob_pos
 
 
+def simulate_margin(mean: float, sd: float, runs: int = 100_000, seed: int = 2026) -> dict | None:
+    """Draw the current polling margin. A positive draw is an Abbott lead in that draw.
+
+    This is not a simulated election and not a probability that either candidate wins.
+    """
+    if not math.isfinite(mean) or not math.isfinite(sd) or sd < 0 or runs < 1:
+        return None
+    rng = np.random.default_rng(seed)
+    draws = rng.normal(mean, max(sd, 0.0), size=runs)
+    abbott = int(np.sum(draws > 0))
+    hinojosa = int(np.sum(draws < 0))
+    ties = int(runs - abbott - hinojosa)
+    return {
+        "runs": runs,
+        "seed": seed,
+        "abbottLeads": abbott,
+        "hinojosaLeads": hinojosa,
+        "ties": ties,
+        "abbottShare": abbott / runs,
+        "hinojosaShare": hinojosa / runs,
+        "note": (
+            "Each run draws one value from the posterior of today's latent polling margin. "
+            "A lead means that draw is positive for Abbott. It is not a simulated election and not a probability that either candidate wins."
+        ),
+    }
+
+
 def _uncertainty(mean: float, sd: float) -> dict:
     summary = {"method": "gaussian_posterior", "n": None, "mean": mean, "median": mean, "sd": sd}
     for key, z in Z.items():
@@ -499,6 +526,7 @@ def fit_primary(polls, observations, as_of: date, ordinals: np.ndarray | None = 
         "information": _information(dynamic, day1, 7, 30),
         "emerging": _movement_alert(changes, dynamic, fit.get("updates") or [], day1),
         "uncertainty": _uncertainty(now, now_sd),
+        "simulation": simulate_margin(now, now_sd),
         "lab": lab_view(calibration),
         "populationNote": selected.get("populationNote"),
         "day0": day0,

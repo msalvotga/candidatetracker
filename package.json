@@ -1,10 +1,11 @@
 {
   "name": "electionnighttracker",
   "private": true,
-  "version": "1.156.1546",
+  "version": "1.156.1631",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "start": "node --import dotenv/config --max-old-space-size=4096 server/index.mjs",
     "server": "node --import dotenv/config --max-old-space-size=4096 server/index.mjs",
     "dev:all": "concurrently -k \"npm run server\" \"vite --mode proxy\"",
     "build": "tsc -b && vite build",

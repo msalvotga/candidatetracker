@@ -268,6 +268,8 @@ export function createCompatPool(connectionString) {
   _nativePool = new pg.Pool({
     connectionString,
     ssl: useSsl,
+    max: 5,
+    connectionTimeoutMillis: 10_000,
     onConnect(client) {
       client.on("error", (err) => {
         console.error("Postgres client connection error:", err instanceof Error ? err.message : err);

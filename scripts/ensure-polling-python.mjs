@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const requirements = path.join(root, "polling", "requirements-runtime.txt");
-const check = "import sqlalchemy, numpy, pandas, yaml, httpx, bs4, dotenv, psycopg";
+const check = "import sqlalchemy, numpy, pandas, yaml, httpx, bs4, dotenv, psycopg, curl_cffi";
 const service = String(process.env.RENDER_SERVICE_NAME || "");
 
 if (service.toLowerCase().includes("frontend")) process.exit(0);

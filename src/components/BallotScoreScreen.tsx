@@ -117,16 +117,29 @@ function bucketStat(bucket: EvBucket | null, field: "score2022" | "score2026") {
 
 type ModelDayPoint = {
   label: string;
-  title: string;
-  y2022: number | null;
-  y2022n: number;
-  y2026: number | null;
-  y2026n: number;
+  daily2022: number | null;
+  daily2022n: number;
+  cum2022: number | null;
+  cum2022n: number;
+  daily2026: number | null;
+  daily2026n: number;
+  cum2026: number | null;
+  cum2026n: number;
 };
+
+function startedModelScores(geo: EvGeo | undefined, dayId: string, year: "y2022" | "y2026") {
+  const daily = dailyBucket(geo, dayId, year);
+  if (!daily || daily.voters <= 0) return null;
+  const dayScore = bucketStat(daily, "score2026");
+  const cumulative = bucketStat(cumulativeBucket(geo, dayId, year), "score2026");
+  return { daily: dayScore, cumulative };
+}
 
 function ModelDayChart({ points, selectedLabel }: { points: ModelDayPoint[]; selectedLabel: string }) {
   const ref = useRef<HTMLDivElement>(null);
-  const hasPoint = points.some((point) => point.y2022 != null || point.y2026 != null);
+  const hasPoint = points.some(
+    (point) => point.daily2022 != null || point.cum2022 != null || point.daily2026 != null || point.cum2026 != null,
+  );
   useEffect(() => {
     const host = ref.current;
     if (!host || !hasPoint) return;
@@ -141,40 +154,64 @@ function ModelDayChart({ points, selectedLabel }: { points: ModelDayPoint[]; sel
       plotly = Plotly;
       const labels = points.map((point) => point.label);
       const hover = (avg: number | null, count: number) => (avg == null ? "—" : `${avg.toFixed(1)} · ${count.toLocaleString("en-US")} voters`);
-      const values = points.flatMap((point) => [point.y2022, point.y2026]).filter((value): value is number => value != null);
+      const values = points
+        .flatMap((point) => [point.daily2022, point.cum2022, point.daily2026, point.cum2026])
+        .filter((value): value is number => value != null);
       const low = Math.min(...values);
       const high = Math.max(...values);
       const pad = Math.max(1, (high - low) * 0.12);
+      const trace = (
+        name: string,
+        color: string,
+        y: Array<number | null>,
+        custom: string[],
+        dash: "solid" | "dash",
+      ) => ({
+        type: "scatter",
+        mode: "lines+markers",
+        name,
+        x: labels,
+        y,
+        customdata: custom,
+        line: { color, width: dash === "dash" ? 2 : 2.5, dash },
+        marker: { color, size: dash === "dash" ? 6 : 7 },
+        connectgaps: false,
+        hovertemplate: `%{x}<br>%{customdata}<extra>${name}</extra>`,
+      });
       await Plotly.newPlot(
         host,
         [
-          {
-            type: "scatter",
-            mode: "lines+markers",
-            name: "2022 voters, 2026 model",
-            x: labels,
-            y: points.map((point) => point.y2022),
-            customdata: points.map((point) => hover(point.y2022, point.y2022n)),
-            line: { color: "#1d4f91", width: 2.5 },
-            marker: { color: "#1d4f91", size: 7 },
-            connectgaps: false,
-            hovertemplate: "%{x}<br>%{customdata}<extra>2022 voters</extra>",
-          },
-          {
-            type: "scatter",
-            mode: "lines+markers",
-            name: "2026 voters, 2026 model",
-            x: labels,
-            y: points.map((point) => point.y2026),
-            customdata: points.map((point) => hover(point.y2026, point.y2026n)),
-            line: { color: "#9f1d2e", width: 2.5 },
-            marker: { color: "#9f1d2e", size: 7 },
-            connectgaps: false,
-            hovertemplate: "%{x}<br>%{customdata}<extra>2026 voters</extra>",
-          },
+          trace(
+            "2022 voters, daily",
+            "#1d4f91",
+            points.map((point) => point.daily2022),
+            points.map((point) => hover(point.daily2022, point.daily2022n)),
+            "solid",
+          ),
+          trace(
+            "2022 voters, cumulative",
+            "#5b8fc4",
+            points.map((point) => point.cum2022),
+            points.map((point) => hover(point.cum2022, point.cum2022n)),
+            "dash",
+          ),
+          trace(
+            "2026 voters, daily",
+            "#9f1d2e",
+            points.map((point) => point.daily2026),
+            points.map((point) => hover(point.daily2026, point.daily2026n)),
+            "solid",
+          ),
+          trace(
+            "2026 voters, cumulative",
+            "#d16a78",
+            points.map((point) => point.cum2026),
+            points.map((point) => hover(point.cum2026, point.cum2026n)),
+            "dash",
+          ),
         ],
         {
-          margin: { l: 58, r: 16, t: 36, b: 48 },
+          margin: { l: 58, r: 16, t: 64, b: 48 },
           height: 380,
           paper_bgcolor: "#fff",
           plot_bgcolor: "#fff",
@@ -410,15 +447,18 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
     () =>
       days.map((day) => {
         const id = String(day.id);
-        const y2022 = bucketStat(cumulativeBucket(evState, id, "y2022"), "score2026");
-        const y2026 = bucketStat(cumulativeBucket(evState, id, "y2026"), "score2026");
+        const y2022 = startedModelScores(evState, id, "y2022");
+        const y2026 = startedModelScores(evState, id, "y2026");
         return {
           label: day.label,
-          title: votingDayTitle(day),
-          y2022: y2022.avg,
-          y2022n: y2022.n,
-          y2026: y2026.avg,
-          y2026n: y2026.n,
+          daily2022: y2022?.daily.avg ?? null,
+          daily2022n: y2022?.daily.n ?? 0,
+          cum2022: y2022?.cumulative.avg ?? null,
+          cum2022n: y2022?.cumulative.n ?? 0,
+          daily2026: y2026?.daily.avg ?? null,
+          daily2026n: y2026?.daily.n ?? 0,
+          cum2026: y2026?.cumulative.avg ?? null,
+          cum2026n: y2026?.cumulative.n ?? 0,
         };
       }),
     [days, evState],
@@ -539,7 +579,7 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
               )}
               <p className="enr-ballot__hint">
                 {evPanel === "graph"
-                  ? "Each point is the cumulative 2026 model through that voting day. The dotted line marks the day selected above."
+                  ? "Solid lines are that day's 2026 model. Dashed lines are the cumulative 2026 model. A day is drawn once its votes have started. The dotted line marks the day selected above."
                   : `${evDef.label} lines up ${formatDayDate(evDef.date2022)} with ${formatDayDate(evDef.date2026, "long")}.`}{" "}
                 Day 1 includes all mail-in ballots up to and including that day. Election Day includes mail-in ballots received
                 on Oct 31, Nov 1, and Nov 2 as well as Election Day.

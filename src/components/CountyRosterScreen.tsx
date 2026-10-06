@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiFetch, apiQuietMs, apiUrl } from "../lib/apiBase";
 import { electionHasRosterScores } from "../lib/rosterScoreElection";
 import { ElectionDatasetNotice } from "./ElectionDatasetNotice";
@@ -298,8 +298,6 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
     return body;
   }
 
-  const matchingNow = useRef(false);
-
   useEffect(() => {
     let cancelled = false;
     let inFlight = false;
@@ -308,8 +306,7 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
       if (inFlight) return;
       inFlight = true;
       try {
-        const body = await refresh();
-        matchingNow.current = Boolean(body.matching);
+        await refresh();
         await refreshVoted(offset, voterSort, voterDir);
         if (!cancelled) setError(null);
       } catch (e) {
@@ -323,7 +320,7 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
         void load().finally(() => {
           if (!cancelled) arm();
         });
-      }, apiQuietMs() > 0 ? Math.max(60_000, apiQuietMs()) : matchingNow.current ? 2000 : 15000);
+      }, apiQuietMs() > 0 ? Math.max(60_000, apiQuietMs()) : 15000);
     }
     void load().finally(() => {
       if (!cancelled) arm();
