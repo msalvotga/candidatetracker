@@ -46,6 +46,12 @@ import {
   parseParkerRosterXlsx,
 } from "./parkerRoster.mjs";
 import {
+  parseTomGreenRosterPdf,
+  TOM_GREEN_FETCH_HEADERS,
+  TOM_GREEN_ROSTER_PAGE,
+  tomGreenRosterLinks,
+} from "./tomGreenRoster.mjs";
+import {
   MONTGOMERY_ROSTER_PAGE,
   montgomeryFetch,
   montgomeryRosterFilesToPull,
@@ -223,6 +229,15 @@ export const COUNTY_ROSTER_PROFILES = {
     notes:
       "Each pull reads the early voting roster page and takes the date links. The date link is an Excel file. A pdf link beside it is skipped. The workbook has a VUID and a Ballot Received Date, which is the vote date. Ballot by Mail is AB. Early voting links are EV and election day links are ED. A pull reads the newest posted day, plus any earlier day that does not already have voters.",
     sourcePage: PARKER_ROSTER_PAGE,
+  },
+  tom_green: {
+    key: "tom_green",
+    label: "Tom Green County",
+    trained: true,
+    fileKinds: "November 2026 roster PDF",
+    notes:
+      "Each pull reads the voting rosters page and takes the PDF links under 11/3/2026 General Election. The county replaces that file, so the address changes. The PDF has a VUID and a ballot returned date, which is the vote date. Early voting is EV, absentee is AB, and election day is ED.",
+    sourcePage: TOM_GREEN_ROSTER_PAGE,
   },
 };
 
@@ -1935,6 +1950,44 @@ async function pullRandall() {
   };
 }
 
+async function pullTomGreen() {
+  const page = await fetch(TOM_GREEN_ROSTER_PAGE, { headers: TOM_GREEN_FETCH_HEADERS });
+  if (page.status !== 200) {
+    throw new Error(`Tom Green roster page was not available (${page.status}). ${TOM_GREEN_ROSTER_PAGE}`);
+  }
+  const files = tomGreenRosterLinks(await page.text());
+  if (!files.length) {
+    throw new Error("No roster PDF was under 11/3/2026 General Election on the Tom Green voting rosters page.");
+  }
+  const archive = openRosterRawArchive("tom_green");
+  const rows = [];
+  let skippedMissingVuid = 0;
+  const missingByDate = new Map();
+  for (const link of files) {
+    const file = await fetch(link.href, { headers: { ...TOM_GREEN_FETCH_HEADERS, referer: TOM_GREEN_ROSTER_PAGE } });
+    if (file.status !== 200) {
+      throw new Error(`Tom Green roster file was not available (${file.status}). ${link.href}`);
+    }
+    const parsed = await parseTomGreenRosterPdf(await keepRosterDownload(archive, link.href, file), link.votingMethod);
+    rows.push(...parsed.rows);
+    skippedMissingVuid += parsed.skippedMissingVuid;
+    for (const day of parsed.missingVuidDays) {
+      missingByDate.set(day.date, (missingByDate.get(day.date) ?? 0) + day.missingVuid);
+    }
+  }
+  const saved = await saveRosterRows(rows, "tom_green");
+  return {
+    sourceUrl: files[files.length - 1].href,
+    fileCount: files.length,
+    skippedMissingVuid,
+    skippedMissingVuidDays: [...missingByDate.entries()]
+      .map(([date, missingVuid]) => ({ date, missingVuid }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    ...summarizeRosterRows(rows),
+    ...saved,
+  };
+}
+
 async function pullParker() {
   const page = await fetch(PARKER_ROSTER_PAGE, { headers: PARKER_FETCH_HEADERS });
   if (page.status !== 200) {
@@ -2011,6 +2064,7 @@ const PULLS = {
   williamson: pullWilliamson,
   randall: pullRandall,
   parker: pullParker,
+  tom_green: pullTomGreen,
 };
 
 const SCHEDULE_PATH = path.join(DATA_DIR, "schedule.json");
