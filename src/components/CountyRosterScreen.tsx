@@ -270,7 +270,7 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
   const [offset, setOffset] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | "trained" | "waiting">("all");
+  const [filter, setFilter] = useState<"all" | "trained" | "waiting" | "behind">("all");
   const [sortKey, setSortKey] = useState<CountySort>("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [voterSort, setVoterSort] = useState<VoterSort>("voteDate");
@@ -342,9 +342,15 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = TEXAS_COUNTIES.filter((county) => {
-      const trained = Boolean(board?.counties[county.key]?.trained);
+      const pullState = board?.counties[county.key];
+      const trained = Boolean(pullState?.trained);
       if (filter === "trained" && !trained) return false;
       if (filter === "waiting" && trained) return false;
+      if (filter === "behind") {
+        if (!trained) return false;
+        const latest = latestVoteDate(pullState?.days);
+        if (!latest || voteDateIsCurrent(latest, pullState?.pulledAt ?? null)) return false;
+      }
       if (!q) return true;
       return county.label.toLowerCase().includes(q) || county.key.includes(q);
     });
@@ -673,6 +679,7 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
                   <select className="enr-select" value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)}>
                     <option value="all">All counties</option>
                     <option value="trained">Trained</option>
+                    <option value="behind">Needs a pull</option>
                     <option value="waiting">Not trained</option>
                   </select>
                 </label>
@@ -712,6 +719,15 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
                   </tr>
                 </thead>
                 <tbody>
+                  {rows.length === 0 ? (
+                    <tr>
+                      <td colSpan={6}>
+                        {filter === "behind" && !query.trim()
+                          ? "Every trained county is current."
+                          : "No counties match this filter."}
+                      </td>
+                    </tr>
+                  ) : null}
                   {rows.map((county) => {
                     const pullState = board?.counties[county.key];
                     const trained = Boolean(pullState?.trained);

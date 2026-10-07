@@ -5,10 +5,14 @@ import { ElectionDatasetNotice } from "./ElectionDatasetNotice";
 import { BallotScoreHeatmap, type BallotMapCell } from "./BallotScoreHeatmap";
 import {
   FALLBACK_DAYS,
+  MAIL_DAY,
   cumulativeBucket,
   dailyBucket,
   emptyStat,
+  finalVotedBucket,
   formatDayDate,
+  isMailDay,
+  votingDayAxisLabel,
   votingDayTitle,
   formatDelta,
   modelDelta,
@@ -129,10 +133,11 @@ type ModelDayPoint = {
 
 function startedModelScores(geo: EvGeo | undefined, dayId: string, year: "y2022" | "y2026") {
   const daily = dailyBucket(geo, dayId, year);
-  if (!daily || daily.voters <= 0) return null;
-  const dayScore = bucketStat(daily, "score2026");
-  const cumulative = bucketStat(cumulativeBucket(geo, dayId, year), "score2026");
-  return { daily: dayScore, cumulative };
+  const cumulative = cumulativeBucket(geo, dayId, year);
+  const dailyScore = daily && daily.voters > 0 ? bucketStat(daily, "score2026") : null;
+  const cumulativeScore = cumulative && cumulative.voters > 0 ? bucketStat(cumulative, "score2026") : null;
+  if (!dailyScore && !cumulativeScore) return null;
+  return { daily: dailyScore ?? emptyStat(), cumulative: cumulativeScore ?? emptyStat() };
 }
 
 function ModelDayChart({ points, selectedLabel }: { points: ModelDayPoint[]; selectedLabel: string }) {
@@ -166,6 +171,7 @@ function ModelDayChart({ points, selectedLabel }: { points: ModelDayPoint[]; sel
         y: Array<number | null>,
         custom: string[],
         dash: "solid" | "dash",
+        legendrank: number,
       ) => ({
         type: "scatter",
         mode: "lines+markers",
@@ -173,6 +179,7 @@ function ModelDayChart({ points, selectedLabel }: { points: ModelDayPoint[]; sel
         x: labels,
         y,
         customdata: custom,
+        legendrank,
         line: { color, width: dash === "dash" ? 2 : 2.5, dash },
         marker: { color, size: dash === "dash" ? 6 : 7 },
         connectgaps: false,
@@ -182,25 +189,12 @@ function ModelDayChart({ points, selectedLabel }: { points: ModelDayPoint[]; sel
         host,
         [
           trace(
-            "2022 voters, daily",
-            "#1d4f91",
-            points.map((point) => point.daily2022),
-            points.map((point) => hover(point.daily2022, point.daily2022n)),
-            "solid",
-          ),
-          trace(
             "2022 voters, cumulative",
             "#5b8fc4",
             points.map((point) => point.cum2022),
             points.map((point) => hover(point.cum2022, point.cum2022n)),
             "dash",
-          ),
-          trace(
-            "2026 voters, daily",
-            "#9f1d2e",
-            points.map((point) => point.daily2026),
-            points.map((point) => hover(point.daily2026, point.daily2026n)),
-            "solid",
+            2,
           ),
           trace(
             "2026 voters, cumulative",
@@ -208,16 +202,33 @@ function ModelDayChart({ points, selectedLabel }: { points: ModelDayPoint[]; sel
             points.map((point) => point.cum2026),
             points.map((point) => hover(point.cum2026, point.cum2026n)),
             "dash",
+            4,
+          ),
+          trace(
+            "2022 voters, daily",
+            "#1d4f91",
+            points.map((point) => point.daily2022),
+            points.map((point) => hover(point.daily2022, point.daily2022n)),
+            "solid",
+            1,
+          ),
+          trace(
+            "2026 voters, daily",
+            "#9f1d2e",
+            points.map((point) => point.daily2026),
+            points.map((point) => hover(point.daily2026, point.daily2026n)),
+            "solid",
+            3,
           ),
         ],
         {
-          margin: { l: 58, r: 16, t: 64, b: 48 },
+          margin: { l: 58, r: 16, t: 64, b: 72 },
           height: 380,
           paper_bgcolor: "#fff",
           plot_bgcolor: "#fff",
           hovermode: "x unified",
           legend: { orientation: "h", y: 1.12 },
-          xaxis: { title: "Voting day", type: "category", tickangle: -30 },
+          xaxis: { title: "Day", type: "category", tickangle: -40 },
           yaxis: { title: { text: "2026 model" }, zeroline: false, range: [low - pad, high + pad] },
           shapes: [
             {
@@ -246,6 +257,11 @@ function ModelDayChart({ points, selectedLabel }: { points: ModelDayPoint[]; sel
   return <div className="enr-ballot__chart" ref={ref} />;
 }
 
+function selectedBucket(geo: EvGeo | undefined, dayId: string, year: "y2022" | "y2026") {
+  if (dayId === "all") return finalVotedBucket(geo, year);
+  return cumulativeBucket(geo, dayId, year);
+}
+
 function viewFromSources(
   summaryRow: GeoRow | undefined,
   evRow: EvGeo | undefined,
@@ -255,8 +271,8 @@ function viewFromSources(
 ): ViewRow {
   const key = summaryRow?.key ?? evRow?.key ?? "";
   const label = summaryRow?.label ?? evRow?.label ?? key;
-  const y2022 = cumulativeBucket(evRow, dayId, "y2022");
-  const y2026 = cumulativeBucket(evRow, dayId, "y2026");
+  const y2022 = selectedBucket(evRow, dayId, "y2022");
+  const y2026 = selectedBucket(evRow, dayId, "y2026");
   return {
     key,
     label,
@@ -310,7 +326,7 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("label");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [evDay, setEvDay] = useState("1");
+  const [evDay, setEvDay] = useState("0");
   const [evPanel, setEvPanel] = useState<"summary" | "graph">("summary");
   const [votingDay, setVotingDay] = useState("all");
   const [board, setBoard] = useState<Board>("table");
@@ -369,10 +385,11 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
   }, []);
 
   const model = ev?.model ?? null;
-  const days = model?.days?.length ? model.days : FALLBACK_DAYS;
-  const dayId = votingDay === "all" ? "12" : votingDay;
+  const votingDays = model?.days?.length ? model.days : FALLBACK_DAYS;
+  const days = useMemo(() => [MAIL_DAY, ...votingDays.filter((day) => String(day.id) !== "0")], [votingDays]);
+  const dayId = votingDay;
   const dayDef = days.find((day) => String(day.id) === (votingDay === "all" ? "12" : votingDay)) ?? days[0];
-  const evDef = days.find((day) => String(day.id) === evDay) ?? days[0];
+  const evDef = days.find((day) => String(day.id) === evDay) ?? MAIL_DAY;
   const lookupOn = Boolean(model) && ev?.datasets?.lookup?.validation === "valid";
   const staticOn = Boolean(model) && ev?.datasets?.static2022?.validation === "valid";
   const allowStaticFallback = votingDay === "all" && !staticOn;
@@ -415,7 +432,7 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
   }, [rows, query, sortKey, sortDir]);
 
   const mapCells = useMemo(() => {
-    const label = votingDay === "all" ? "All / Final" : dayDef.label;
+    const label = votingDay === "all" ? "All / Final" : votingDayTitle(dayDef);
     const mode = board === "compare" ? "compare" : "absolute";
     return rows.map((row) => mapLines(row, mode, label));
   }, [rows, board, votingDay, dayDef.label]);
@@ -443,26 +460,38 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
   const evCum2026on2022 = bucketStat(cumulativeBucket(evState, evDay, "y2026"), "score2022");
   const evDaily2022 = bucketStat(dailyBucket(evState, evDay, "y2022"), "score2022");
   const evCum2022 = bucketStat(cumulativeBucket(evState, evDay, "y2022"), "score2022");
-  const modelDayPoints = useMemo<ModelDayPoint[]>(
-    () =>
-      days.map((day) => {
-        const id = String(day.id);
-        const y2022 = startedModelScores(evState, id, "y2022");
-        const y2026 = startedModelScores(evState, id, "y2026");
-        return {
-          label: day.label,
-          daily2022: y2022?.daily.avg ?? null,
-          daily2022n: y2022?.daily.n ?? 0,
-          cum2022: y2022?.cumulative.avg ?? null,
-          cum2022n: y2022?.cumulative.n ?? 0,
-          daily2026: y2026?.daily.avg ?? null,
-          daily2026n: y2026?.daily.n ?? 0,
-          cum2026: y2026?.cumulative.avg ?? null,
-          cum2026n: y2026?.cumulative.n ?? 0,
-        };
-      }),
-    [days, evState],
-  );
+  const modelDayPoints = useMemo<ModelDayPoint[]>(() => {
+    const blank = (label: string): ModelDayPoint => ({
+      label,
+      daily2022: null,
+      daily2022n: 0,
+      cum2022: null,
+      cum2022n: 0,
+      daily2026: null,
+      daily2026n: 0,
+      cum2026: null,
+      cum2026n: 0,
+    });
+    const pointFor = (day: (typeof days)[number]): ModelDayPoint => {
+      const id = String(day.id);
+      const y2022 = startedModelScores(evState, id, "y2022");
+      const y2026 = startedModelScores(evState, id, "y2026");
+      return {
+        label: votingDayAxisLabel(day),
+        daily2022: y2022?.daily.avg ?? null,
+        daily2022n: y2022?.daily.n ?? 0,
+        cum2022: y2022?.cumulative.avg ?? null,
+        cum2022n: y2022?.cumulative.n ?? 0,
+        daily2026: y2026?.daily.avg ?? null,
+        daily2026n: y2026?.daily.n ?? 0,
+        cum2026: y2026?.cumulative.avg ?? null,
+        cum2026n: y2026?.cumulative.n ?? 0,
+      };
+    };
+    const points = [pointFor(MAIL_DAY), blank(" ")];
+    points.push(...votingDays.filter((day) => String(day.id) !== "0").map(pointFor));
+    return points;
+  }, [evState, votingDays]);
 
   if (electionId && !electionHasRosterScores(electionId)) {
     return <ElectionDatasetNotice dataset="Ballot scores" />;
@@ -529,7 +558,7 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
                 </label>
               </div>
               {evPanel === "graph" ? (
-                <ModelDayChart points={modelDayPoints} selectedLabel={evDef.label} />
+                <ModelDayChart points={modelDayPoints} selectedLabel={votingDayAxisLabel(evDef)} />
               ) : (
               <div className="enr-tablewrap">
                 <table className="enr-table enr-table--compact enr-ballot__table">
@@ -558,6 +587,7 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
                       <ScoreCell stat={evDaily2026} split />
                       <ScoreCell stat={evDaily2026on2022} digits={3} />
                     </tr>
+                    {isMailDay(evDef) ? null : (
                     <tr>
                       <td>Cumulative</td>
                       <ScoreCell stat={evCum2022Model} />
@@ -565,12 +595,17 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
                       <ScoreCell stat={evCum2026} split />
                       <ScoreCell stat={evCum2026on2022} digits={3} />
                     </tr>
+                    )}
                     <tr>
                       <td>2026 model difference</td>
                       <td className="enr-ballot__diff" colSpan={4}>
                         {votingDayTitle(evDef)} {formatDelta(modelDelta(evDaily2026, evDaily2022Model))}
-                        {" · "}
-                        Cumulative {formatDelta(modelDelta(evCum2026, evCum2022Model))}
+                        {isMailDay(evDef) ? null : (
+                          <>
+                            {" · "}
+                            Cumulative {formatDelta(modelDelta(evCum2026, evCum2022Model))}
+                          </>
+                        )}
                       </td>
                     </tr>
                   </tbody>
@@ -579,10 +614,11 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
               )}
               <p className="enr-ballot__hint">
                 {evPanel === "graph"
-                  ? "Solid lines are that day's 2026 model. Dashed lines are the cumulative 2026 model. A day is drawn once its votes have started. The dotted line marks the day selected above."
-                  : `${evDef.label} lines up ${formatDayDate(evDef.date2022)} with ${formatDayDate(evDef.date2026, "long")}.`}{" "}
-                Day 1 includes all mail-in ballots up to and including that day. Election Day includes mail-in ballots received
-                on Oct 31, Nov 1, and Nov 2 as well as Election Day.
+                  ? "Solid lines are that day's 2026 model. Dashed lines are the cumulative 2026 model, including each mail ballot from the voting day of its vote date. Mail-in is the mail total by itself. The dotted line marks the day selected above."
+                  : isMailDay(evDef)
+                    ? "Mail-in is every ballot by mail, kept as one total. It lines up with 2022 mail-in."
+                    : `${evDef.label} lines up ${formatDayDate(evDef.date2022)} with ${formatDayDate(evDef.date2026, "long")}. The cumulative includes mail ballots whose vote date is on or before this day.`}{" "}
+                Election Day includes in-person ballots and ballots received on Oct 31, Nov 1, and Nov 2.
               </p>
             </section>
 
@@ -625,7 +661,7 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
                     <option value="all">All / Final</option>
                     {days.map((day) => (
                       <option key={day.id} value={String(day.id)}>
-                        {day.label}
+                        {votingDayTitle(day)}
                       </option>
                     ))}
                   </select>
@@ -712,8 +748,13 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
               )}
               <p className="enr-ballot__hint">
                 Counts under a score are voters with that score, not total turnout. Each model column is cumulative
-                through {votingDay === "all" ? "the full calendar" : dayDef.label}. Upload files in Settings → Ballot
-                score data.
+                through{" "}
+                {votingDay === "all"
+                  ? "the full calendar. Mail ballots are included from the voting day of each vote date."
+                  : isMailDay(dayDef)
+                    ? "Mail-in. That total is mail ballots only."
+                    : `${dayDef.label}. Mail ballots are included once their vote date reaches this day.`}{" "}
+                Upload files in Settings → Ballot score data.
               </p>
             </section>
           </>

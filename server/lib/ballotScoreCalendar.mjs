@@ -47,10 +47,34 @@ export function votingDayFromDate(isoDate, year) {
   return 12;
 }
 
+export function rosterMethod(raw) {
+  const text = String(raw ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[_-]+/g, " ");
+  if (!text || text === "OTHER") return "";
+  if (text === "AB" || text === "ABB" || text === "BBM" || text === "MAIL" || text === "ABSENTEE" || text === "BALLOT BY MAIL") return "AB";
+  if (text === "ED" || text === "ELECTION DAY") return "ED";
+  if (text === "EV" || text === "EARLY" || text === "EARLY VOTING" || text === "IN PERSON") return "EV";
+  return "";
+}
+
+/**
+ * Mail and absentee ballots are one total, voting day 0.
+ * Dates before in-person early voting are mail even when the file has no method.
+ * In-person dates still use the voting-day calendar.
+ */
+export function rosterBucket(isoDate, method, year = 2026) {
+  const calendar = CALENDAR[year];
+  if (!calendar || !isoDate) return null;
+  if (rosterMethod(method) === "AB" || isoDate < calendar[0][0]) return 0;
+  return votingDayFromDate(isoDate, year);
+}
+
 export function parseVotingDayNumber(raw) {
   const text = String(raw ?? "").trim();
   if (!text || /^null$/i.test(text)) return null;
   const n = Number(text);
-  if (!Number.isInteger(n) || n < 1 || n > 12) return null;
+  if (!Number.isInteger(n) || n < 0 || n > 12) return null;
   return n;
 }

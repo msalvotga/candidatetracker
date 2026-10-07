@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { LOOKUP_DETAIL_COLUMNS, aggregateBallotFiles, applyLiveRosterToModel, missingColumns } from "./ballotScoreAggregate.mjs";
+import { LOOKUP_DETAIL_COLUMNS, aggregateBallotFiles, applyLiveRosterToModel, includeStaticMailInCumulative, missingColumns } from "./ballotScoreAggregate.mjs";
 
 const lookup = `VUID,CountyName,USHouse,TXSenate,TXHouse,Score2022,Score2026
 1,HARRIS,18,15,134,40,60
@@ -13,6 +13,7 @@ const lookup = `VUID,CountyName,USHouse,TXSenate,TXHouse,Score2022,Score2026
 `;
 
 const static2022 = `GeographyType,Geography,VotingDay,VotingDate,VotingDayLabel,DailyVoters,DailyVotersWith2022Score,Daily2022Average,DailyVotersWith2026Score,Daily2026Average,CumulativeVoters,CumulativeVotersWith2022Score,Cumulative2022Average,CumulativeVotersWith2026Score,Cumulative2026Average
+Statewide,Texas,0,MAIL-IN,Mail-In,1000,800,0.4,900,50,NULL,NULL,NULL,NULL,NULL
 Statewide,Texas,1,2022-10-24,Day 1,100,80,41.25,90,61.5,100,80,41.25,90,61.5
 Statewide,Texas,7,2022-10-31,Day 7,10,8,10,9,12,999,800,55.5,400,64.4
 County,Hays,1,2022-10-24,Day 1,20,15,40,12,48.2,20,15,40,12,48.2
@@ -66,11 +67,11 @@ test("aggregates voter-level daily and cumulative scores", async () => {
     assert.equal(model.statewide.allCurrent.score2026.n, 3);
     assert.equal(model.statewide.allCurrent.score2022.n, 3);
 
-    assert.equal(datasets.static2022.rows, 6);
+    assert.equal(datasets.static2022.rows, 7);
     assert.equal(datasets.static2022.rejected, 1);
     assert.equal(datasets.static2022.geographies, 5);
-    assert.equal(datasets.static2022.votingDays, 3);
-    assert.equal(datasets.static2022.statewideRows, 2);
+    assert.equal(datasets.static2022.votingDays, 4);
+    assert.equal(datasets.static2022.statewideRows, 3);
     assert.equal(datasets.static2022.countyRows, 1);
     assert.equal(datasets.static2022.houseRows, 1);
     assert.equal(datasets.static2022.senateRows, 1);
@@ -98,10 +99,22 @@ test("aggregates voter-level daily and cumulative scores", async () => {
     assert.equal(day(model, model.groups.senate.find((row) => row.key === "25"), 12).y2022.cumulative.score2022.n, 28);
     assert.equal(day(model, model.groups.congress.find((row) => row.key === "21"), 12).y2022.cumulative.voters, 30);
 
-    const y2026Day1 = day(model, model.statewide, 1).y2026.cumulative;
-    assert.equal(y2026Day1.voters, 2);
-    assert.equal(y2026Day1.score2026.avg, 60);
-    assert.equal(y2026Day1.score2026.n, 1);
+    const y2022Mail = model.statewide.byDay["0"].y2022;
+    assert.equal(y2022Mail.daily.voters, 1000);
+    assert.equal(y2022Mail.daily.score2026.avg, 50);
+    assert.equal(y2022Mail.cumulative.voters, 1000);
+    assert.equal(y2022Mail.cumulative.score2026.avg, 50);
+
+    const y2026Mail = model.statewide.byDay["0"].y2026;
+    assert.equal(y2026Mail.daily.voters, 1);
+    assert.equal(y2026Mail.daily.score2026.avg, 60);
+    assert.equal(y2026Mail.cumulative.score2022.avg, 40);
+
+    const y2026Day1 = day(model, model.statewide, 1).y2026;
+    assert.equal(y2026Day1.daily.voters, 1);
+    assert.equal(y2026Day1.cumulative.voters, 2);
+    assert.equal(y2026Day1.cumulative.score2026.avg, 60);
+    assert.equal(y2026Day1.cumulative.score2022.avg, 40);
 
     const y2026Day7 = day(model, model.statewide, 7).y2026.cumulative;
     assert.equal(y2026Day7.voters, 3);
@@ -111,16 +124,26 @@ test("aggregates voter-level daily and cumulative scores", async () => {
 
     const harris = model.groups.county.find((row) => row.key === "HARRIS");
     assert.equal(harris.allCurrent.score2026.avg, 65);
+    assert.equal(harris.byDay["0"].y2026.cumulative.score2026.avg, 60);
+    assert.equal(day(model, harris, 1).y2026.daily.voters, 0);
+    assert.equal(day(model, harris, 1).y2026.cumulative.voters, 1);
     assert.equal(day(model, harris, 7).y2026.cumulative.score2026.avg, 60);
     const loving = model.groups.county.find((row) => row.key === "LOVING");
     assert.equal(day(model, loving, 7).y2026.cumulative.score2026.avg, 80);
     assert.equal(model.groups.house.find((row) => row.key === "134").allCurrent.score2026.n, 2);
+
+    includeStaticMailInCumulative(model);
+    const withMail = day(model, model.statewide, 1).y2022;
+    assert.equal(withMail.daily.voters, 100);
+    assert.equal(withMail.cumulative.voters, 1100);
+    assert.equal(withMail.cumulative.score2026.n, 990);
+    assert.equal(withMail.cumulative.score2026.avg, 51.0455);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test("September roster votes count as 2026 early-voting day 1", () => {
+test("mail ballots count together as voting day 0", () => {
   const model = {
     statewide: {
       key: "TX",
@@ -145,22 +168,35 @@ test("September roster votes count as 2026 early-voting day 1", () => {
     { vuid: "10", voteDate: "2026-10-20", matched: 1, county: "TRAVIS", usHouse: "10", txSenate: "25", txHouse: "19", score2022: 0.5, score2026: 80 },
     { vuid: "11", voteDate: "2026-09-28", matched: 1, county: "TRAVIS", usHouse: "37", txSenate: "14", txHouse: "49", score2022: null, score2026: 60 },
     { vuid: "12", voteDate: "2026-09-23", matched: 0 },
+    { vuid: "13", voteDate: "2026-10-20", votingMethod: "AB", matched: 1, county: "TRAVIS", usHouse: "10", txSenate: "25", txHouse: "19", score2022: 0.2, score2026: 40 },
+    { vuid: "14", voteDate: "2026-10-20", votingMethod: "EV", matched: 1, county: "TRAVIS", usHouse: "10", txSenate: "25", txHouse: "19", score2022: 0.4, score2026: 50 },
   ]);
+  const mail = model.statewide.byDay["0"].y2026;
+  assert.equal(mail.daily.voters, 4);
+  assert.equal(mail.daily.score2026.n, 3);
+  assert.equal(mail.daily.score2026.avg, 60);
+  assert.equal(mail.daily.score2022.n, 2);
+  assert.equal(mail.daily.score2022.avg, 0.35);
+  assert.equal(mail.cumulative.voters, 4);
+  assert.equal(mail.cumulative.score2026.avg, 60);
   const day1 = model.statewide.byDay["1"].y2026;
-  assert.equal(day1.daily.voters, 3);
-  assert.equal(day1.daily.score2026.n, 2);
-  assert.equal(day1.daily.score2026.avg, 70);
-  assert.equal(day1.daily.score2022.n, 1);
-  assert.equal(day1.daily.score2022.avg, 0.5);
+  assert.equal(day1.daily.voters, 0);
   assert.equal(day1.cumulative.voters, 3);
-  assert.equal(model.statewide.byDay["2"].y2026.daily.voters, 0);
-  assert.equal(model.statewide.byDay["2"].y2026.cumulative.voters, 3);
+  assert.equal(day1.cumulative.score2026.n, 2);
+  assert.equal(day1.cumulative.score2026.avg, 70);
+  const day2 = model.statewide.byDay["2"].y2026;
+  assert.equal(day2.daily.voters, 1);
+  assert.equal(day2.daily.score2026.avg, 50);
+  assert.equal(day2.cumulative.voters, 5);
+  assert.equal(day2.cumulative.score2026.avg, 57.5);
   assert.equal(model.statewide.byDay["1"].y2022.daily.voters, 100);
   assert.equal(model.statewide.byDay["1"].y2022.daily.score2026.avg, 61.5);
   const travis = model.groups.county.find((row) => row.key === "TRAVIS");
+  assert.equal(travis.byDay["0"].y2026.cumulative.voters, 3);
+  assert.equal(travis.byDay["0"].y2026.cumulative.score2026.avg, 60);
   assert.equal(travis.byDay["1"].y2026.cumulative.voters, 2);
-  assert.equal(travis.byDay["1"].y2026.cumulative.score2026.avg, 70);
-  assert.equal(model.groups.house.find((row) => row.key === "19").byDay["1"].y2026.daily.voters, 1);
+  assert.equal(travis.byDay["2"].y2026.cumulative.voters, 4);
+  assert.equal(model.groups.house.find((row) => row.key === "19").byDay["0"].y2026.daily.voters, 2);
   assert.equal(model.rosterJoin.unmatched, 1);
 });
 

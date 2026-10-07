@@ -21,7 +21,7 @@ export type EvGeo = {
 };
 
 export type VotingDayDef = {
-  id: number;
+  id: number | string;
   label: string;
   date2022: string;
   date2026: string;
@@ -40,6 +40,8 @@ export type EvModel = {
     congress: EvGeo[];
   };
 };
+
+export const MAIL_DAY: VotingDayDef = { id: 0, label: "Mail-in", date2022: "", date2026: "" };
 
 export const FALLBACK_DAYS: VotingDayDef[] = [
   { id: 1, label: "Day 1", date2022: "2022-10-24", date2026: "2026-10-19" },
@@ -84,8 +86,34 @@ export function formatDayDate(iso: string, month: "short" | "long" = "short") {
   });
 }
 
-export function votingDayTitle(day: { label: string; date2026: string }) {
+export function isMailDay(day: { id?: number | string }) {
+  return String(day.id ?? "") === "0";
+}
+
+export function votingDayTitle(day: { id?: number | string; label: string; date2026: string }) {
+  if (isMailDay(day)) return "Mail-in";
+  if (!day.date2026) return day.label;
   return `${day.label}, ${formatDayDate(day.date2026, "long")}`;
+}
+
+export function votingDayAxisLabel(day: { id?: number | string; label: string; date2026: string }) {
+  if (isMailDay(day)) return "Mail-in";
+  return day.label;
+}
+
+export function addBuckets(left: EvBucket | null, right: EvBucket | null): EvBucket | null {
+  if (!left?.voters) return right;
+  if (!right?.voters) return left;
+  const score = (field: "score2022" | "score2026") => {
+    const n = left[field].n + right[field].n;
+    const sum = left[field].sum + right[field].sum;
+    return { n, sum, avg: n ? sum / n : null };
+  };
+  return { voters: left.voters + right.voters, score2022: score("score2022"), score2026: score("score2026") };
+}
+
+export function finalVotedBucket(geo: EvGeo | undefined, year: "y2022" | "y2026"): EvBucket | null {
+  return cumulativeBucket(geo, "12", year);
 }
 
 export function formatDelta(value: number | null) {

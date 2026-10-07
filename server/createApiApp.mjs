@@ -21,7 +21,7 @@ import { isEvRosterEnabled } from "./lib/featureFlags.mjs";
 import { readBallotScoreSummary } from "./lib/ballotScoreSummary.mjs";
 import { registerPollingRoutes } from "./lib/pollingBridge.mjs";
 import { exportFileName, getVoterExport, publicExportJob, startVoterExport } from "./lib/ballotScoreVoters.mjs";
-import { applyLiveRosterToModel } from "./lib/ballotScoreAggregate.mjs";
+import { applyLiveRosterToModel, includeStaticMailInCumulative } from "./lib/ballotScoreAggregate.mjs";
 import { readEvPayload, readEvStatus, saveDatasetUpload, startRebuild } from "./lib/ballotScoreEv.mjs";
 import {
   listRosterVoters,
@@ -1383,7 +1383,10 @@ export function createApiApp() {
     liveEvPending = (async () => {
       try {
         const payload = await readEvPayload();
-        if (payload.model) applyLiveRosterToModel(payload.model, await readRosterVoterRows());
+        if (payload.model) {
+          applyLiveRosterToModel(payload.model, await readRosterVoterRows());
+          includeStaticMailInCumulative(payload.model);
+        }
         liveEvCache = { at: Date.now(), payload };
         return payload;
       } catch (error) {

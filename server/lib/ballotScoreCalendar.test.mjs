@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseIsoDate, votingDayFromDate } from "./ballotScoreCalendar.mjs";
+import { parseIsoDate, rosterBucket, votingDayFromDate } from "./ballotScoreCalendar.mjs";
 
 test("2022 dates fold onto voting days", () => {
   assert.equal(votingDayFromDate("2022-10-01", 2022), 1);
@@ -24,6 +24,16 @@ test("2026 dates fold onto voting days", () => {
   assert.equal(votingDayFromDate("2026-10-30", 2026), 11);
   assert.equal(votingDayFromDate("2026-10-31", 2026), 12);
   assert.equal(votingDayFromDate("2026-11-03", 2026), 12);
+});
+
+test("mail ballots share one voting day", () => {
+  assert.equal(rosterBucket("2026-09-22", "AB"), 0);
+  assert.equal(rosterBucket("2026-10-18", ""), 0);
+  assert.equal(rosterBucket("2026-10-19", "AB"), 0);
+  assert.equal(rosterBucket("2026-10-20", "AB"), 0);
+  assert.equal(rosterBucket("2026-10-20", "EV"), 2);
+  assert.equal(rosterBucket("2026-10-19", "EV"), 1);
+  assert.equal(rosterBucket("2026-11-03", "ED"), 12);
 });
 
 test("parseIsoDate accepts ISO and US dates", () => {

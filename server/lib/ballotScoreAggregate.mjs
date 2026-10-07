@@ -1,6 +1,6 @@
 import { parse } from "csv-parse";
 import { openCsvStream } from "./ballotLookupStore.mjs";
-import { DAY_DEFS, parseIsoDate, parseVotingDayNumber, votingDayFromDate } from "./ballotScoreCalendar.mjs";
+import { DAY_DEFS, parseIsoDate, parseVotingDayNumber, rosterBucket, votingDayFromDate } from "./ballotScoreCalendar.mjs";
 
 const REQUIRED = {
   lookup: ["VUID", "CountyName", "USHouse", "TXSenate", "TXHouse", "Score2022", "Score2026"],
@@ -81,6 +81,24 @@ function bumpDay(geo, day, score2022, score2026) {
   addScore(bucket, score2022, score2026);
 }
 
+/** Mail enters the voting-day cumulative on the day of its vote date, not the daily in-person count. */
+function bumpMailOnDay(geo, day, score2022, score2026) {
+  if (!geo.mailOnDay) geo.mailOnDay = new Map();
+  let bucket = geo.mailOnDay.get(day);
+  if (!bucket) {
+    bucket = emptyBucket();
+    geo.mailOnDay.set(day, bucket);
+  }
+  addScore(bucket, score2022, score2026);
+}
+
+function recordRosterVote(geo, hit, score2022, score2026) {
+  bumpDay(geo, hit.bucket, score2022, score2026);
+  if (hit.bucket !== 0) return;
+  const entered = votingDayFromDate(hit.iso, 2026);
+  if (entered != null) bumpMailOnDay(geo, entered, score2022, score2026);
+}
+
 function addBucket(target, source) {
   target.voters += source.voters;
   target.s22n += source.s22n;
@@ -109,11 +127,15 @@ function publish(bucket) {
   };
 }
 
+function scoreDayIds() {
+  return [0, ...DAY_DEFS.map((day) => day.id)];
+}
+
 function emptyPublishedDays() {
   const zero = publish(emptyBucket());
   const byDay = {};
-  for (const day of DAY_DEFS) {
-    byDay[String(day.id)] = {
+  for (const id of scoreDayIds()) {
+    byDay[String(id)] = {
       y2022: { daily: zero, cumulative: zero },
       y2026: { daily: zero, cumulative: zero },
     };
@@ -388,9 +410,9 @@ function summaryPlace(typeRaw, geoRaw) {
 
 function emptySummaryGeo(place) {
   const byDay = {};
-  for (const day of DAY_DEFS) {
+  for (const id of scoreDayIds()) {
     const zero = publish(emptyBucket());
-    byDay[String(day.id)] = { daily: zero, cumulative: zero };
+    byDay[String(id)] = { daily: zero, cumulative: zero };
   }
   return { kind: place.kind, key: place.key, label: place.label, all: publish(emptyBucket()), byDay };
 }
@@ -398,14 +420,24 @@ function emptySummaryGeo(place) {
 function finalizeSeries(geos) {
   const out = new Map();
   for (const geo of geos.values()) {
-    const running = emptyBucket();
     const byDay = {};
+    const mail = geo.days.get(0) || emptyBucket();
+    byDay["0"] = {
+      daily: publish(mail),
+      cumulative: publish({ ...mail }),
+    };
+    const running = emptyBucket();
+    const mailRunning = emptyBucket();
     for (const day of DAY_DEFS) {
       const daily = geo.days.get(day.id) || emptyBucket();
       addBucket(running, daily);
+      addBucket(mailRunning, geo.mailOnDay?.get(day.id) || emptyBucket());
+      const cumulative = emptyBucket();
+      addBucket(cumulative, running);
+      addBucket(cumulative, mailRunning);
       byDay[String(day.id)] = {
         daily: publish(daily),
-        cumulative: publish({ ...running }),
+        cumulative: publish(cumulative),
       };
     }
     out.set(`${geo.kind}|${geo.key}`, {
@@ -429,8 +461,8 @@ function mergeGroups(lookupGeos, y2022Geos, y2026Geos) {
     const y2026 = y2026Geos.get(id);
     const sample = lookup || y2022 || y2026;
     const byDay = {};
-    for (const day of DAY_DEFS) {
-      const key = String(day.id);
+    for (const id of scoreDayIds()) {
+      const key = String(id);
       byDay[key] = {
         y2022: y2022?.byDay[key] ?? { daily: publish(emptyBucket()), cumulative: publish(emptyBucket()) },
         y2026: y2026?.byDay[key] ?? { daily: publish(emptyBucket()), cumulative: publish(emptyBucket()) },
@@ -495,21 +527,21 @@ export async function aggregateBallotFiles({ files, uploads, onProgress }) {
       if (scanned % 200000 === 0) onProgress?.({ phase: "roster2026", scanned });
       const vuid = vuidKey(field(row, "VUID"));
       const iso = parseIsoDate(field(row, "VoteDate"));
-      const day = votingDayFromDate(iso, 2026);
+      const bucket = rosterBucket(iso, field(row, "VotingMethod"), 2026);
       if (vuid == null) {
         reject(datasets.roster2026, rowNumber, "Missing VUID");
         return;
       }
-      if (day == null) {
+      if (bucket == null) {
         reject(datasets.roster2026, rowNumber, "VoteDate is missing or not a date");
         return;
       }
       datasets.roster2026.rows += 1;
       const previous = roster.get(vuid);
-      if (previous == null) roster.set(vuid, day);
+      if (previous == null) roster.set(vuid, { iso, bucket });
       else {
         datasets.roster2026.duplicatesMerged += 1;
-        if (day < previous) roster.set(vuid, day);
+        if (iso < previous.iso) roster.set(vuid, { iso, bucket });
       }
     });
     if (headerError) {
@@ -566,13 +598,13 @@ export async function aggregateBallotFiles({ files, uploads, onProgress }) {
       for (const geo of lookupBook.places(county, congress, senate, house)) {
         addScore(geo.all, score2022.score, score2026.score);
       }
-      const day = roster.get(vuid);
-      if (day != null) {
+      const hit = roster.get(vuid);
+      if (hit != null) {
         matched.add(vuid);
         if (score2022.score != null) datasets.roster2026.withScore2022 += 1;
         if (score2026.score != null) datasets.roster2026.withScore2026 += 1;
         for (const geo of y2026Book.places(county, congress, senate, house)) {
-          bumpDay(geo, day, score2022.score, score2026.score);
+          recordRosterVote(geo, hit, score2022.score, score2026.score);
         }
       }
     });
@@ -600,10 +632,10 @@ export async function aggregateBallotFiles({ files, uploads, onProgress }) {
 
   const unmatchedRoster = [];
   if (datasets.roster2026.validation === "valid") {
-    for (const [vuid, day] of roster) {
+    for (const [vuid, hit] of roster) {
       if (matched.has(vuid)) continue;
       unmatchedRoster.push(vuid);
-      bumpDay(y2026Book.ensure("state", "TX"), day, null, null);
+      recordRosterVote(y2026Book.ensure("state", "TX"), hit, null, null);
     }
     if (!files.lookup) {
       datasets.roster2026.error = "Current voter lookup is not loaded, so 2026 voters have no geography or scores yet.";
@@ -634,7 +666,7 @@ export async function aggregateBallotFiles({ files, uploads, onProgress }) {
         return;
       }
       if (day == null) {
-        reject(datasets.static2022, rowNumber, "VotingDay must be 1 through 12");
+        reject(datasets.static2022, rowNumber, "VotingDay must be 0 through 12");
         return;
       }
       const counts = [
@@ -672,8 +704,15 @@ export async function aggregateBallotFiles({ files, uploads, onProgress }) {
       const id = `${place.kind}|${place.key}`;
       const geo = y2022Geos.get(id) ?? emptySummaryGeo(place);
       y2022Geos.set(id, geo);
-      const [dailyVoters, daily2022n, daily2026n, cumVoters, cum2022n, cum2026n] = counts.map((item) => item.value);
-      const [daily2022, daily2026, cum2022, cum2026] = averages.map((item) => item.value);
+      let [dailyVoters, daily2022n, daily2026n, cumVoters, cum2022n, cum2026n] = counts.map((item) => item.value);
+      let [daily2022, daily2026, cum2022, cum2026] = averages.map((item) => item.value);
+      if (day === 0 && cumVoters === 0) {
+        cumVoters = dailyVoters;
+        cum2022n = daily2022n;
+        cum2026n = daily2026n;
+        cum2022 = daily2022;
+        cum2026 = daily2026;
+      }
       geo.byDay[String(day)] = {
         daily: summarySide(dailyVoters, daily2022n, daily2022, daily2026n, daily2026),
         cumulative: summarySide(cumVoters, cum2022n, cum2022, cum2026n, cum2026),
@@ -728,17 +767,20 @@ function emptySide() {
 
 /**
  * County roster pulls are the live 2026 vote list. Each VUID counts once, on the
- * earliest vote date. Dates before October 19, 2026 fold onto early-voting day 1.
+ * earliest vote date. Mail ballots count together as voting day 0, and each one
+ * also enters the cumulative on the voting day of its vote date.
  */
 export function liveRosterSeries(voters) {
   const book = createGeoBook();
   const seen = new Map();
   for (const row of voters ?? []) {
     const vuid = vuidKey(row.vuid);
-    const day = votingDayFromDate(parseIsoDate(row.voteDate), 2026);
-    if (vuid == null || day == null) continue;
+    const iso = parseIsoDate(row.voteDate);
+    const bucket = rosterBucket(iso, row.votingMethod, 2026);
+    if (vuid == null || bucket == null) continue;
     const hit = {
-      day,
+      bucket,
+      iso,
       matched: row.matched === 1,
       county: normCounty(row.county),
       congress: normDistrict(row.usHouse),
@@ -748,7 +790,7 @@ export function liveRosterSeries(voters) {
       score2026: storedScore(row.score2026),
     };
     const previous = seen.get(vuid);
-    if (!previous || day < previous.day || (day === previous.day && hit.matched && !previous.matched)) {
+    if (!previous || iso < previous.iso || (iso === previous.iso && hit.matched && !previous.matched)) {
       seen.set(vuid, hit);
     }
   }
@@ -758,11 +800,11 @@ export function liveRosterSeries(voters) {
     if (hit.matched) {
       matched += 1;
       for (const geo of book.places(hit.county, hit.congress, hit.senate, hit.house)) {
-        bumpDay(geo, hit.day, hit.score2022, hit.score2026);
+        recordRosterVote(geo, hit, hit.score2022, hit.score2026);
       }
     } else {
       unmatched += 1;
-      bumpDay(book.ensure("state", "TX"), hit.day, null, null);
+      recordRosterVote(book.ensure("state", "TX"), hit, null, null);
     }
   }
   return {
@@ -773,31 +815,39 @@ export function liveRosterSeries(voters) {
   };
 }
 
+function emptyYearSide() {
+  return { daily: emptySide(), cumulative: emptySide() };
+}
+
 function clearY2026(row) {
   if (!row) return;
   row.byDay = row.byDay ?? {};
-  for (const day of DAY_DEFS) {
-    const key = String(day.id);
-    const slot = row.byDay[key] ?? { y2022: { daily: emptySide(), cumulative: emptySide() } };
-    slot.y2026 = { daily: emptySide(), cumulative: emptySide() };
+  for (const key of Object.keys(row.byDay)) {
+    if (key.startsWith("mail:")) delete row.byDay[key];
+  }
+  for (const id of scoreDayIds()) {
+    const key = String(id);
+    const slot = row.byDay[key] ?? { y2022: emptyYearSide() };
+    slot.y2026 = emptyYearSide();
     row.byDay[key] = slot;
   }
 }
 
 function paintY2026(row, source) {
-  for (const day of DAY_DEFS) {
-    const key = String(day.id);
-    row.byDay[key].y2026 = source.byDay[key] ?? { daily: emptySide(), cumulative: emptySide() };
+  for (const id of scoreDayIds()) {
+    const key = String(id);
+    if (!row.byDay[key]) row.byDay[key] = { y2022: emptyYearSide(), y2026: emptyYearSide() };
+    row.byDay[key].y2026 = source.byDay[key] ?? emptyYearSide();
   }
 }
 
 function rowFromLive(source) {
   const byDay = {};
-  for (const day of DAY_DEFS) {
-    const key = String(day.id);
+  for (const id of scoreDayIds()) {
+    const key = String(id);
     byDay[key] = {
-      y2022: { daily: emptySide(), cumulative: emptySide() },
-      y2026: source.byDay[key] ?? { daily: emptySide(), cumulative: emptySide() },
+      y2022: emptyYearSide(),
+      y2026: source.byDay[key] ?? emptyYearSide(),
     };
   }
   return {
@@ -806,6 +856,42 @@ function rowFromLive(source) {
     allCurrent: emptySide(),
     byDay,
   };
+}
+
+function addPublished(target, extra) {
+  if (!extra?.voters) return target;
+  const combine = (left, right) => {
+    const n = (left?.n ?? 0) + (right?.n ?? 0);
+    const sum = (left?.sum ?? 0) + (right?.sum ?? 0);
+    return { n, sum, avg: n ? round4(sum / n) : null };
+  };
+  return {
+    voters: (target?.voters ?? 0) + extra.voters,
+    score2022: combine(target?.score2022, extra.score2022),
+    score2026: combine(target?.score2026, extra.score2026),
+  };
+}
+
+/** 2022 mail is one total in the static file, so it counts in every voting-day cumulative. */
+export function includeStaticMailInCumulative(model) {
+  if (!model) return model;
+  const rows = [
+    model.statewide,
+    ...(model.groups?.county ?? []),
+    ...(model.groups?.house ?? []),
+    ...(model.groups?.senate ?? []),
+    ...(model.groups?.congress ?? []),
+  ];
+  for (const row of rows) {
+    const mail = row?.byDay?.["0"]?.y2022?.cumulative;
+    if (!mail?.voters) continue;
+    for (const day of DAY_DEFS) {
+      const slot = row.byDay[String(day.id)]?.y2022;
+      if (!slot?.cumulative) continue;
+      slot.cumulative = addPublished(slot.cumulative, mail);
+    }
+  }
+  return model;
 }
 
 export function applyLiveRosterToModel(model, voters) {

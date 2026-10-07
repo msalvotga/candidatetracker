@@ -2953,6 +2953,18 @@ code {
   padding: 12px 16px 0;
 }
 
+.enr-ballot__filters .enr-ballot__tab {
+  color: var(--tx-navy);
+  background: #fff;
+  border: 1px solid var(--tx-border);
+}
+
+.enr-ballot__filters .enr-ballot__tab.is-active {
+  background: var(--tx-navy);
+  color: #fff;
+  border-color: var(--tx-navy);
+}
+
 .enr-ballot__table {
   min-width: 860px;
 }
