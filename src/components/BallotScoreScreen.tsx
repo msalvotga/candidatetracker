@@ -140,6 +140,19 @@ function startedModelScores(geo: EvGeo | undefined, dayId: string, year: "y2022"
   return { daily: dailyScore ?? emptyStat(), cumulative: cumulativeScore ?? emptyStat() };
 }
 
+function inPersonCumulative(geo: EvGeo | undefined, throughDay: number, year: "y2022" | "y2026"): ScoreStat {
+  let n = 0;
+  let sum = 0;
+  for (let day = 1; day <= throughDay; day += 1) {
+    const score = dailyBucket(geo, String(day), year)?.score2026;
+    if (!score || score.n <= 0) continue;
+    n += score.n;
+    sum += score.sum;
+  }
+  if (n <= 0) return emptyStat();
+  return { n, avg: sum / n };
+}
+
 function ModelDayChart({ points, selectedLabel }: { points: ModelDayPoint[]; selectedLabel: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const hasPoint = points.some(
@@ -257,9 +270,9 @@ function ModelDayChart({ points, selectedLabel }: { points: ModelDayPoint[]; sel
   return <div className="enr-ballot__chart" ref={ref} />;
 }
 
-function selectedBucket(geo: EvGeo | undefined, dayId: string, year: "y2022" | "y2026") {
+function selectedBucket(geo: EvGeo | undefined, dayId: string, year: "y2022" | "y2026", part: "daily" | "cumulative") {
   if (dayId === "all") return finalVotedBucket(geo, year);
-  return cumulativeBucket(geo, dayId, year);
+  return part === "daily" ? dailyBucket(geo, dayId, year) : cumulativeBucket(geo, dayId, year);
 }
 
 function viewFromSources(
@@ -268,11 +281,12 @@ function viewFromSources(
   dayId: string,
   allowStaticFallback: boolean,
   lookupOn: boolean,
+  part: "daily" | "cumulative",
 ): ViewRow {
   const key = summaryRow?.key ?? evRow?.key ?? "";
   const label = summaryRow?.label ?? evRow?.label ?? key;
-  const y2022 = selectedBucket(evRow, dayId, "y2022");
-  const y2026 = selectedBucket(evRow, dayId, "y2026");
+  const y2022 = selectedBucket(evRow, dayId, "y2022", part);
+  const y2026 = selectedBucket(evRow, dayId, "y2026", part);
   return {
     key,
     label,
@@ -286,7 +300,9 @@ function viewFromSources(
   };
 }
 
-function mapLines(row: ViewRow, mode: "absolute" | "compare", dayLabel: string): BallotMapCell {
+function mapLines(row: ViewRow, mode: "absolute" | "compare", dayLabel: string, cumulative: boolean): BallotMapCell {
+  const voterLabel = cumulative ? "Cumulative voters" : "Voters that day";
+  const scoreLabel = cumulative ? "Cumulative 2026 model" : "2026 model";
   if (mode === "absolute") {
     return {
       key: row.key,
@@ -294,9 +310,9 @@ function mapLines(row: ViewRow, mode: "absolute" | "compare", dayLabel: string):
       value: row.y2026score2026.avg,
       lines: [
         { label: "Voting day", value: dayLabel },
-        { label: "Cumulative voters", value: formatNum(row.y2026voters) },
+        { label: voterLabel, value: formatNum(row.y2026voters) },
         { label: "Voters with 2026 score", value: formatNum(row.y2026score2026.n) },
-        { label: "Cumulative 2026 model", value: formatScore(row.y2026score2026.avg) },
+        { label: scoreLabel, value: formatScore(row.y2026score2026.avg) },
       ],
     };
   }
@@ -402,14 +418,14 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
     const merged: ViewRow[] = [];
     for (const row of summaryRows) {
       seen.add(row.key);
-      merged.push(viewFromSources(row, evByKey.get(row.key), dayId, allowStaticFallback, lookupOn));
+      merged.push(viewFromSources(row, evByKey.get(row.key), dayId, allowStaticFallback, lookupOn, votingDay === "all" ? "cumulative" : "daily"));
     }
     for (const row of evRows) {
       if (seen.has(row.key)) continue;
-      merged.push(viewFromSources(undefined, row, dayId, false, lookupOn));
+      merged.push(viewFromSources(undefined, row, dayId, false, lookupOn, votingDay === "all" ? "cumulative" : "daily"));
     }
     return merged;
-  }, [summary, model, group, dayId, allowStaticFallback, lookupOn]);
+  }, [summary, model, group, dayId, allowStaticFallback, lookupOn, votingDay]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -434,8 +450,8 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
   const mapCells = useMemo(() => {
     const label = votingDay === "all" ? "All / Final" : votingDayTitle(dayDef);
     const mode = board === "compare" ? "compare" : "absolute";
-    return rows.map((row) => mapLines(row, mode, label));
-  }, [rows, board, votingDay, dayDef.label]);
+    return rows.map((row) => mapLines(row, mode, label, votingDay === "all"));
+  }, [rows, board, votingDay, dayDef]);
 
   function onSort(next: SortKey) {
     if (sortKey === next) {
@@ -476,16 +492,19 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
       const id = String(day.id);
       const y2022 = startedModelScores(evState, id, "y2022");
       const y2026 = startedModelScores(evState, id, "y2026");
+      const mail = isMailDay(day);
+      const cum2022 = mail ? (y2022?.cumulative ?? emptyStat()) : inPersonCumulative(evState, Number(day.id), "y2022");
+      const cum2026 = mail ? (y2026?.cumulative ?? emptyStat()) : inPersonCumulative(evState, Number(day.id), "y2026");
       return {
         label: votingDayAxisLabel(day),
-        daily2022: y2022?.daily.avg ?? null,
-        daily2022n: y2022?.daily.n ?? 0,
-        cum2022: y2022?.cumulative.avg ?? null,
-        cum2022n: y2022?.cumulative.n ?? 0,
-        daily2026: y2026?.daily.avg ?? null,
-        daily2026n: y2026?.daily.n ?? 0,
-        cum2026: y2026?.cumulative.avg ?? null,
-        cum2026n: y2026?.cumulative.n ?? 0,
+        daily2022: mail ? null : (y2022?.daily.avg ?? null),
+        daily2022n: mail ? 0 : (y2022?.daily.n ?? 0),
+        cum2022: cum2022.avg,
+        cum2022n: cum2022.n,
+        daily2026: mail ? null : (y2026?.daily.avg ?? null),
+        daily2026n: mail ? 0 : (y2026?.daily.n ?? 0),
+        cum2026: cum2026.avg,
+        cum2026n: cum2026.n,
       };
     };
     const points = [pointFor(MAIL_DAY), blank(" ")];
@@ -614,7 +633,7 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
               )}
               <p className="enr-ballot__hint">
                 {evPanel === "graph"
-                  ? "Solid lines are that day's 2026 model. Dashed lines are the cumulative 2026 model, including each mail ballot from the voting day of its vote date. Mail-in is the mail total by itself. The dotted line marks the day selected above."
+                  ? "Solid lines are that day's in-person votes. Dashed lines are the in-person cumulative. Mail-in is one point for the mail total. The dotted line marks the day selected above."
                   : isMailDay(evDef)
                     ? "Mail-in is every ballot by mail, kept as one total. It lines up with 2022 mail-in."
                     : `${evDef.label} lines up ${formatDayDate(evDef.date2022)} with ${formatDayDate(evDef.date2026, "long")}. The cumulative includes mail ballots whose vote date is on or before this day.`}{" "}
@@ -741,19 +760,19 @@ export function BallotScoreScreen({ electionId }: { electionId: string }) {
                 <BallotScoreHeatmap
                   geography={group}
                   mode={board === "compare" ? "compare" : "absolute"}
-                  dayLabel={votingDay === "all" ? "All / Final" : dayDef.label}
+                  dayLabel={votingDay === "all" ? "All / Final" : votingDayTitle(dayDef)}
+                  cumulative={votingDay === "all"}
                   cells={mapCells}
                   query={query}
                 />
               )}
               <p className="enr-ballot__hint">
-                Counts under a score are voters with that score, not total turnout. Each model column is cumulative
-                through{" "}
+                Counts under a score are voters with that score, not total turnout.{" "}
                 {votingDay === "all"
-                  ? "the full calendar. Mail ballots are included from the voting day of each vote date."
+                  ? "Each model column is cumulative through the full calendar. Mail ballots are included from the voting day of each vote date."
                   : isMailDay(dayDef)
-                    ? "Mail-in. That total is mail ballots only."
-                    : `${dayDef.label}. Mail ballots are included once their vote date reaches this day.`}{" "}
+                    ? "Each model column is the mail total for that geography."
+                    : `Each model column is ${dayDef.label} only.`}{" "}
                 Upload files in Settings → Ballot score data.
               </p>
             </section>

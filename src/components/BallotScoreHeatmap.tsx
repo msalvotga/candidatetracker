@@ -39,15 +39,24 @@ function mix(from: string, to: string, t: number) {
   return `rgb(${rgb.join(",")})`;
 }
 
+const SCORE_BLUE = "#1d4f91";
+const SCORE_MID = "#ffffff";
+const SCORE_RED = "#9f1d2e";
+const COMPARE_WHITE = "#f4f5f7";
+const ABSOLUTE_RAMP = `linear-gradient(90deg, ${SCORE_BLUE}, ${SCORE_MID} 50%, ${SCORE_RED})`;
+const COMPARE_RAMP = `linear-gradient(90deg, #2457a6, ${COMPARE_WHITE} 50%, ${SCORE_RED})`;
+
 function absoluteFill(score: number) {
-  return mix("#d7e6f7", "#163e78", score / 100);
+  const t = Math.min(1, Math.max(0, score / 100));
+  if (t <= 0.5) return mix(SCORE_BLUE, SCORE_MID, t / 0.5);
+  return mix(SCORE_MID, SCORE_RED, (t - 0.5) / 0.5);
 }
 
 function compareFill(diff: number, maxAbs: number) {
-  if (maxAbs <= 0) return "#f4f5f7";
+  if (maxAbs <= 0) return COMPARE_WHITE;
   const t = Math.max(-1, Math.min(1, diff / maxAbs));
-  if (t < 0) return mix("#2457a6", "#f4f5f7", 1 + t);
-  return mix("#f4f5f7", "#b86a00", t);
+  if (t < 0) return mix("#2457a6", COMPARE_WHITE, 1 + t);
+  return mix(COMPARE_WHITE, SCORE_RED, t);
 }
 
 function shapesFor(geography: Geography): { viewBox: string; shapes: { key: string; d: string }[] } | null {
@@ -73,12 +82,14 @@ export function BallotScoreHeatmap({
   geography,
   mode,
   dayLabel,
+  cumulative,
   cells,
   query,
 }: {
   geography: Geography;
   mode: "absolute" | "compare";
   dayLabel: string;
+  cumulative: boolean;
   cells: BallotMapCell[];
   query: string;
 }) {
@@ -122,24 +133,28 @@ export function BallotScoreHeatmap({
       <div className="enr-ballot-map__legend" aria-hidden>
         {mode === "absolute" ? (
           <>
-            <div className="enr-ballot-map__ramp enr-ballot-map__ramp--absolute" />
+            <div className="enr-ballot-map__ramp enr-ballot-map__ramp--absolute" style={{ background: ABSOLUTE_RAMP }} />
             <div className="enr-ballot-map__ticks">
               <span>0</span>
               <span>50</span>
               <span>100</span>
             </div>
-            <p>2026 model score for 2026 voters, cumulative through {dayLabel}. Higher is a higher modeled score.</p>
+            <p>
+              2026 model score for 2026 voters{cumulative ? `, cumulative through ${dayLabel}` : ` on ${dayLabel}`}. Higher is a
+              higher modeled score.
+            </p>
           </>
         ) : (
           <>
-            <div className="enr-ballot-map__ramp enr-ballot-map__ramp--compare" />
+            <div className="enr-ballot-map__ramp enr-ballot-map__ramp--compare" style={{ background: COMPARE_RAMP }} />
             <div className="enr-ballot-map__ticks">
               <span>{formatDelta(-maxAbs)}</span>
               <span>0</span>
               <span>{formatDelta(maxAbs)}</span>
             </div>
             <p>
-              2026 voters’ 2026-model average minus 2022 voters’ 2026-model average, cumulative through {dayLabel}.
+              2026 voters’ 2026-model average minus 2022 voters’ 2026-model average
+              {cumulative ? `, cumulative through ${dayLabel}` : ` on ${dayLabel}`}.
               Negative means the 2026 electorate scores lower on the same model.
             </p>
           </>

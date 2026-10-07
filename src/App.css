@@ -3005,11 +3005,11 @@ code {
 }
 
 .enr-ballot-map__ramp--absolute {
-  background: linear-gradient(90deg, #d7e6f7, #163e78);
+  background: linear-gradient(90deg, #1d4f91, #ffffff 50%, #9f1d2e);
 }
 
 .enr-ballot-map__ramp--compare {
-  background: linear-gradient(90deg, #2457a6, #f4f5f7 50%, #b86a00);
+  background: linear-gradient(90deg, #2457a6, #f4f5f7 50%, #9f1d2e);
 }
 
 .enr-ballot-map__ticks {
