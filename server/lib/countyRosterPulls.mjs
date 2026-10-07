@@ -39,6 +39,13 @@ import {
 } from "./williamsonRoster.mjs";
 import { parseRandallRosterPdf, randallMailRosterLink, RANDALL_ROSTER_PAGE } from "./randallRoster.mjs";
 import {
+  PARKER_FETCH_HEADERS,
+  PARKER_ROSTER_PAGE,
+  parkerRosterFilesToPull,
+  parkerRosterLinks,
+  parseParkerRosterXlsx,
+} from "./parkerRoster.mjs";
+import {
   MONTGOMERY_ROSTER_PAGE,
   montgomeryFetch,
   montgomeryRosterFilesToPull,
@@ -207,6 +214,15 @@ export const COUNTY_ROSTER_PROFILES = {
     notes:
       "Each pull reads the election administration page and takes the Mail Ballot Roster. The document address changes when the county replaces the file. The PDF has a VUID at the start of the name and a Ballot Received Date, which is the vote date. Mail is AB.",
     sourcePage: RANDALL_ROSTER_PAGE,
+  },
+  parker: {
+    key: "parker",
+    label: "Parker County",
+    trained: true,
+    fileKinds: "Daily Excel rosters",
+    notes:
+      "Each pull reads the early voting roster page and takes the date links. The date link is an Excel file. A pdf link beside it is skipped. The workbook has a VUID and a Ballot Received Date, which is the vote date. Ballot by Mail is AB. Early voting links are EV and election day links are ED. A pull reads the newest posted day, plus any earlier day that does not already have voters.",
+    sourcePage: PARKER_ROSTER_PAGE,
   },
 };
 
@@ -1919,6 +1935,47 @@ async function pullRandall() {
   };
 }
 
+async function pullParker() {
+  const page = await fetch(PARKER_ROSTER_PAGE, { headers: PARKER_FETCH_HEADERS });
+  if (page.status !== 200) {
+    throw new Error(`Parker roster page was not available (${page.status}). ${PARKER_ROSTER_PAGE}`);
+  }
+  const files = parkerRosterLinks(await page.text());
+  const have = countyDatesWithMethod(await readVoters(), "parker");
+  const selected = parkerRosterFilesToPull(files, have);
+  if (!selected.length) {
+    throw new Error("No dated Excel roster was on the Parker early voting roster page.");
+  }
+  const archive = openRosterRawArchive("parker");
+  const rows = [];
+  let skippedMissingVuid = 0;
+  const missingByDate = new Map();
+  for (const link of selected) {
+    const file = await fetch(link.href, { headers: { ...PARKER_FETCH_HEADERS, referer: PARKER_ROSTER_PAGE } });
+    if (file.status !== 200) {
+      throw new Error(`Parker roster file was not available (${file.status}). ${link.href}`);
+    }
+    const parsed = parseParkerRosterXlsx(await keepRosterDownload(archive, link.href, file), link.votingMethod);
+    rows.push(...parsed.rows);
+    skippedMissingVuid += parsed.skippedMissingVuid;
+    for (const day of parsed.missingVuidDays) {
+      missingByDate.set(day.date, (missingByDate.get(day.date) ?? 0) + day.missingVuid);
+    }
+  }
+  const saved = await saveRosterRows(rows, "parker");
+  const latest = selected[selected.length - 1];
+  return {
+    sourceUrl: latest.href,
+    fileCount: selected.length,
+    skippedMissingVuid,
+    skippedMissingVuidDays: [...missingByDate.entries()]
+      .map(([date, missingVuid]) => ({ date, missingVuid }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    ...summarizeRosterRows(rows),
+    ...saved,
+  };
+}
+
 async function pullWilliamson() {
   const { link, bytes } = await fetchWilliamsonRoster();
   const archive = openRosterRawArchive("williamson");
@@ -1953,6 +2010,7 @@ const PULLS = {
   ellis: pullEllis,
   williamson: pullWilliamson,
   randall: pullRandall,
+  parker: pullParker,
 };
 
 const SCHEDULE_PATH = path.join(DATA_DIR, "schedule.json");
