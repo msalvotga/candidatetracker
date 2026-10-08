@@ -1,5 +1,9 @@
 import "dotenv/config";
 import dns from "node:dns";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import express from "express";
 import { createApiApp } from "./createApiApp.mjs";
 import { ensureDb, getDbInfo } from "./db.mjs";
 
@@ -13,6 +17,18 @@ process.on("unhandledRejection", (error) => {
 });
 
 const app = createApiApp();
+
+const distDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
+const distIndex = path.join(distDir, "index.html");
+if (fs.existsSync(distIndex)) {
+  app.use(express.static(distDir, { index: false, maxAge: "1h" }));
+  app.use((req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    if (req.path === "/api" || req.path.startsWith("/api/")) return next();
+    res.setHeader("Cache-Control", "no-cache");
+    res.sendFile(distIndex);
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`Election API http://127.0.0.1:${PORT}`);
