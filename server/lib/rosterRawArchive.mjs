@@ -6,7 +6,6 @@ import { getNativePool } from "./pgPool.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RAW_ROOT = path.join(HERE, "../data/county-rosters/raw");
 
-let tableReady = null;
 
 /**
  * Folder name for one pull: local Central Time, `YYYYMMDD_HHMM` (for example `20261005_1109`).
@@ -50,24 +49,23 @@ export function rosterRawFileName(fileName, fallback = "roster.bin") {
   return name || fallback;
 }
 
-async function database() {
+let rawBodiesReleased = false;
+
+/** The original downloads stay on disk. Postgres was keeping another full copy of every zip and PDF and running out of memory. */
+export async function releaseRosterRawDatabase() {
+  if (rawBodiesReleased) return;
   const pool = getNativePool();
-  if (!pool) return null;
-  if (!tableReady) {
-    tableReady = pool.query(
-      `CREATE TABLE IF NOT EXISTS county_roster_raw_files (
-         county_key TEXT NOT NULL,
-         pulled_stamp TEXT NOT NULL,
-         file_name TEXT NOT NULL,
-         byte_size INTEGER NOT NULL,
-         body BYTEA NOT NULL,
-         saved_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
-         PRIMARY KEY (county_key, pulled_stamp, file_name)
-       )`,
-    );
+  if (!pool) return;
+  rawBodiesReleased = true;
+  try {
+    const found = await pool.query(`SELECT to_regclass('public.county_roster_raw_files') AS name`);
+    if (!found.rows[0]?.name) return;
+    await pool.query(`TRUNCATE TABLE county_roster_raw_files`);
+    console.log("Dropped roster download copies from Postgres so the database stays within its memory limit");
+  } catch (error) {
+    rawBodiesReleased = false;
+    console.error("Roster raw cleanup", error instanceof Error ? error.message : error);
   }
-  await tableReady;
-  return pool;
 }
 
 async function unusedPath(dir, fileName) {
@@ -112,15 +110,6 @@ export function openRosterRawArchive(countyKey, at = new Date()) {
       await dirReady;
       const dest = await unusedPath(dir, safeName);
       await writeFile(dest, body);
-      const pool = await database();
-      if (pool) {
-        await pool.query(
-          `INSERT INTO county_roster_raw_files (county_key, pulled_stamp, file_name, byte_size, body)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (county_key, pulled_stamp, file_name) DO NOTHING`,
-          [county, stamp, path.basename(dest), body.length, body],
-        );
-      }
       return dest;
     },
   };

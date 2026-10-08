@@ -350,6 +350,18 @@ export async function insertSosResultSnapshot({ electionId, electionLabel, paylo
     .input("election_label", electionLabel ?? null)
     .input("payload_json", JSON.stringify(payload))
     .query(`INSERT INTO dbo.sos_results (election_id, election_label, payload_json) VALUES (@election_id, @election_label, @payload_json)`);
+  await pool.request().input("election_id", String(electionId)).query(`
+    DELETE FROM dbo.sos_results
+    WHERE election_id = @election_id
+      AND id NOT IN (
+        SELECT id FROM (
+          SELECT id FROM dbo.sos_results
+          WHERE election_id = @election_id
+          ORDER BY fetched_at DESC
+          LIMIT 2
+        ) keepers
+      )
+  `);
 }
 
 /** Last stored Civix election + countyInfo JSON (from a prior successful ingest). */

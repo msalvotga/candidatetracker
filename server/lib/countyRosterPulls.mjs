@@ -29,8 +29,8 @@ import {
   parseGalvestonMailCsv,
 } from "./galvestonRoster.mjs";
 import { parseTravisRosterZip } from "./travisEvRosterParse.mjs";
-import { readRosterDocument, writeRosterDocument } from "./countyRosterDocuments.mjs";
-import { openRosterRawArchive, rosterRawFileName } from "./rosterRawArchive.mjs";
+import { readRosterDocument, ROSTER_DOCUMENT_TEXT_BYTES, writeRosterDocument } from "./countyRosterDocuments.mjs";
+import { openRosterRawArchive, releaseRosterRawDatabase, rosterRawFileName } from "./rosterRawArchive.mjs";
 import { openLookupCsvStream } from "./ballotLookupStore.mjs";
 import { ELLIS_ROSTER_PAGE, ellisMailRosterLink, parseEllisRosterZip } from "./ellisRoster.mjs";
 import {
@@ -386,20 +386,28 @@ export function chooseRosterDocument(localAhead, databaseValue, fileValue, isUsa
 }
 
 const rosterDbSync = new Map();
+const rosterDbSyncLatest = new Map();
 const rosterDbSyncAfter = new Map();
 
 function queueRosterDbSync(filePath, docKey, payload) {
-  if (rosterDbSync.has(docKey)) return;
   if ((rosterDbSyncAfter.get(docKey) ?? 0) > Date.now()) return;
-  const run = writeRosterDocument(docKey, payload)
-    .then(async (saved) => {
-      if (saved) {
-        rosterDbSyncAfter.delete(docKey);
-        await clearLocalAhead(filePath);
-        return;
-      }
-      rosterDbSyncAfter.set(docKey, Date.now() + 60_000);
-    })
+  rosterDbSyncLatest.set(docKey, payload);
+  if (rosterDbSync.has(docKey)) return;
+  const run = (async () => {
+    let saved = false;
+    while (rosterDbSyncLatest.has(docKey)) {
+      const next = rosterDbSyncLatest.get(docKey);
+      rosterDbSyncLatest.delete(docKey);
+      saved = await writeRosterDocument(docKey, next);
+      if (!saved) break;
+    }
+    if (saved) {
+      rosterDbSyncAfter.delete(docKey);
+      await clearLocalAhead(filePath);
+      return;
+    }
+    rosterDbSyncAfter.set(docKey, Date.now() + 60_000);
+  })()
     .catch(() => {
       rosterDbSyncAfter.set(docKey, Date.now() + 60_000);
     })
@@ -431,6 +439,11 @@ async function readRosterSnapshot(filePath, docKey, isUsable) {
 async function writeRosterSnapshot(filePath, docKey, payload) {
   await writeJsonFile(filePath, payload);
   await markLocalAhead(filePath);
+  const body = JSON.stringify(payload ?? null);
+  if (body.length > ROSTER_DOCUMENT_TEXT_BYTES) {
+    queueRosterDbSync(filePath, docKey, payload);
+    return;
+  }
   if (await writeRosterDocument(docKey, payload)) await clearLocalAhead(filePath);
 }
 
@@ -2861,6 +2874,7 @@ export async function runDueRosterPulls(now = new Date()) {
 const SCHEDULE_GLOBAL = "__enrRosterPullSchedule";
 
 export function startRosterPullSchedule() {
+  void releaseRosterRawDatabase();
   if (scheduleTimer) return;
   const gate = rosterGate();
   gate.active = null;

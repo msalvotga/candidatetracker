@@ -557,6 +557,7 @@ CREATE TABLE IF NOT EXISTS ballot_lookup_chunks (
 CREATE TABLE IF NOT EXISTS county_roster_documents (
   doc_key TEXT PRIMARY KEY,
   payload JSONB NOT NULL,
+  payload_text TEXT,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')
 );
 
