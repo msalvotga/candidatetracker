@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { LOOKUP_DETAIL_COLUMNS, aggregateBallotFiles, applyLiveRosterToModel, includeStaticMailInCumulative, missingColumns } from "./ballotScoreAggregate.mjs";
+import { LOOKUP_DETAIL_COLUMNS, aggregateBallotFiles, applyLiveRosterToModel, ballotCountyKey, includeStaticMailInCumulative, missingColumns } from "./ballotScoreAggregate.mjs";
 
 const lookup = `VUID,CountyName,USHouse,TXSenate,TXHouse,Score2022,Score2026
 1,HARRIS,18,15,134,40,60
@@ -200,12 +200,58 @@ test("mail ballots count together as voting day 0", () => {
   assert.equal(model.rosterJoin.unmatched, 1);
 });
 
+test("a ballot cast in another county scores that county and drops voter-file districts", () => {
+  assert.equal(ballotCountyKey({ sourceCounty: "tom_green" }), "TOM GREEN");
+  assert.equal(ballotCountyKey({ sourceCounty: "dewitt" }), "DE WITT");
+  assert.equal(ballotCountyKey({ county: "HARRIS" }), null);
+  const model = {
+    statewide: { key: "TX", label: "Texas", allCurrent: { voters: 0, score2022: { n: 0, sum: 0, avg: null }, score2026: { n: 0, sum: 0, avg: null } }, byDay: {} },
+    groups: { county: [], house: [], senate: [], congress: [] },
+  };
+  applyLiveRosterToModel(model, [
+    {
+      vuid: "10",
+      voteDate: "2026-10-20",
+      votingMethod: "EV",
+      matched: 1,
+      sourceCounty: "bexar",
+      county: "HARRIS",
+      usHouse: "18",
+      txSenate: "15",
+      txHouse: "134",
+      score2022: 0.4,
+      score2026: 60,
+    },
+    {
+      vuid: "11",
+      voteDate: "2026-10-20",
+      votingMethod: "EV",
+      matched: 1,
+      sourceCounty: "tom_green",
+      county: "HARRIS",
+      usHouse: "11",
+      txSenate: "28",
+      txHouse: "72",
+      score2022: 0.2,
+      score2026: 50,
+    },
+  ]);
+  const day = (rows, key) => rows.find((row) => row.key === key)?.byDay["2"]?.y2026?.daily?.voters ?? 0;
+  assert.equal(day(model.groups.county, "BEXAR"), 1);
+  assert.equal(day(model.groups.county, "TOM GREEN"), 1);
+  assert.equal(day(model.groups.county, "HARRIS"), 0);
+  assert.equal(day(model.groups.house, "134"), 0);
+  assert.equal(day(model.groups.house, "72"), 0);
+  assert.equal(day(model.groups.senate, "15"), 0);
+  assert.equal(day(model.groups.congress, "18"), 0);
+});
+
 test("keeps name, registration date, and address columns on the voter model lookup", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "ballot-ev-wide-"));
   const header = ["VUID", "CountyName", "USHouse", "TXSenate", "TXHouse", ...LOOKUP_DETAIL_COLUMNS, "Score2022", "Score2026"];
   const lookup = [
     header.join(","),
-    '1000000045,LUBBOCK,19,28,83,JANE,DOE,2012-01-15 00:00:00.000,"100 MAIN ST, APT 2",,100,,N,MAIN,ST,,APT,2,LUBBOCK,TX,79401,0.710397,65.000000',
+    '1000000045,LUBBOCK,19,28,83,JANE,,DOE,,,,,,,,,2012-01-15 00:00:00.000,"100 MAIN ST, APT 2",,100,,N,MAIN,ST,,APT,2,LUBBOCK,TX,79401,0.710397,65.000000',
   ].join("\n");
   try {
     await writeFile(path.join(dir, "lookup.csv"), lookup);

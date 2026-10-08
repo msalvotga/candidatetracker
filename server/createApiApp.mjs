@@ -31,6 +31,7 @@ import {
   readRosterVoterRows,
   startAllCountyRosterPulls,
   startCountyRosterPull,
+  startOutdatedCountyRosterPulls,
   startRosterPullSchedule,
   updateRosterSchedule,
 } from "./lib/countyRosterPulls.mjs";
@@ -1429,16 +1430,24 @@ export function createApiApp() {
     try {
       const sort = String(req.query.sort ?? "voteDate");
       const dir = String(req.query.dir ?? "asc");
-      const csv = await rosterVotersCsv({ sort, dir });
+      const requested = String(req.query.kind ?? "voters");
+      const kind = requested === "votes" || requested === "suppression" ? requested : "voters";
+      const csv = await rosterVotersCsv({ sort, dir, kind });
       const stamp = new Intl.DateTimeFormat("en-CA", {
         timeZone: "America/Chicago",
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
       }).format(new Date());
+      const filename =
+        kind === "votes"
+          ? `county-roster-votes-${stamp}.csv`
+          : kind === "suppression"
+            ? `digital-suppression-${stamp}.csv`
+            : `county-rosters-${stamp}.csv`;
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
-      res.setHeader("Content-Disposition", `attachment; filename="county-rosters-${stamp}.csv"`);
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
       res.send(csv);
     } catch (e) {
       res.status(500).json({ error: String(e?.message || e) });
@@ -1487,6 +1496,14 @@ export function createApiApp() {
   app.post("/api/county-rosters/pull-all", async (_req, res) => {
     try {
       res.json(await startAllCountyRosterPulls());
+    } catch (e) {
+      res.status(e.statusCode || 500).json({ error: String(e?.message || e) });
+    }
+  });
+
+  app.post("/api/county-rosters/pull-outdated", async (_req, res) => {
+    try {
+      res.json(await startOutdatedCountyRosterPulls());
     } catch (e) {
       res.status(e.statusCode || 500).json({ error: String(e?.message || e) });
     }

@@ -109,6 +109,34 @@
   cursor: pointer;
 }
 
+.poll-estimate {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(240px, 1.2fr);
+  gap: 16px 28px;
+  align-items: start;
+  margin-bottom: 14px;
+}
+
+.poll-estimate .poll-margin {
+  margin: 4px 0;
+}
+
+.poll-estimate .poll-odds {
+  margin: 0;
+}
+
+.poll-estimate .poll-odds-figure {
+  font-size: 36px;
+}
+
+.poll-estimate p {
+  margin: 2px 0;
+}
+
+.poll-estimate .poll-btn {
+  margin-top: 8px;
+}
+
 .poll-margin {
   font-size: 34px;
   font-weight: 760;

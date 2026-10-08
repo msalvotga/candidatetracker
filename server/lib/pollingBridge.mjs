@@ -151,6 +151,16 @@ export function registerPollingRoutes(app) {
     }
   });
 
+  app.post("/api/polling/recompute", async (_req, res) => {
+    try {
+      await ensurePolling();
+      await runTxpoll(["recompute"]);
+      sendSnapshot(res);
+    } catch (error) {
+      res.status(500).json({ error: String(error?.message || error) });
+    }
+  });
+
   app.post("/api/polling/polls/:id/exclusion", async (req, res) => {
     try {
       await ensurePolling();

@@ -41,9 +41,9 @@ const KINDS: { id: DatasetKind; title: string; required: string; optional?: stri
     title: "Current voter model lookup",
     required: "VUID, CountyName, USHouse, TXSenate, TXHouse, Score2022, Score2026",
     optional:
-      "FirstName, LastName, RegistrationDate, RegistrationAddr1, RegistrationAddr2, RegHouseNum, RegHouseSfx, RegStPrefix, RegStName, RegStType, RegStPost, RegUnitType, RegUnitNumber, RegCity, RegSta, RegZip5",
+      "FirstName, MiddleName, LastName, NameSuffix, Sex, BirthYear, BirthMonth, BirthDay, DateofBirth, Cell, Landline, RegistrationDate, RegistrationAddr1, RegistrationAddr2, RegHouseNum, RegHouseSfx, RegStPrefix, RegStName, RegStType, RegStPost, RegUnitType, RegUnitNumber, RegCity, RegSta, RegZip5",
     detail:
-      "One row per currently registered voter. Name, registration date, and address columns stay in the file and show on the voter roster when a VUID matches.",
+      "One row per currently registered voter. Name, sex, birth date, phone, registration date, and address columns stay in the file and show on the voter roster when a VUID matches. DateofBirth is stored as mm/dd/yyyy.",
   },
   {
     id: "static2022",

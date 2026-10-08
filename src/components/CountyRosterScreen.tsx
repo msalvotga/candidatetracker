@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { apiJson, apiQuietMs, apiUrl } from "../lib/apiBase";
 import { electionHasRosterScores } from "../lib/rosterScoreElection";
 import { ElectionDatasetNotice } from "./ElectionDatasetNotice";
+import { TEXAS_COUNTY_POPULATION } from "../data/texasCountyPopulation";
 import { TEXAS_COUNTIES } from "../lib/texasCounties";
 
 type RosterDay = { date: string; voters?: number; missingVuid?: number; earlyInPerson?: number; mail?: number };
@@ -181,7 +182,7 @@ type VotedPage = {
 };
 
 const PAGE_SIZE = 100;
-type CountySort = "name" | "voters" | "vote" | "pulled";
+type CountySort = "name" | "voters" | "vote" | "pulled" | "population";
 
 function previousIsoDate(isoDate: string) {
   const [year, month, day] = isoDate.split("-").map(Number);
@@ -271,8 +272,8 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "trained" | "waiting" | "behind">("all");
-  const [sortKey, setSortKey] = useState<CountySort>("name");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [sortKey, setSortKey] = useState<CountySort>("population");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [voterSort, setVoterSort] = useState<VoterSort>("voteDate");
   const [voterDir, setVoterDir] = useState<"asc" | "desc">("asc");
   const [detail, setDetail] = useState<VotedRow | null>(null);
@@ -373,6 +374,12 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
       return Number.isNaN(time) ? null : time;
     };
     return filtered.sort((a, b) => {
+      if (sortKey === "population") {
+        const ap = TEXAS_COUNTY_POPULATION[a.key] ?? 0;
+        const bp = TEXAS_COUNTY_POPULATION[b.key] ?? 0;
+        if (ap !== bp) return (ap - bp) * dir;
+        return countyName(a).localeCompare(countyName(b));
+      }
       if (sortKey === "name") return countyName(a).localeCompare(countyName(b)) * dir;
       const av = sortKey === "voters" ? voterCount(a) : sortKey === "vote" ? voteDate(a) : pulledAt(a);
       const bv = sortKey === "voters" ? voterCount(b) : sortKey === "vote" ? voteDate(b) : pulledAt(b);
@@ -383,6 +390,18 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
       return countyName(a).localeCompare(countyName(b));
     });
   }, [board, filter, query, sortKey, sortDir]);
+
+  const outdatedCount = useMemo(() => {
+    if (!board) return null;
+    let count = 0;
+    for (const county of TEXAS_COUNTIES) {
+      const pullState = board.counties[county.key];
+      if (!pullState?.trained) continue;
+      const latest = latestVoteDate(pullState.days);
+      if (!voteDateIsCurrent(latest, pullState?.pulledAt ?? null)) count += 1;
+    }
+    return count;
+  }, [board]);
 
   function onCountySort(next: CountySort) {
     if (sortKey === next) {
@@ -441,11 +460,11 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
     }
   }
 
-  async function pullAll() {
-    setBusyKey("all");
+  async function pullQueued(path: string, busy: string) {
+    setBusyKey(busy);
     setError(null);
     try {
-      const body = await apiJson<Board>("/api/county-rosters/pull-all", { method: "POST" });
+      const body = await apiJson<Board>(path, { method: "POST" });
       setBoard(body);
       setOffset(0);
       await refreshVoted(0);
@@ -489,13 +508,17 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
           >
             County pulls
           </button>
-          {view === "voted" ? (
-            <button type="button" className="enr-btn enr-btn--pull" disabled={anyRunning} onClick={() => void pullAll()}>
-              {pullingName ? `Pulling ${pullingName}…` : "Pull all rosters"}
-            </button>
-          ) : null}
-          <a className="enr-btn enr-btn--ghost" href={apiUrl(`/api/county-rosters/export.csv?sort=${voterSort}&dir=${voterDir}`)}>
-            Export CSV
+          <a
+            className="enr-btn enr-btn--ghost"
+            href={apiUrl(`/api/county-rosters/export.csv?kind=votes&sort=${voterSort}&dir=${voterDir}`)}
+          >
+            Export votes
+          </a>
+          <a
+            className="enr-btn enr-btn--ghost"
+            href={apiUrl(`/api/county-rosters/export.csv?kind=suppression&sort=${voterSort}&dir=${voterDir}`)}
+          >
+            Digital Suppression
           </a>
         </div>
         {error ? <p className="enr-ballot__status enr-ballot__status--error">{error}</p> : null}
@@ -607,7 +630,9 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={11}>No voted rows yet. Pull all rosters to load a trained county.</td>
+                        <td colSpan={11}>
+                          {voted ? "No voted rows yet. Pull rosters from County pulls." : "Loading roster…"}
+                        </td>
                       </tr>
                     )}
                   </tbody>
@@ -667,6 +692,22 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
             <div className="enr-card__head enr-ballot__head">
               <h2 className="enr-card__title">Counties</h2>
               <div className="enr-ballot__filters">
+                <button
+                  type="button"
+                  className="enr-btn enr-btn--pull"
+                  disabled={anyRunning}
+                  onClick={() => void pullQueued("/api/county-rosters/pull-all", "all")}
+                >
+                  {busyKey === "all" && pullingName ? `Pulling ${pullingName}…` : "Pull all rosters"}
+                </button>
+                <button
+                  type="button"
+                  className="enr-btn enr-btn--pull"
+                  disabled={anyRunning || outdatedCount === 0}
+                  onClick={() => void pullQueued("/api/county-rosters/pull-outdated", "outdated")}
+                >
+                  {busyKey === "outdated" && pullingName ? `Pulling ${pullingName}…` : "Pull outdated"}
+                </button>
                 <input
                   className="enr-ballot__search"
                   value={query}
@@ -688,7 +729,7 @@ export function CountyRosterScreen({ electionId }: { electionId: string }) {
             <p className="enr-ballot__schedule">
               {board?.schedule?.enabled
                 ? "Automatic pulls run in the background at 9:00, 10:00, 11:00, and 12:00 Central, Monday through Saturday, until a county's roster includes ballots from the day before."
-                : "Automatic pulls are off. Pull all rosters updates every trained county."}
+                : "Automatic pulls are off. Pull all rosters updates every trained county. Pull outdated updates counties that need a pull."}
             </p>
             <div className="enr-tablewrap">
               <table className="enr-table enr-table--compact enr-roster-table">

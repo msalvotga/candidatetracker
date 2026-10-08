@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   countiesDueForRosterPull,
+  outdatedRosterKeys,
   dropAutomaticRosterQueue,
   latestRosterVoteDate,
   rosterCaughtUp,
   rosterCountyCounts,
   applyRosterLookupBatch,
+  applyRosterProfileRefresh,
   applyRosterLookupHits,
   chooseRosterDocument,
   mergeRosterRecords,
@@ -14,6 +16,8 @@ import {
   rosterMethodCode,
   registrationDateFromProfile,
   rosterVotersToCsv,
+  rosterVotesToCsv,
+  rosterSuppressionToCsv,
   sortRosterVoters,
   summarizeRosterRows,
   tieVoteToCounty,
@@ -44,6 +48,46 @@ test("voter-file matches apply without dropping roster rows", () => {
   assert.equal(voters[1].matched, 1);
   assert.equal(voters[2].matched, 0);
   assert.equal(voters.length, 3);
+});
+
+test("an updated voter file replaces stored profile fields on voters already matched", () => {
+  const voters = [
+    {
+      vuid: "20",
+      voteDate: "2026-10-05",
+      sourceCounty: "bexar",
+      votingMethod: "AB",
+      matched: 1,
+      county: "BEXAR",
+      profile: [{ label: "FirstName", value: "JANE" }, { label: "LastName", value: "DOE" }],
+    },
+  ];
+  const updated = applyRosterProfileRefresh(voters, new Map([
+    ["20", {
+      county: "BEXAR",
+      txHouse: "14",
+      txSenate: "5",
+      usHouse: "10",
+      score2022: 0.2,
+      score2026: 0.8,
+      registrationDate: "2020-01-02",
+      profile: [
+        { label: "FirstName", value: "JANE" },
+        { label: "MiddleName", value: "Q" },
+        { label: "LastName", value: "DOE" },
+        { label: "DateOfBirth", value: "03/05/1980" },
+        { label: "Sex", value: "F" },
+        { label: "Cell", value: "5125550100" },
+      ],
+    }],
+  ]));
+  assert.equal(updated, 1);
+  assert.equal(voters[0].voteDate, "2026-10-05");
+  assert.equal(voters[0].votingMethod, "AB");
+  assert.equal(voters[0].sourceCounty, "bexar");
+  assert.equal(voters[0].profile.find((field) => field.label === "DateOfBirth").value, "03/05/1980");
+  assert.equal(voters[0].profile.find((field) => field.label === "Sex").value, "F");
+  assert.equal(voters[0].profile.find((field) => field.label === "Cell").value, "5125550100");
 });
 
 test("a finished lookup batch drops hits and misses from the voters still to match", () => {
@@ -164,7 +208,7 @@ test("keeps a voting method and fills it when the same ballot is pulled again", 
   assert.equal(rosterMethodCode(""), "");
 });
 
-test("uses the county where the ballot was cast and clears districts when the roll county differs", () => {
+test("drops CD, SD, and HD when the ballot county differs from the voter file", () => {
   const row = tieVoteToCounty({
     vuid: "10",
     voteDate: "2026-09-28",
@@ -188,6 +232,19 @@ test("uses the county where the ballot was cast and clears districts when the ro
   assert.equal(again.county, "BEXAR");
   assert.equal(again.registeredCounty, "HARRIS");
   assert.equal(again.txHouse, null);
+
+  const home = tieVoteToCounty({
+    sourceCounty: "tom_green",
+    county: "TOM GREEN",
+    matched: 1,
+    txHouse: "72",
+    txSenate: "28",
+    usHouse: "11",
+  });
+  assert.equal(home.county, "TOM GREEN");
+  assert.equal(home.txHouse, "72");
+  assert.equal(home.txSenate, "28");
+  assert.equal(home.usHouse, "11");
 });
 
 const HOURLY = { enabled: true, intervalMinutes: 60, startHour: 9, endHour: 13, timeZone: "America/Chicago" };
@@ -212,6 +269,24 @@ test("keeps name, address, and registration date from extra voter-file columns",
   });
   assert.equal(registrationDateFromProfile(profile), "2012-01-15");
   assert.equal(profile.find((field) => field.label === "FirstName").value, "Ada");
+  const born = voterProfileFromLookup({
+    VUID: "11",
+    FirstName: "Ada",
+    MiddleName: "Augusta",
+    NameSuffix: "Jr",
+    Sex: "F",
+    BirthYear: "1980",
+    BirthMonth: "3",
+    BirthDay: "15",
+    DateofBirth: "19800315",
+    Cell: "5125550100",
+    Landline: "5125550199",
+  });
+  assert.equal(born.find((field) => field.label === "MiddleName").value, "Augusta");
+  assert.equal(born.find((field) => field.label === "NameSuffix").value, "Jr");
+  assert.equal(born.find((field) => field.label === "DateofBirth").value, "03/15/1980");
+  assert.equal(voterProfileFromLookup({ DateofBirth: "1980-03-05 00:00:00.000" })[0].value, "03/05/1980");
+  assert.equal(voterProfileFromLookup({ DateofBirth: "3/5/1980" })[0].value, "03/05/1980");
   assert.equal(profile.find((field) => field.label === "RegistrationAddr1").value, "100 MAIN ST");
   assert.equal(profile.find((field) => field.label === "RegZip5").value, "79401");
   assert.equal(profile.some((field) => field.label === "Score2026"), false);
@@ -272,6 +347,19 @@ test("a vote date of yesterday, or the day before today's pull, is current", () 
   assert.equal(rosterCaughtUp("2026-09-28", "2026-10-01T14:10:00.000Z", now), false);
   assert.equal(rosterCaughtUp("2026-09-30", "2026-10-01T14:10:00.000Z", now), true);
   assert.equal(rosterCaughtUp("2026-09-30", "2026-09-28T14:10:00.000Z", new Date("2026-10-02T14:00:00.000Z")), false);
+});
+
+test("outdated roster keys are trained counties that still need a pull", () => {
+  const now = new Date("2026-10-01T14:00:00.000Z");
+  const voters = [
+    { sourceCounty: "bexar", voteDate: "2026-09-30" },
+    { sourceCounty: "harris", voteDate: "2026-09-28" },
+  ];
+  const keys = outdatedRosterKeys({}, voters, now);
+  assert.equal(keys.includes("bexar"), false);
+  assert.equal(keys.includes("harris"), true);
+  assert.equal(keys.includes("travis"), true);
+  assert.equal(keys.includes("dallas"), false);
 });
 
 test("auto-pulls at 9, 10, 11, and noon Central, Monday through Saturday, until yesterday's ballots are in", () => {
@@ -349,4 +437,81 @@ test("exports the voted roster columns, name, address, and other voter-file fiel
     "2026-10-01,AB,100,2020-01-02,46.6,0.512,HARRIS,134,7,38,1,Ada Lovelace,\"100 MAIN ST, Houston, TX 77002\",REP",
   );
   assert.equal(lines[2], '2026-10-02,EV,"200, ""quoted""",,,,,,,,0,,,');
+});
+
+test("vote export is VUID, method, date, and the county where the ballot was cast", () => {
+  const csv = rosterVotesToCsv([
+    {
+      vuid: "100",
+      voteDate: "2026-10-01",
+      votingMethod: "mail",
+      sourceCounty: "bexar",
+      county: "HARRIS",
+      registeredCounty: "HARRIS",
+      profile: [{ label: "CountyName", value: "HARRIS" }],
+    },
+    {
+      vuid: '200, "quoted"',
+      voteDate: "2026-10-02",
+      votingMethod: "EV",
+      sourceCounty: "tom_green",
+      county: "TOM GREEN",
+    },
+    {
+      vuid: "300",
+      voteDate: "2026-10-03",
+      votingMethod: "election day",
+      county: "TRAVIS",
+    },
+  ]);
+  const lines = csv.replace(/^\uFEFF/, "").split("\r\n");
+  assert.equal(lines[0], "VUID,Method,Date,County");
+  assert.equal(lines[1], "100,AB,2026-10-01,Bexar");
+  assert.equal(lines[2], '"200, ""quoted""",EV,2026-10-02,Tom Green');
+  assert.equal(lines[3], "300,ED,2026-10-03,");
+});
+
+test("digital suppression export keeps each address column and the roster vote date", () => {
+  const csv = rosterSuppressionToCsv([
+    {
+      vuid: "100",
+      voteDate: "2026-10-01",
+      profile: [
+        { label: "FirstName", value: "Ada" },
+        { label: "MiddleName", value: "Augusta" },
+        { label: "LastName", value: "Lovelace" },
+        { label: "NameSuffix", value: "Jr" },
+        { label: "Sex", value: "F" },
+        { label: "BirthYear", value: "1980" },
+        { label: "BirthMonth", value: "03" },
+        { label: "BirthDay", value: "15" },
+        { label: "DateofBirth", value: "03/15/1980" },
+        { label: "Cell", value: "5125550100" },
+        { label: "Landline", value: "5125550199" },
+        { label: "RegistrationAddr1", value: "100 MAIN ST" },
+        { label: "RegHouseNum", value: "100" },
+        { label: "RegStPrefix", value: "N" },
+        { label: "RegStName", value: "MAIN" },
+        { label: "RegStType", value: "ST" },
+        { label: "RegCity", value: "Houston" },
+        { label: "RegSta", value: "TX" },
+        { label: "RegZip5", value: "77002" },
+      ],
+    },
+    {
+      vuid: '200, "quoted"',
+      voteDate: "2026-10-02",
+      profile: null,
+    },
+  ]);
+  const lines = csv.replace(/^\uFEFF/, "").split("\r\n");
+  assert.equal(
+    lines[0],
+    "VUID,First name,Middle name,Last name,Suffix,RegistrationAddr1,RegistrationAddr2,RegHouseNum,RegHouseSfx,RegStPrefix,RegStName,RegStType,RegStPost,RegUnitType,RegUnitNumber,RegCity,RegSta,RegZip5,Date of birth,Birth day,Birth month,Birth year,Sex,Voting date,Cell,Landline",
+  );
+  assert.equal(
+    lines[1],
+    "100,Ada,Augusta,Lovelace,Jr,100 MAIN ST,,100,,N,MAIN,ST,,,,Houston,TX,77002,03/15/1980,15,03,1980,F,2026-10-01,5125550100,5125550199",
+  );
+  assert.equal(lines[2], '"200, ""quoted""",,,,,,,,,,,,,,,,,,,,,,,2026-10-02,,');
 });

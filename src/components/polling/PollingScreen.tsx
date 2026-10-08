@@ -460,22 +460,25 @@ export function PollingScreen({ onLeave }: { onLeave?: () => void }) {
 
         {tab === "Overview" ? <Overview state={state} onSelect={setSelectedId} onOpenOut={() => { setStatusFilter("out"); setTab("Polls"); }} /> : null}
         {tab === "Polls" ? (
-          <PollTable
-            rows={filtered}
-            pollsters={pollsters}
-            ballots={ballots}
-            sampleFilter={sampleFilter}
-            pollsterFilter={pollsterFilter}
-            ballotFilter={ballotFilter}
-            statusFilter={statusFilter}
-            onSample={setSampleFilter}
-            onPollster={setPollsterFilter}
-            onBallot={setBallotFilter}
-            onStatus={setStatusFilter}
-            onSelect={setSelectedId}
-            selectedId={selectedId}
-            onPost={post}
-          />
+          <>
+            <EstimateStrip state={state} busy={busy} onRecalculate={() => post("/api/polling/recompute")} />
+            <PollTable
+              rows={filtered}
+              pollsters={pollsters}
+              ballots={ballots}
+              sampleFilter={sampleFilter}
+              pollsterFilter={pollsterFilter}
+              ballotFilter={ballotFilter}
+              statusFilter={statusFilter}
+              onSample={setSampleFilter}
+              onPollster={setPollsterFilter}
+              onBallot={setBallotFilter}
+              onStatus={setStatusFilter}
+              onSelect={setSelectedId}
+              selectedId={selectedId}
+              onPost={post}
+            />
+          </>
         ) : null}
         {tab === "Comparison" ? <Comparison state={state} /> : null}
         {tab === "Model lab" ? <ModelLab state={state} /> : null}
@@ -556,6 +559,33 @@ function Sources({ state }: { state: Snapshot & { sources?: SourceCatalog } }) {
         </ul>
       </section>
     </>
+  );
+}
+
+function EstimateStrip({ state, busy, onRecalculate }: { state: Snapshot; busy: boolean; onRecalculate: () => Promise<void> }) {
+  const marginColor = (state.overview.margin ?? 0) >= 0 ? state.meta.colors.candidate_a_color : state.meta.colors.candidate_b_color;
+  return (
+    <section className="poll-card poll-estimate">
+      <div>
+        <div className="poll-kicker">Estimated current polling margin</div>
+        <div className="poll-margin" style={{ color: marginColor }}>{state.overview.label}</div>
+        <p className="poll-muted">{state.overview.pollsInModel} of {state.overview.pollsStored} polls in the model.</p>
+      </div>
+      {state.overview.simulation ? (
+        <div className="poll-odds">
+          <div className="poll-odds-figure" style={{ color: state.meta.colors.candidate_a_color }}>
+            {(state.overview.simulation.abbottShare * 100).toFixed(1)}%
+          </div>
+          <p>Abbott leads in {state.overview.simulation.abbottLeads.toLocaleString()} of {state.overview.simulation.runs.toLocaleString()} draws.</p>
+        </div>
+      ) : null}
+      <div>
+        <p>50% interval: {state.overview.interval50Label ?? "—"}</p>
+        <p>80% interval: {state.overview.interval80Label ?? "—"}</p>
+        <p>95% interval: {state.overview.interval95Label ?? "—"}</p>
+        <button type="button" className="poll-btn primary" disabled={busy} onClick={() => void onRecalculate()}>Recalculate</button>
+      </div>
+    </section>
   );
 }
 
@@ -954,7 +984,6 @@ function PollTable(props: {
   selectedId: number | null;
   onPost: (path: string, payload?: unknown) => Promise<void>;
 }) {
-  const [reason, setReason] = useState("");
   return (
     <>
       <div className="poll-filters">
@@ -977,9 +1006,6 @@ function PollTable(props: {
           <option value="pending">Pending review</option>
           <option value="out">Not in the model</option>
         </select>
-        <label>Exclusion reason
-          <input value={reason} placeholder="Required when excluding" onChange={(event) => setReason(event.target.value)} />
-        </label>
       </div>
       <div className="poll-table-wrap">
         <table className="poll-table">
@@ -1009,7 +1035,7 @@ function PollTable(props: {
                 <td style={{ whiteSpace: "normal", minWidth: 180 }}>{poll.modelStatusLabel}{poll.outlier?.flagged ? " · outlier flag" : ""}</td>
                 <td>
                   {poll.inModel ? (
-                    <button type="button" className="poll-btn" onClick={() => props.onPost(`/api/polling/polls/${poll.id}/exclusion`, { excluded: true, reason })}>Exclude</button>
+                    <button type="button" className="poll-btn" onClick={() => props.onPost(`/api/polling/polls/${poll.id}/exclusion`, { excluded: true })}>Exclude</button>
                   ) : (
                     <button type="button" className="poll-btn" onClick={() => props.onPost(`/api/polling/polls/${poll.id}/exclusion`, { excluded: false })}>Include</button>
                   )}
@@ -1368,7 +1394,6 @@ function Review({ state, onPost }: { state: Snapshot; onPost: (path: string, pay
 }
 
 function Detail({ poll, onClose, onPost }: { poll: PollRow; onClose: () => void; onPost: (path: string, payload?: unknown) => Promise<void> }) {
-  const [reason, setReason] = useState("");
   return (
     <section className="poll-detail">
       <article className="poll-card">
@@ -1399,8 +1424,7 @@ function Detail({ poll, onClose, onPost }: { poll: PollRow; onClose: () => void;
         <p>
           {poll.inModel ? (
             <>
-              <input value={reason} placeholder="Reason required to exclude" onChange={(event) => setReason(event.target.value)} />{" "}
-              <button type="button" className="poll-btn" onClick={() => onPost(`/api/polling/polls/${poll.id}/exclusion`, { excluded: true, reason })}>Exclude from model</button>
+              <button type="button" className="poll-btn" onClick={() => onPost(`/api/polling/polls/${poll.id}/exclusion`, { excluded: true })}>Exclude from model</button>
             </>
           ) : (
             <button type="button" className="poll-btn primary" onClick={() => onPost(`/api/polling/polls/${poll.id}/exclusion`, { excluded: false })}>Include in model</button>

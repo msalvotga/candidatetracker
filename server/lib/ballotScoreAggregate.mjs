@@ -24,10 +24,19 @@ const REQUIRED = {
   roster2026: ["VUID", "VoteDate"],
 };
 
-/** Name, registration date, and address columns kept on the voter-model lookup. Not required. */
+/** Name, birth date, phone, registration date, and address columns kept on the voter-model lookup. Not required. */
 export const LOOKUP_DETAIL_COLUMNS = [
   "FirstName",
+  "MiddleName",
   "LastName",
+  "NameSuffix",
+  "Sex",
+  "BirthYear",
+  "BirthMonth",
+  "BirthDay",
+  "DateofBirth",
+  "Cell",
+  "Landline",
   "RegistrationDate",
   "RegistrationAddr1",
   "RegistrationAddr2",
@@ -266,6 +275,14 @@ function normCounty(raw) {
   const text = String(raw ?? "").trim().replace(/\s+/g, " ");
   if (!text || /^null$/i.test(text)) return null;
   return text.toUpperCase();
+}
+
+/** Ballot-score county key for the county that issued the roster, never the voter-file county. */
+export function ballotCountyKey(row) {
+  const slug = String(row?.sourceCounty ?? "").trim().toLowerCase();
+  if (!slug) return null;
+  if (slug === "dewitt") return "DE WITT";
+  return slug.replace(/_/g, " ").toUpperCase();
 }
 
 function normDistrict(raw) {
@@ -765,10 +782,30 @@ function emptySide() {
   return publish(emptyBucket());
 }
 
+function countyLetters(raw) {
+  return String(raw ?? "").toUpperCase().replace(/[^A-Z]/g, "");
+}
+
+/** Voter-file CD, SD, and HD count only when the ballot county matches that file. */
+function ballotDistricts(row) {
+  const voted = countyLetters(row?.sourceCounty);
+  const registered = countyLetters(row?.registeredCounty);
+  const stored = countyLetters(row?.county);
+  const fileCounty = registered || (voted && stored && stored !== voted ? stored : "");
+  if (voted && fileCounty && voted !== fileCounty) return { congress: null, senate: null, house: null };
+  return {
+    congress: normDistrict(row?.usHouse),
+    senate: normDistrict(row?.txSenate),
+    house: normDistrict(row?.txHouse),
+  };
+}
+
 /**
  * County roster pulls are the live 2026 vote list. Each VUID counts once, on the
- * earliest vote date. Mail ballots count together as voting day 0, and each one
- * also enters the cumulative on the voting day of its vote date.
+ * earliest vote date. The county total uses the county that published the roster.
+ * Congressional, senate, and house totals use the voter file only when that county matches.
+ * Mail ballots count together as voting day 0, and each one also enters the
+ * cumulative on the voting day of its vote date.
  */
 export function liveRosterSeries(voters) {
   const book = createGeoBook();
@@ -782,10 +819,8 @@ export function liveRosterSeries(voters) {
       bucket,
       iso,
       matched: row.matched === 1,
-      county: normCounty(row.county),
-      congress: normDistrict(row.usHouse),
-      senate: normDistrict(row.txSenate),
-      house: normDistrict(row.txHouse),
+      county: ballotCountyKey(row) ?? normCounty(row.county),
+      ...ballotDistricts(row),
       score2022: storedScore(row.score2022),
       score2026: storedScore(row.score2026),
     };

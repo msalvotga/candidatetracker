@@ -552,7 +552,7 @@ def _model_status(poll: Poll, in_model: bool) -> dict[str, Any]:
         return {
             "code": "excluded_manual",
             "label": "Excluded — manually excluded",
-            "detail": poll.exclusion_reason or "A reviewer excluded this poll and recorded a reason.",
+            "detail": poll.exclusion_reason or "A reviewer excluded this poll.",
             "preferredVersion": None,
         }
     if not poll.is_canonical:
@@ -1934,10 +1934,8 @@ def set_exclusion(session: Session, poll_id: int, excluded: bool, reason: str) -
     if poll is None or poll.review is None:
         raise ValueError(f"No poll with id {poll_id}. Reload the page and try again.")
     if excluded:
-        if not (reason or "").strip():
-            raise ValueError("Excluding a poll requires a reason.")
         poll.excluded = True
-        poll.exclusion_reason = reason.strip()
+        poll.exclusion_reason = (reason or "").strip() or "Manually excluded."
         poll.review.approved_for_model = False
         poll.review.reviewed_by = "local"
         poll.review.reviewed_at = utcnow()
